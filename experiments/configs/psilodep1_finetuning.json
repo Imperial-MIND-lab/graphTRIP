@@ -1,0 +1,32 @@
+{
+    "seed": [291],
+    "save_weights": [true],
+    "num_epochs": [100],
+    "num_z_samples": [3],
+    "alpha": [0.0],
+    "vgae_lr": [0.0],
+    "mlp_lr": [0.001],
+    "rho": [0.4],
+    "leak_rate": [0.9],
+    "dataset": {
+      "study": ["psilodep1"],
+      "session": ["before"],
+      "atlas": ["schaefer100"],
+      "target": ["QIDS_1week"],
+      "batch_size": [7],
+      "num_folds": [7],
+      "val_split": [0.0],
+      "graph_attrs": [["QIDS_Before", "BDI_Before"]],
+      "context_attrs": [["Condition", "Stop_SSRI"]],
+      "node_attrs": [["5-HT1A_Believeau-3", "5-HT2A_Believeau-3", "5-HTT_Believeau-3"]],
+      "edge_attrs": [["functional_connectivity"]],
+      "edge_tfm_type": ["LowerAbsThresholdAdjacency"],
+      "edge_tfm_params": {
+        "edge_info": ["functional_connectivity"],
+        "threshold": [0.5]
+      },
+      "add_3Dcoords": [true],
+      "self_loop_fill_value": [1],
+      "standardise_x": [false]
+    }
+}

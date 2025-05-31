@@ -1,0 +1,130 @@
+{
+    "NodeEmbeddingGATv2Conv": {
+        "required_params": ["num_node_attr", "node_emb_dim", "num_edge_attr", "num_cond_attrs"],
+        "optional_params": {
+            "num_layers": 3,
+            "hidden_dim": 32,
+            "num_heads": 4,
+            "dropout": null,
+            "reg_strength": null,
+            "layernorm": true
+        }
+    },
+    "NodeEmbeddingGATv2Conv_withSkip": {
+        "required_params": ["num_node_attr", "node_emb_dim", "num_edge_attr", "num_cond_attrs"],
+        "optional_params": {
+            "num_layers": 3,
+            "hidden_dim": 32,
+            "num_heads": 4,
+            "dropout": null,
+            "reg_strength": null,
+            "layernorm": true
+        }
+    },
+    "NodeEmbeddingMLP": {
+        "required_params": ["num_nodes", "num_node_attr", "num_edge_attr", "node_emb_dim"],
+        "optional_params": {
+            "num_layers": 4,
+            "hidden_dim": 256,
+            "add_node_id": true,
+            "dropout": null,
+            "reg_strength": null
+        }
+    },
+    "ConcatPooling": {
+        "required_params": ["num_nodes"],
+        "optional_params": {
+            "pooling_dim": null
+        }
+    },
+    "GlobalAttentionPooling": {
+        "required_params": [],
+        "optional_params": {
+            "pooling_dim": null,
+            "reg_strength": null,
+            "reduce": "mean"
+        }
+    },
+    "AttentionNetPooling": {
+        "required_params": [],
+        "optional_params": {
+            "pooling_dim": null,
+            "num_context_attrs": null,
+            "hidden_dim": 32,
+            "reg_strength": null,
+            "reduce": "mean"
+        }
+    },
+    "DenseEncoder": {
+        "required_params": ["latent_dim"],
+        "optional_params": {
+            "input_dim": null,
+            "num_layers": 2,
+            "dropout": null,
+            "reg_strength": null
+        }
+    },
+    "DenseOneLayerEncoder": {
+        "required_params": ["latent_dim"],
+        "optional_params": {
+            "input_dim": null,
+            "reg_strength": null
+        }
+    },
+    "Decoder": {
+        "required_params": ["latent_dim"],
+        "optional_params": {
+            "output_dim": null,
+            "num_layers": 3,
+            "dropout": null,
+            "reg_strength": null,
+            "act": "identity"
+        }
+    },
+    "MLPNodeDecoder": {
+        "required_params": ["latent_dim"],
+        "optional_params": {
+            "output_dim": null,
+            "num_layers": 3,
+            "hidden_dim": 32,
+            "dropout": null,
+            "reg_strength": null,
+            "act": "identity"
+        }
+    },
+    "InnerProductEdgeDecoder": {
+        "required_params": [],  
+        "optional_params": {
+            "act": "tanh"
+        }
+    },
+    "MLPEdgeDecoder": {
+        "required_params": ["latent_dim"],
+        "optional_params": {
+            "num_layers": 2,
+            "hidden_dim": 32,
+            "dropout": null,
+            "reg_strength": null,
+            "act": "tanh"
+        }
+    },
+    "GraphLevelVGAE": {
+        "required_params": ["num_nodes", "num_node_attr", "num_edge_attr", "num_graph_attr", "num_cond_attrs"],
+        "optional_params": {
+            "node_emb_dim": 32,
+            "latent_dim": 32,
+            "dropout": 0.25,
+            "reg_strength": 0.01
+        }
+    },
+    "NodeLevelVGAE": {
+        "required_params": ["num_node_attr", "num_edge_attr", "num_graph_attr", "num_cond_attrs", "num_context_attrs"],
+        "optional_params": {
+            "num_nodes": null,
+            "node_emb_dim": 32,
+            "latent_dim": 32,
+            "dropout": 0.25,
+            "reg_strength": 0.01
+        }
+    }
+}

@@ -1,0 +1,73 @@
+{
+  "seed": [291],
+  "save_weights": [true],
+  "lr": [0.001],
+  "num_epochs": [150],
+  "num_z_samples": [0],
+  "alpha": [0.5],
+  "dataset": {
+    "study": ["psilodep2"],
+    "session": ["before"],
+    "atlas": ["schaefer100"],
+    "target": ["QIDS_Final_Integration"],
+    "batch_size": [7],
+    "num_folds": [6],
+    "val_split": [0.0],
+    "graph_attrs": [["QIDS_Before", "BDI_Before", "Condition", "Stop_SSRI"]],
+    "context_attrs": [[]],
+    "node_attrs": [[]],
+    "edge_attrs": [["functional_connectivity"]],
+    "edge_tfm_type": [null],
+    "edge_tfm_params": {},
+    "add_3Dcoords": [false],
+    "self_loop_fill_value": [1],
+    "standardise_x": [false]
+  },
+  "mlp_model": {
+    "model_type": ["RegressionMLP"],
+    "params": {
+      "dropout": [0.25],
+      "hidden_dim": [64],
+      "layernorm": [false],
+      "mse_reduction": ["sum"],
+      "num_layers": [4],
+      "output_dim": [1],
+      "reg_strength": [0.01]
+    }
+  },
+  "vgae_model": {
+    "model_type": ["GraphLevelVGAE"],
+    "params": {
+      "dropout": [0.25],
+      "latent_dim": [64],
+      "node_emb_dim": [64],
+      "reg_strength": [0.001]
+    },
+    "node_emb_model_cfg": {
+      "model_type": ["NodeEmbeddingMLP"],
+      "params": {
+        "hidden_dim": [256],
+        "num_layers": [4],
+        "add_node_id": [true]
+      }
+    },
+    "encoder_cfg": {
+      "model_type": ["DenseEncoder"],
+      "params": {
+        "num_layers": [2]
+      }
+    },
+    "edge_decoder_cfg": {
+      "model_type": ["Decoder"],
+      "params": {
+        "act": ["tanh"],
+        "num_layers": [3]
+      }
+    },
+    "edge_idx_decoder_cfg": {},
+    "node_decoder_cfg": {},
+    "pooling_cfg": {
+      "model_type": ["ConcatPooling"]
+    }
+  }
+}

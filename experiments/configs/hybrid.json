@@ -1,0 +1,25 @@
+{
+  "weights_dir": ["outputs/graphtrip/weights"],
+  "weights_dir2": ["outputs/atlas_bound/weights"], 
+  "seed": [291],
+  "save_weights": [true],
+  "num_epochs": [300],
+  "lr": [0.001],
+  "num_z_samples": [5],
+  "checkpoints": [[]],
+  "dataset": {
+    "graph_attrs": [["QIDS_Before", "BDI_Before", "Condition", "Stop_SSRI"]],
+    "target": ["QIDS_Final_Integration"]
+  },
+  "mlp_model": {
+    "model_type": ["RegressionMLP"],
+    "params": {
+      "dropout": [0.5],
+      "hidden_dim": [null],
+      "layernorm": [false], 
+      "mse_reduction": ["sum"],
+      "num_layers": [4],
+      "reg_strength": [0.001]
+    }
+  }
+}

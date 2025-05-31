@@ -1,0 +1,15 @@
+# Pycache
+__pycache__/
+**/__pycache__/
+
+# Outputs and weights
+outputs/
+
+# Unused code
+junk/
+
+# VScode degugging configs
+.vscode/
+
+# Data
+data/
