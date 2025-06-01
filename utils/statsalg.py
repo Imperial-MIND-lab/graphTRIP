@@ -6,10 +6,7 @@ Date: 2025-02-12
 License: BSD-3-Clause
 """
 
-import sys
 import os
-sys.path.append('graphTRP/')
-
 from dominance_analysis import Dominance
 from sklearn.linear_model import LinearRegression
 from sklearn.cross_decomposition import PLSRegression
@@ -20,7 +17,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import networkx as nx
 from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
 from statsmodels.stats.multitest import fdrcorrection
 from scipy import stats
 from scipy.stats import pearsonr, spearmanr
@@ -431,7 +427,7 @@ def filter_grail_features(mean_alignments, feature_cols, cluster_labels, filter_
     features_filtered = [col for col, mask in zip(feature_cols, bool_mask) if mask]
     return features_filtered
 
-def grail_posthoc_analysis(mean_alignments, num_seeds, seed, filter_percentile=75, n_permutations=10000):
+def grail_posthoc_analysis(mean_alignments, num_seeds, seed, filter_percentile=75):
     """
     Perform posthoc analysis on the mean alignments of the Grail experiment.
 
@@ -589,76 +585,6 @@ def discrete_variables_permutation_test(var1, var2, n_permutations=10000, save_p
                'null_chi2_distribution': perm_chi2_stats}
 
     return results
-
-# Surrogate alignment/ attention tests ------------------------------------------
-
-def compute_feature_z_scores(surrogate_dir, observed_dir, results_file, epsilon=1e-6):
-    """
-    Compute z-scores for each feature and subject by comparing each subject's observed value
-    against the distribution of surrogate values for that specific subject.
-    
-    Args:
-        surrogate_dir (str): Directory containing subdirectories with surrogate results
-        observed_dir (str): Directory containing observed results
-        results_file (str): Name of the results file in each directory
-        epsilon (float): Small value to prevent division by zero in std calculation
-    
-    Returns:
-        pd.DataFrame: DataFrame containing z-scores for each feature and subject
-    """
-    # Read observed data
-    observed_path = os.path.join(observed_dir, results_file)
-    observed_df = pd.read_csv(observed_path)
-    
-    # Drop 'Condition' column if it exists
-    if 'Condition' in observed_df.columns:
-        observed_df = observed_df.drop('Condition', axis=1)
-    
-    # Initialize dictionary to store surrogate values for each subject and feature
-    # surrogate_values[subject_idx][feature] = list of surrogate values
-    surrogate_values = {idx: {col: [] for col in observed_df.columns} 
-                       for idx in observed_df.index}
-    
-    # Collect surrogate values for each subject from all job directories
-    for job_dir in os.listdir(surrogate_dir):
-        if job_dir.startswith('job_'):
-            job_path = os.path.join(surrogate_dir, job_dir, results_file)
-            if os.path.exists(job_path):
-                surrogate_df = pd.read_csv(job_path)
-                if 'Condition' in surrogate_df.columns:
-                    surrogate_df = surrogate_df.drop('Condition', axis=1)
-                
-                # For each subject, collect their surrogate values
-                for idx in observed_df.index:
-                    for col in observed_df.columns:
-                        surrogate_values[idx][col].append(surrogate_df.loc[idx, col])
-    
-    # Initialize z-score array
-    z_scores_array = np.zeros((len(observed_df.index), len(observed_df.columns)))
-    
-    # Compute z-scores for each subject and feature
-    for i, idx in enumerate(observed_df.index):
-        for j, col in enumerate(observed_df.columns):
-            # Get observed value for this subject and feature
-            observed_value = observed_df.loc[idx, col]
-            
-            # Get surrogate values for this subject and feature
-            subject_surrogate_values = np.array(surrogate_values[idx][col])
-            
-            # Compute mean and std of surrogate values for this subject
-            surrogate_mean = np.mean(subject_surrogate_values)
-            surrogate_std = np.std(subject_surrogate_values)
-            
-            # Compute z-score
-            z_scores_array[i, j] = (observed_value - surrogate_mean) / (surrogate_std + epsilon)
-    
-    # Create DataFrame with proper numeric dtype
-    z_scores = pd.DataFrame(z_scores_array, 
-                          index=observed_df.index, 
-                          columns=observed_df.columns,
-                          dtype=float)
-    
-    return z_scores
 
 def test_column_significance(df, test_type='t-test', alpha=0.05):
     """

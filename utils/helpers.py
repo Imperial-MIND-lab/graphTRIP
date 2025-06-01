@@ -6,9 +6,6 @@ Author: Hanna M. Tolle
 Date: 2024-10-31
 """
 
-import sys
-sys.path.append('..')
-
 import os
 import torch
 import pandas as pd
