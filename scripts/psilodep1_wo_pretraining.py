@@ -99,7 +99,7 @@ if __name__ == "__main__":
     # Parse command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('-m', '--model_name', type=str, required=True, help='Name of the model to train. control_mlp or graphtrip')
-    parser.add_argument('-j', '--job_id', type=int, required=True, help='Job ID')
+    parser.add_argument('-j', '--jobid', type=int, required=True, help='Job ID')
     parser.add_argument('-c', '--config_dir', type=str, default='experiments/configs/', help='Path to the config directory')
     parser.add_argument('-o', '--output_dir', type=str, default='outputs/psilodep1/wo_pretraining', help='Path to the output directory')
     parser.add_argument('-s', '--init_seed', type=int, default=291, help='Initial random seed')
