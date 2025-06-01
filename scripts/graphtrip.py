@@ -165,23 +165,20 @@ def main(config_dir, output_dir, verbose, debug, seed):
         filter_percentile = 75
         num_seeds = 10
         seed = 291
-        n_permutations = 10000        
 
         # Save analysis config
         config = {
             'filter_percentile': filter_percentile,
             'num_seeds': num_seeds,
             'seed': seed,
-            'n_permutations': n_permutations
         }
         with open(os.path.join(ex_dir, 'config.json'), 'w') as f:
             json.dump(config, f, indent=4)
 
         # Run analysis
         cluster_labels, features_filtered = grail_posthoc_analysis(mean_alignments,
-                                                                num_seeds, seed,
-                                                                filter_percentile,
-                                                                n_permutations)
+                                                                   num_seeds, seed,
+                                                                   filter_percentile)
         # Save results
         np.savetxt(os.path.join(ex_dir, 'cluster_labels.csv'), cluster_labels, delimiter=',')
         with open(os.path.join(ex_dir, 'features_filtered.json'), 'w') as f:
