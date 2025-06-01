@@ -7,6 +7,7 @@ License: BSD-3-Clause
 """
 
 import os
+import json
 from dominance_analysis import Dominance
 from sklearn.linear_model import LinearRegression
 from sklearn.cross_decomposition import PLSRegression
@@ -647,8 +648,10 @@ def test_column_significance(df, test_type='t-test', alpha=0.05):
             results['effect_size'].append('small')
         elif abs(cohen_d) < 0.5:
             results['effect_size'].append('medium')
-        else:
+        elif abs(cohen_d) < 0.8:
             results['effect_size'].append('large')
+        else:
+            results['effect_size'].append('very large')
     
     # Create results DataFrame
     stats_df = pd.DataFrame(results, index=df.columns)
@@ -836,7 +839,7 @@ def load_fold_data(job_dirs, file_names, inclusion_criteria):
     Returns
     -------
     all_subject_dfs : dict
-        Dictionary mapping subject index to concatenated dataframe of features
+        Dictionary mapping subject index to concatenated dataframe of features (num_folds x num_features)
     fold_performances : pd.DataFrame
         Concatenated dataframe of fold performances
     """
@@ -898,4 +901,138 @@ def load_fold_data(job_dirs, file_names, inclusion_criteria):
             
     fold_performances = pd.concat(fold_performances, axis=0)
             
-    return all_subject_dfs, fold_performances
+    return all_subject_dfs, fold_performances  
+
+def pls_robustness_analysis(all_subject_dfs: dict[int, pd.DataFrame], 
+                            performance: np.ndarray):
+    """
+    Performs PLS to find feature GRAIL patterns that correlate with test performance.
+
+    Parameters
+    ----------
+    all_subject_dfs (dict[int, pd.DataFrame]): Dictionary mapping subject index to 
+        concatenated dataframe of features (num_folds x num_features)
+    performance (np.ndarray): Array of performance values to predict, shape (num_folds,)
+
+    Returns
+    -------
+    pls_patterns (pd.DataFrame): DataFrame of shape (num_subjects, num_features) containing 
+        the PLS patterns for each subject.
+    pls_performance_corrs (pd.DataFrame): DataFrame of shape (num_subjects, 3) containing 
+        the correlation and p-value of each subject's PLS pattern with performance.
+    pls_weight_stats (pd.DataFrame): DataFrame of shape (num_features, 8) containing 
+        the t-statistic, p-value, cohen's d, fdr_p_value, significant, and effect_size 
+        for each feature (i.e. candidate biomarker or brain region).
+    """
+    # Get PLS patterns for each subject
+    # (= patterns that maximally correlate with fold-model performance)
+    subject_df_list = [df for df in all_subject_dfs.values()]
+    pls_patterns, pls_performance_corrs = get_pls_patterns(subject_df_list, performance)
+
+    # Test if features are reliably associated with performance across subjects
+    # (i.e. if the PLS patterns are significantly different from zero)
+    pls_weight_stats = test_column_significance(pls_patterns, test_type='t-test')
+
+    return pls_patterns, pls_performance_corrs, pls_weight_stats
+
+def compute_performance_weighted_means(all_subject_dfs: dict[int, pd.DataFrame],
+                                       performance: np.ndarray,
+                                       performance_cutoff: float = 0.0):
+    """
+    Computes performance-weighted means for all features across all subjects.
+
+    Parameters
+    ----------
+    all_subject_dfs (dict[int, pd.DataFrame]): Dictionary mapping subject index to 
+        concatenated dataframe of features (num_folds x num_features)
+    performance (np.ndarray): Array of performance values to predict, shape (num_folds,)
+    performance_cutoff (float): Minimum performance value to consider for weighting
+
+    Returns
+    -------
+    weighted_means (pd.DataFrame): DataFrame of shape (num_subjects, num_features) 
+        containing the performance-weighted means for each feature.
+    weighted_means_stats (pd.DataFrame): DataFrame of shape (num_features, 8) containing 
+        the t-statistic, p-value, cohen's d, fdr_p_value, significant, and effect_size 
+        for each feature.
+    """
+    # Compute preformance-weighted mean alignments for all subjects and features
+    weighted_means = []
+    feature_names = all_subject_dfs[0].columns
+    subject_ids = []
+    for sub_id, subject_alignments in all_subject_dfs.items():
+        subject_ids.append(sub_id)
+        performance[performance < performance_cutoff] = 0
+        weights = performance / (np.sum(performance) + 1e-6) # shape (num_folds, )
+        weighted_alignments = subject_alignments * weights[:, np.newaxis] # shape (num_folds, num_features)
+        wm = np.sum(weighted_alignments, axis=0) # shape (num_features, )
+        weighted_means.append(wm)
+
+    # Turn into dataframe with features as columns
+    weighted_means = pd.DataFrame(weighted_means, 
+                                  index=subject_ids, 
+                                  columns=feature_names, dtype=float)
+    
+    # Test if features have significantly non-zero means in well-performing models
+    weighted_means_stats = test_column_significance(weighted_means, test_type='t-test')
+
+    return weighted_means, weighted_means_stats
+
+def pls_feature_filtering(pls_weight_stats: pd.DataFrame, 
+                          weighted_means_stats: pd.DataFrame,
+                          filter_criteria: dict):
+    """
+    Filters features based on PLS weight stats and weight-mean alignments.
+    Especially relevant is features are signed to guarantee interpretability.
+
+    Parameters
+    ----------
+    pls_weight_stats (pd.DataFrame): DataFrame of shape (num_features, 8) with columns 
+        t_statistic, p_value, cohen_d, fdr_p_value, significant, and effect_size and row
+        indices corresponding to features.
+    weighted_means_stats (pd.DataFrame): DataFrame of shape (num_features, 8) with columns 
+        t_statistic, p_value, cohen_d, fdr_p_value, significant, and effect_size and row
+        indices corresponding to features.
+    filter_criteria (dict): Dictionary with keys 'pls_weight_stats', 'weighted_means_stats', 
+        and 'signed_features' specifying the criteria for filtering features.
+
+    Returns
+    -------
+    feature_list (list): List of features that meet the criteria.
+    """
+    # Get features that meet PLS weight criteria
+    pls_criteria = filter_criteria['pls_weight_stats']
+    pls_features = pls_weight_stats[
+        (pls_weight_stats['fdr_p_value'] <= pls_criteria['fdr_p_value'])
+    ]
+    
+    if 'cohen_d' in pls_criteria:
+        pls_features = pls_features[
+            abs(pls_features['cohen_d']) >= pls_criteria['cohen_d']
+        ]
+    
+    # Get features that meet weighted means criteria
+    means_criteria = filter_criteria['weighted_means_stats']
+    means_features = weighted_means_stats[
+        (weighted_means_stats['fdr_p_value'] <= means_criteria['fdr_p_value'])
+    ]
+    
+    if 'cohen_d' in means_criteria:
+        means_features = means_features[
+            abs(means_features['cohen_d']) >= means_criteria['cohen_d']
+        ]
+    
+    # Get intersection of features that meet both criteria
+    common_features = set(pls_features.index) & set(means_features.index)
+    
+    # If signed features are required, check sign alignment
+    if filter_criteria.get('signed_features', False):
+        signed_features = []
+        for feature in common_features:
+            pls_sign = np.sign(pls_weight_stats.loc[feature, 't_statistic'])
+            means_sign = np.sign(weighted_means_stats.loc[feature, 't_statistic'])
+            if pls_sign == means_sign:
+                signed_features.append(feature)
+        return signed_features
+    
+    return list(common_features)
