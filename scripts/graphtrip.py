@@ -13,6 +13,7 @@ Outputs:
 - outputs/graphtrip/attention_weights/
 - outputs/graphtrip/grail/
 - outputs/graphtrip/grail_posthoc/
+- outputs/graphtrip/test_biomarkers/
 
 Author: Hanna M. Tolle
 Date: 2025-05-31
@@ -65,7 +66,7 @@ def main(config_dir, output_dir, verbose, debug, seed):
     ingredient_config['seed'] = seed
     ingredient_config['verbose'] = verbose
 
-    # Train graphTRIP ------------------------------------------------------------
+    # Train graphTRIP ----------------------------------------------------------
     exname = 'train_jointly'
     weights_dir = os.path.join(output_dir, 'weights')
 
@@ -116,7 +117,7 @@ def main(config_dir, output_dir, verbose, debug, seed):
         else:
             print(f"Transfer to {atlas} experiment already exists in {ex_dir}.")
 
-    # Attention weights -----------------------------------------------------
+    # Attention weights -------------------------------------------------------
     exname = 'attention_weights'
     ex_dir = os.path.join(output_dir, 'attention_weights')
     if not os.path.exists(ex_dir):
@@ -129,7 +130,7 @@ def main(config_dir, output_dir, verbose, debug, seed):
     else:
         print(f"Attention weights experiment already exists in {ex_dir}.")
 
-    # GRAIL ------------------------------------------------------------------
+    # GRAIL -------------------------------------------------------------------
     exname = 'grail'
     ex_dir = os.path.join(output_dir, 'grail')
     if not os.path.exists(ex_dir):
@@ -187,6 +188,22 @@ def main(config_dir, output_dir, verbose, debug, seed):
             json.dump(features_filtered, f, indent=4)
     else:
         print(f"GRAIL posthoc experiment already exists in {ex_dir}.")
+
+    # Test biomarkers ----------------------------------------------------------
+    exname = 'test_biomarkers'
+    ex_dir = os.path.join(output_dir, 'test_biomarkers')
+    if not os.path.exists(ex_dir):
+        config_updates = {}
+        config_updates['output_dir'] = ex_dir
+        config_updates['weights_dir'] = weights_dir
+        config_updates['seed'] = seed
+        config_updates['verbose'] = verbose
+        config_updates['all_rsn_conns'] = False
+        config_updates['n_pca_components'] = 10
+        run(exname, observer, config_updates)
+    else:
+        print(f"Biomarkers experiment already exists in {ex_dir}.")
+
 
 if __name__ == "__main__":
     """
