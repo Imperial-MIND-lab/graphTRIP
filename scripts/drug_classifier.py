@@ -60,6 +60,20 @@ def main(config_dir, output_dir, verbose, debug, seed):
     else:
         print(f"drug classifier weights already exist in {weights_dir}.")
 
+    # Permutation importance ---------------------------------------------------
+    exname = 'permutation_importance_classifier'
+    ex_dir = os.path.join(output_dir, 'permutation_importance')
+    if not os.path.exists(ex_dir):
+        config_updates = {}
+        config_updates['output_dir'] = ex_dir
+        config_updates['weights_dir'] = weights_dir
+        config_updates['seed'] = seed
+        config_updates['verbose'] = verbose
+        config_updates['n_repeats'] = 50 if not debug else 2
+        run(exname, observer, config_updates)
+    else:
+        print(f"Permutation importance experiment already exists in {ex_dir}.")
+
 if __name__ == "__main__":
     """
     How to run:
