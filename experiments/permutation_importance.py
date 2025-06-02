@@ -17,7 +17,6 @@ from experiments.ingredients.mlp_ingredient import *
 import os
 import torch
 import torch.nn
-from torch_geometric.data import Batch
 import numpy as np
 from scipy.stats import ttest_1samp
 import logging
@@ -27,7 +26,7 @@ import pandas as pd
 
 from utils.files import add_project_root
 from utils.configs import *
-from utils.helpers import fix_random_seed, get_logger, check_weights_exist, get_modified_data_clone
+from utils.helpers import fix_random_seed, get_logger, check_weights_exist
 
 
 # Create experiment and logger -------------------------------------------------
@@ -178,86 +177,6 @@ def compute_score_with_fold_permutation(kfold_models,
 
     return -np.mean(np.abs(ypreds - ytrue))
 
-def get_inputs_and_labels_with_prevgae_permutation(data, vgaes, testfold_indices, device, 
-                                                   permute_type=None):
-    '''Returns MLP inputs and labels, with option to permute node or edge attributes before VGAE.
-    
-    Parameters:
-    ----------
-    data (Dataset): The complete dataset
-    vgaes (List[VGAE]): List of trained VGAE models, one for each fold
-    testfold_indices (numpy array): Maps each data sample to its test fold
-    device (torch.device): Device to run computations on
-    permute_type : str or None
-        Either 'node', 'edge', or None. Determines which attributes to permute
-    '''
-    num_samples = len(data)
-    num_folds = len(vgaes)
-    
-    # Get labels and clinical data for all samples at once
-    batch = next(iter(DataLoader(data, batch_size=num_samples, shuffle=False))).to(device)
-    ytrue = batch.y.cpu().numpy()
-    clinical_data = batch.graph_attr.cpu().numpy()
-    
-    # Initialize array for VGAE outputs
-    z_readout = np.zeros((num_samples, vgaes[0].readout_dim))
-    
-    # Process each fold
-    for k in range(num_folds):
-        # Get indices for samples in this test fold
-        fold_indices = np.where(testfold_indices == k)[0]
-        
-        # Get the subset of data for this fold
-        fold_data = data[fold_indices]
-        
-        # Create new data objects with permuted attributes
-        if permute_type in ['node', 'edge']:
-
-            permuted_fold_data = []
-            if permute_type == 'node':
-                # Get permuted node attributes (permute across graphs/subjects)
-                perm_idx = torch.randperm(len(fold_data))
-                node_attrs_permuted = [fold_data[i].x.clone() for i in perm_idx]
-
-                # Create modified data copies with permuted node attributes
-                for d, x in zip(fold_data, node_attrs_permuted):
-                    new_data = get_modified_data_clone(original_data=d, x=x)
-                    permuted_fold_data.append(new_data)
-                    
-            elif permute_type == 'edge':  
-                # Get permuted edge attributes (permute across graphs/subjects)
-                perm_idx = torch.randperm(len(fold_data))
-                edge_attrs_permuted = [fold_data[i].edge_attr.clone() for i in perm_idx]
-                edge_indices_permuted = [fold_data[i].edge_index.clone() for i in perm_idx]
-                
-                # Create modified data copies with permuted edge attributes
-                for i, d in enumerate(fold_data):
-                    new_data = get_modified_data_clone(original_data=d, 
-                                                       edge_attr=edge_attrs_permuted[i], 
-                                                       edge_index=edge_indices_permuted[i])
-                    permuted_fold_data.append(new_data)
-
-            # Use permuted data for this fold
-            fold_data = permuted_fold_data
-        
-        # Create batch from fold data
-        fold_batch = Batch.from_data_list(fold_data).to(device)
-        
-        # Get VGAE model for this fold
-        vgae = vgaes[k]
-        vgae.eval()
-        
-        with torch.no_grad():
-            # Get context and VGAE latent representations for this fold
-            context = get_context(fold_batch)
-            out = vgae(fold_batch)
-            fold_z_readout = vgae.readout(out.mu, context, fold_batch.batch).cpu().numpy()
-            
-            # Store the results
-            z_readout[fold_indices] = fold_z_readout
-
-    return z_readout, clinical_data, ytrue
-
 # Main function ----------------------------------------------------------------
 @ex.automain
 def run(_config):
@@ -294,105 +213,34 @@ def run(_config):
     z_readout, clinical_data, ytrue = get_inputs_and_labels(data, vgaes, testfold_indices, device)
     mlp_inputs = np.concatenate([z_readout, clinical_data], axis=1)
     
-    # 1. Individual latent feature importance ------------------------------------
-    z_dim = z_readout.shape[1]
-    importance_scores_latent = np.zeros((n_repeats, z_dim))
+    # Initialize lists to store results
+    features_agg = []
+    scores_agg = []
     
     # Compute baseline score without permutation
     baseline_score = compute_score_with_fold_permutation(
         mlps, testfold_indices, mlp_inputs, ytrue, device)
     
-    # Compute importance scores for each latent dimension
-    for feature in range(z_dim):
-        for i in range(n_repeats):
-            score = compute_score_with_fold_permutation(
-                mlps, testfold_indices, mlp_inputs, ytrue, device, feature_idx=feature)
-            importance_scores_latent[i, feature] = baseline_score - score
-
-    # Compute statistics for individual latent features
-    means_latent = np.mean(importance_scores_latent, 0)
-    stds_latent = np.std(importance_scores_latent, 0)
-    sems_latent = stds_latent / np.sqrt(n_repeats)
-    t_stats_latent, p_values_latent = ttest_1samp(importance_scores_latent, 0, axis=0)
-    _, p_values_fdr_latent = fdrcorrection(p_values_latent, alpha=0.05)
-
-    # Save individual latent feature importance scores
-    latent_stats = pd.DataFrame({
-        'feature': [f'Z_{i}' for i in range(z_dim)],
-        'mean': means_latent,
-        'std': stds_latent,
-        'se': sems_latent,
-        't_stat': t_stats_latent,
-        'p_value': p_values_latent,
-        'p_value_fdr': p_values_fdr_latent
-    })
-    latent_stats.to_csv(os.path.join(output_dir, 'importance_scores_latent.csv'), index=False)
-
-    # Plot individual latent feature importance scores
-    fig, ax = plt.subplots(1, 1, figsize=(z_dim*0.2, 6))
-    bars = ax.bar(latent_stats['feature'], latent_stats['mean'], 
-                  yerr=latent_stats['se'], align='center')
-    ax.set_ylabel('Importance Scores')
-    ax.set_xticks(range(z_dim))
-    ax.set_xticklabels(latent_stats['feature'], rotation=45, ha='right')
-    
-    # Add significance markers
-    offset = 0.05 * max(means_latent + sems_latent)
-    for i, (bar, p_value_fdr) in enumerate(zip(bars, p_values_fdr_latent)):
-        if p_value_fdr < 0.05:
-            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + offset,
-                   '*', ha='center', va='bottom', color='red', fontsize=16)
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'importance_scores_latent.png'), dpi=300)
-    ex.add_artifact(os.path.join(output_dir, 'importance_scores_latent.png'))
-    if not verbose:
-        plt.close()
-
-    # 2. Aggregated scores ----------------------------------------------------
-    # Initialize lists to store results
-    features_agg = []
-    scores_agg = []
-    
-    # a) Compute Z_sum (aggregated individual latent features)
-    z_sum_scores = np.sum(importance_scores_latent, axis=1)
-    scores_agg.append(z_sum_scores)
-    features_agg.append('Z_sum')
-    
-    # b) Compute Z_whole (permuting all latent features together)
+    # a) Compute Z_whole (permuting all latent features together)
     z_whole_scores = np.zeros(n_repeats)
     for i in range(n_repeats):
         score = compute_score_with_fold_permutation(
             mlps, testfold_indices, mlp_inputs, ytrue, device, 
-            feature_idx=slice(0, z_dim))
+            feature_idx=slice(0, z_readout.shape[1]))
         z_whole_scores[i] = baseline_score - score
     scores_agg.append(z_whole_scores)
     features_agg.append('Z_whole')
     
-    # c) Compute graph attribute importance
+    # b) Compute graph attribute importance
     for j in range(clinical_data.shape[1]):
         feature_scores = np.zeros(n_repeats)
         for i in range(n_repeats):
             score = compute_score_with_fold_permutation(
                 mlps, testfold_indices, mlp_inputs, ytrue, device, 
-                feature_idx=z_dim + j)
+                feature_idx=z_readout.shape[1] + j)
             feature_scores[i] = baseline_score - score
         scores_agg.append(feature_scores)
         features_agg.append(data[0].attr_names.graph[j])
-    
-    # d) Compute pre-VGAE node/edge importance if applicable
-    if len(_config['dataset']['node_attrs']) > 0 and len(_config['dataset']['edge_attrs']) > 0:
-        for attr_type in ['node', 'edge']:
-            scores = np.zeros(n_repeats)
-            for i in range(n_repeats):
-                z_readout_perm, clinical_data, ytrue = get_inputs_and_labels_with_prevgae_permutation(
-                    data, vgaes, testfold_indices, device, permute_type=attr_type)
-                mlp_inputs_perm = np.concatenate([z_readout_perm, clinical_data], axis=1)
-                score = compute_score_with_fold_permutation(
-                    mlps, testfold_indices, mlp_inputs_perm, ytrue, device)
-                scores[i] = baseline_score - score
-            scores_agg.append(scores)
-            features_agg.append(f'pre_VGAE_{attr_type}')
     
     # Compute statistics for aggregated scores
     scores_agg = np.array(scores_agg)
