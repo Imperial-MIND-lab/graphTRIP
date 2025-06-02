@@ -22,15 +22,13 @@ sys.path.append("../")
 
 import os
 import copy
-import json
 import argparse
 from utils.files import add_project_root
 from utils.configs import load_configs_from_json, fetch_job_config
 from experiments.run_experiment import run
-from utils.statsalg import pls_robustness_analysis, load_fold_data, compute_performance_weighted_means, pls_feature_filtering
 
 
-def main(config_dir, output_dir, verbose, debug, seed, jobid=0, max_jobid=42):
+def main(config_dir, output_dir, verbose, debug, seed, jobid=0):
     # Add project root to paths
     config_dir = add_project_root(config_dir)
     output_dir = add_project_root(output_dir)
@@ -101,42 +99,6 @@ def main(config_dir, output_dir, verbose, debug, seed, jobid=0, max_jobid=42):
     else:
         print(f"Attention weights experiment already exists in {ex_dir}.")
 
-    if jobid == max_jobid:
-        # Run PLS analysis on attention weights
-        ex_dir = os.path.join(output_dir, 'attention_weights', 'pls_analysis')
-        os.makedirs(ex_dir, exist_ok=True)
-
-        # Define criteria for fold models to include in PLS analysis
-        inclusion_criteria = {'metric': 'rho', 
-                              'criterion': 'greater_than', 
-                              'threshold': 0}
-        
-        # Save inclusion criteria to inclusion_criteria.json
-        config_path = os.path.join(ex_dir, 'inclusion_criteria.json')
-        with open(config_path, 'w') as f:
-            json.dump(inclusion_criteria, f, indent=4)
-        
-        # Define job directories and filenames
-        base_dir = os.path.join(output_dir, 'attention_weights')
-        job_dirs = [os.path.join(base_dir, f'job_{j}') for j in range(max_jobid)]
-        num_folds = config['dataset']['num_folds']
-        filenames = [f'k{k}_attention_weights_original.csv' for k in range(num_folds)]
-
-        # Aggregate the results for each subject from all job directories
-        all_subject_dfs, fold_performances = load_fold_data(job_dirs, filenames, inclusion_criteria)
-
-        # Run PLS analysis
-        pls_patterns, pls_performance_corrs, pls_weight_stats = \
-            pls_robustness_analysis(all_subject_dfs, fold_performances, 
-                                    fold_performances[inclusion_criteria['metric']].values)
-        
-        # Save the results
-        pls_patterns.to_csv(os.path.join(ex_dir, 'pls_patterns.csv'), index=False)
-        pls_performance_corrs.to_csv(os.path.join(ex_dir, 'pls_performance_corrs.csv'), index=False)
-        pls_weight_stats.to_csv(os.path.join(ex_dir, 'pls_weight_stats.csv'), index=False)
-    else:
-        print(f"PLS analysis on attention weights already exists in {ex_dir}.")
-
     # GRAIL --------------------------------------------------------------------
     exname = 'grail'
     ex_dir = os.path.join(output_dir, 'grail', f'job_{jobid}')
@@ -152,66 +114,6 @@ def main(config_dir, output_dir, verbose, debug, seed, jobid=0, max_jobid=42):
         run(exname, observer, config_updates)
     else:
         print(f"GRAIL experiment already exists in {ex_dir}.")
-
-    if jobid == max_jobid:
-        # Run PLS analysis on GRAIL results
-        ex_dir = os.path.join(output_dir, 'grail', 'pls_analysis')
-        os.makedirs(ex_dir, exist_ok=True)
-
-        # Define criteria for fold models to include in PLS analysis
-        inclusion_criteria = {'metric': 'rho', 
-                              'criterion': 'greater_than', 
-                              'threshold': 0}
-        
-        # Save inclusion criteria to inclusion_criteria.json
-        config_path = os.path.join(ex_dir, 'inclusion_criteria.json')
-        with open(config_path, 'w') as f:
-            json.dump(inclusion_criteria, f, indent=4)
-        
-        # Define job directories and filenames
-        base_dir = os.path.join(output_dir, 'grail')
-        job_dirs = [os.path.join(base_dir, f'job_{j}') for j in range(max_jobid)]
-        num_folds = config['dataset']['num_folds']
-        filenames = [f'k{k}_mean_alignments.csv' for k in range(num_folds)]
-
-        # Aggregate the results for each subject from all job directories
-        all_subject_dfs, fold_performances = load_fold_data(job_dirs, filenames, inclusion_criteria)
-        performance = fold_performances[inclusion_criteria['metric']].values
-
-        # Run PLS analysis
-        pls_patterns, pls_performance_corrs, pls_weight_stats = \
-            pls_robustness_analysis(all_subject_dfs, performance)
-        
-        # Save the results
-        pls_patterns.to_csv(os.path.join(ex_dir, 'pls_patterns.csv'), index=False)
-        pls_performance_corrs.to_csv(os.path.join(ex_dir, 'pls_performance_corrs.csv'), index=False)
-        pls_weight_stats.to_csv(os.path.join(ex_dir, 'pls_weight_stats.csv'), index=False)
-
-        # Compute performance-weighted means
-        weighted_means, weighted_means_stats = \
-            compute_performance_weighted_means(all_subject_dfs, performance)
-
-        # Filter candidate biomarkers:
-        # 1. Significant PLS weight (fdr < 0.05) with large effect size (abs(cohen's d) > 0.8)
-        # 2. Significant performance-weighted mean (fdr < 0.05)
-        # 3. Mean PLS weight and weighted-mean should have the same sign
-        filter_criteria = {
-            'pls_weight_stats': {'fdr_p_value': 0.05, 'cohen_d': 0.8},
-            'weighted_means_stats': {'fdr_p_value': 0.05},
-            'signed_features': True
-        }
-        
-        filtered_features = pls_feature_filtering(pls_weight_stats, 
-                                                  weighted_means_stats, 
-                                                  filter_criteria)
-
-        # Save filter criteria to filter_criteria.json
-        config_path = os.path.join(ex_dir, 'filtering_results.json')
-        filter_criteria['filtered_features'] = filtered_features
-        with open(config_path, 'w') as f:
-            json.dump(filter_criteria, f, indent=4)
-    else:
-        print(f"PLS analysis on GRAIL results already exists in {ex_dir}.")
     
 
 if __name__ == "__main__":
@@ -227,8 +129,6 @@ if __name__ == "__main__":
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('-j', '--jobid', type=int, default=0, help='Job ID')
-    parser.add_argument('-mxj', '--max_jobid', type=int, default=41, 
-                        help='Maximum possible job ID for this script. Typically the dataset size.')
     args = parser.parse_args()
 
     # Make sure debugging outputs don't overwrite any existing outputs
@@ -237,4 +137,4 @@ if __name__ == "__main__":
             raise ValueError("output_dir must be specified when using debug mode.")
 
     # Run the main function
-    main(args.config_dir, args.output_dir, args.verbose, args.debug, args.seed, args.jobid, args.max_jobid)
+    main(args.config_dir, args.output_dir, args.verbose, args.debug, args.seed, args.jobid)
