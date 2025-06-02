@@ -6,7 +6,7 @@ License: BSD-3-Clause
 '''
 
 import sys
-sys.path.append('graphTRP/')
+sys.path.append('../../')
 
 from sacred import Ingredient
 from .data_ingredient import data_ingredient, get_context
