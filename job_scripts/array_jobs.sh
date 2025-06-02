@@ -1,14 +1,14 @@
 #!/bin/bash
 
 #PBS -l select=1:ncpus=4:mem=4gb
-#PBS -l walltime=3:00:00
+#PBS -l walltime=2:00:00
 #PBS -N tlearners_delta
 #PBS -J 0-5
 
 # Load environment
 module load anaconda3/personal
 source activate graphtrip
-cd ~/projects/graphTRIP/scripts
+cd ~/projects/graphTRIP/experiments
 
 # Define job ranges for each script
 PSILOCYBIN_TLEARNER_START=0
