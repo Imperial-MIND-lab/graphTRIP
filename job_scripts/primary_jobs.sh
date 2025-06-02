@@ -2,14 +2,14 @@
 
 #PBS -l select=1:ncpus=4:mem=4gb
 #PBS -l walltime=8:00:00
-#PBS -N primary_jobs_with_graphtrp_env
+#PBS -N primary_jobs
 #PBS -J 0-11
 
 # Primary scripts do not depend on other scripts.
 
 # Load environment
 module load anaconda3/personal
-source activate graphtrp
+source activate graphtrip
 cd ~/projects/graphTRIP/scripts
 
 # Define job ranges for each script

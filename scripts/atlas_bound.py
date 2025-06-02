@@ -11,8 +11,8 @@ Author: Hanna M. Tolle
 Date: 2025-05-31
 License: BSD 3-Clause
 """
-import matplotlib
-matplotlib.use('Agg')  # Set non-interactive backend
+# import matplotlib
+# matplotlib.use('Agg')  # Set non-interactive backend
 
 import sys
 sys.path.append("../")
