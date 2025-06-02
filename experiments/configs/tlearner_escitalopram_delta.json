@@ -1,7 +1,7 @@
 {
   "seed": [291],
   "verbose": [false],
-  "save_weights": [true],
+  "save_weights": [false],
   "output_dir": ["outputs/x_graphtrip/tlearner_escitalopram_delta"],
   "lr": [0.001],
   "num_epochs": [300],
