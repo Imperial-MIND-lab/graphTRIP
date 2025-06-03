@@ -2,7 +2,7 @@
     "seed": [291],
     "verbose": [false],
     "save_weights": [false],
-    "output_dir": ["outputs/x_graphtrip/tlearner_P_SSRIstop"],
+    "output_dir": ["outputs/x_graphtrip/tlearner_P_BDIonly"],
     "lr": [0.001],
     "num_epochs": [300],
     "num_z_samples": [3, 5, 7],
@@ -22,7 +22,7 @@
       "graph_attrs": [
         ["BDI_Before"]
       ],
-      "context_attrs": [["Stop_SSRI"]],
+      "context_attrs": [[]],
       "node_attrs": [["5-HT1A_Believeau-3", "5-HT2A_Believeau-3", "5-HTT_Believeau-3"]],
       "edge_attrs": [["functional_connectivity"]],
       "edge_tfm_type": ["LowerAbsThresholdAdjacency"],
@@ -90,7 +90,7 @@
         }
       },
       "pooling_cfg": {
-        "model_type": ["AttentionNetPooling"],
+        "model_type": ["GlobalAttentionPooling"],
         "params": {
           "reduce": ["mean"]
         }

@@ -2,27 +2,27 @@
     "seed": [291],
     "verbose": [false],
     "save_weights": [false],
-    "output_dir": ["outputs/x_graphtrip/tlearner_P_SSRIstop"],
+    "output_dir": ["outputs/x_graphtrip/tlearner_E_BDIonly"],
     "lr": [0.001],
     "num_epochs": [300],
     "num_z_samples": [3, 5, 7],
     "alpha": [0.3, 0.4, 0.5],
     "annotations_file": ["data/raw/psilodep2/annotations.csv"],
     "subject_id_col": ["Patient"],
-    "train_cond": ["P"],
-    "eval_cond": ["E"],
+    "train_cond": ["E"],
+    "eval_cond": ["P"],
     "dataset": {
       "study": ["psilodep2"],
       "session": ["before"],
       "atlas": ["schaefer100"],
       "target": ["Delta_QIDS"],
-      "batch_size": [11],
+      "batch_size": [10],
       "num_folds": [1],
       "val_split": [0.0],
       "graph_attrs": [
         ["BDI_Before"]
       ],
-      "context_attrs": [["Stop_SSRI"]],
+      "context_attrs": [[]],
       "node_attrs": [["5-HT1A_Believeau-3", "5-HT2A_Believeau-3", "5-HTT_Believeau-3"]],
       "edge_attrs": [["functional_connectivity"]],
       "edge_tfm_type": ["LowerAbsThresholdAdjacency"],
@@ -90,7 +90,7 @@
         }
       },
       "pooling_cfg": {
-        "model_type": ["AttentionNetPooling"],
+        "model_type": ["GlobalAttentionPooling"],
         "params": {
           "reduce": ["mean"]
         }
