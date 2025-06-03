@@ -32,11 +32,8 @@
         "threshold": [0.5]
       },
       "add_3Dcoords": [true],
-      "add_num_nodes": [false],
-      "add_drug_cond": [false],
-      "drug_condition": [null],
-      "add_treatment": [false],
       "self_loop_fill_value": [1],
+      "drug_condition": [null],
       "standardise_x": [false]
     },
     "mlp_model": {
