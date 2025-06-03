@@ -18,7 +18,7 @@ JOB_ID=${PBS_ARRAY_INDEX}
 
 # Calculate which config_id and jobid to use
 CONFIG_INDEX=89 #$((JOB_ID / 42))
-JOB_INDEX=$(JOB_ID % 42)
+JOB_INDEX=$((JOB_ID % 42))
 
 # Define the config file and output directory
 CONFIG_FILE='experiments/configs/x_graphtrip_qids.json'
