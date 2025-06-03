@@ -900,6 +900,10 @@ def load_fold_data(job_dirs, file_names, inclusion_criteria):
             all_subject_dfs[sub] = pd.concat(all_subject_dfs[sub], axis=0)
             
     fold_performances = pd.concat(fold_performances, axis=0)
+
+    # Print the number of CV-fold models that were included in the analysis
+    max_num_models = xlearner_num_folds * len(job_dirs)
+    print(f'CV-fold models included: {len(fold_performances)} out of {max_num_models}')
             
     return all_subject_dfs, fold_performances  
 

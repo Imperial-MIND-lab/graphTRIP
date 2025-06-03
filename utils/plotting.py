@@ -1453,7 +1453,7 @@ def plot_single_rain_violin(data, style_group=None, palette=None, symbols=None, 
     
     plt.show()
 
-def plot_histogram(distributions, palette=None, alpha=ALPHA_SCATTER, 
+def plot_histogram(distributions, palette=None, alpha=ALPHA_SCATTER, title=None,
                    save_path=None, figsize=(8, 6), vline=None, xlim=None):
     """
     Creates a histogram plot with KDE lines for multiple distributions.
@@ -1512,6 +1512,8 @@ def plot_histogram(distributions, palette=None, alpha=ALPHA_SCATTER,
     plt.legend()
     plt.xlabel('Value')
     plt.ylabel('Density')
+    if title is not None:
+        plt.title(title)
     if xlim is not None:
         plt.xlim(xlim)
     
@@ -1774,6 +1776,64 @@ def plot_simple_bars(values, feature_names=None, yline=0, cmap=COOLWARM, vmax=No
         plt.savefig(save_path)
     
     return fig, ax
+
+def plot_ite_violin(results, threshold=0, ycol='prediction', save_path=None):
+    """Plot ITE distribution with violin plot and scatter points.
+    
+    Args:
+        results (pd.DataFrame): DataFrame containing prediction results
+        threshold (float): Threshold for small vs large ITE classification
+        ycol (str): Column name for ITE values to plot
+        save_path (str): Path to save figure, if None figure is not saved
+    """
+    # Create masks for conditions and ITE magnitude
+    escit_mask = results['Condition'] == -1
+    psilo_mask = results['Condition'] == 1
+    small_ite_mask = np.abs(results[ycol]) < threshold
+
+    # Create style groups based on masks
+    # 0: small ITE escitalopram
+    # 1: small ITE psilocybin
+    # 2: large ITE escitalopram
+    # 3: large ITE psilocybin
+    style_group = np.zeros(len(results))
+    style_group[small_ite_mask & escit_mask] = 0
+    style_group[small_ite_mask & psilo_mask] = 1
+    style_group[~small_ite_mask & escit_mask] = 2
+    style_group[~small_ite_mask & psilo_mask] = 3
+
+    # Define colors and markers for each group
+    palette = {
+        0: 'gray',  # small ITE escitalopram
+        1: 'gray',  # small ITE psilocybin
+        2: ESCIT,   # large ITE escitalopram
+        3: PSILO    # large ITE psilocybin
+    }
+
+    symbols = {
+        0: 'o',  # escitalopram marker
+        1: 'd',  # psilocybin marker
+        2: 'o',  # escitalopram marker
+        3: 'd'   # psilocybin marker
+    }
+
+    # Add average ITE as title
+    ate = np.mean(results[ycol])
+    ate_sem = np.std(results[ycol]) / np.sqrt(len(results))
+    title = f'ATE: {ate:.2f} (SEM: {ate_sem:.2f})'
+
+    # Create the plot
+    plot_single_rain_violin(
+        data=results[ycol],
+        style_group=style_group,
+        palette=palette,
+        symbols=symbols,
+        alpha=ALPHA_SCATTER,
+        figsize=(3, 5),
+        hline=0,  # Add horizontal line at y=0
+        title=title,
+        violin_side='right',
+        save_path=save_path)
 
 # Brain surface plotting --------------------------------------------------------
 
@@ -2197,72 +2257,8 @@ def plot_rsn_attention_boxplots_connected(mean_rsn_attention, context_attr_name=
     return stats_df
 
 # Gradient alignment plots -----------------------------------------------------
-
-def plot_clustered_matrix(mat, labels, testfold_indices=None, features=None, 
-                          vrange=None, cmap=COOLWARM, figsize=(15, 10), save_path=None):
-    """
-    Plot alignment matrix with samples sorted by cluster membership.
-    
-    Parameters:
-    -----------
-    mat (numpy.ndarray): Matrix to plot (num_samples, num_features)
-    labels (numpy.ndarray): Cluster labels for each sample
-    subjects (array-like, optional): Subject IDs. If None, uses indices
-    testfold_indices (array-like, optional): Test fold indices for each subject
-    features (list, optional): Feature names for x-axis. If None, uses indices
-    vrange (tuple, optional): (min, max) values for color scaling
         
-    Returns:
-    --------
-    fig : matplotlib.figure.Figure
-        The figure object
-    """
-    # Sort subjects by cluster label
-    cluster_order = np.argsort(labels)
-    sorted_mat = mat[cluster_order]
-    
-    # Create default values if not provided
-    subjects = np.arange(len(labels))
-    if features is None:
-        features = [f'F{i}' for i in range(mat.shape[1])]
-    if vrange is None:
-        # Scale to 95th percentile of absolute values
-        max_abs_val = np.percentile(np.abs(sorted_mat), 95)
-        vrange = (-max_abs_val, max_abs_val)
-    
-    # Create y-tick labels that show cluster membership
-    unique_clusters = np.unique(labels)
-    if testfold_indices is not None:
-        y_labels = [f'Sub {subjects[i]} (C{labels[i]}, fold {testfold_indices[i]})' 
-                   for i in cluster_order]
-    else:
-        y_labels = [f'Sub {subjects[i]} (C{labels[i]})' for i in cluster_order]
-    
-    # Create the plot
-    fig = plt.figure(figsize=figsize)
-    sns.heatmap(sorted_mat, 
-                cmap=cmap,
-                vmin=vrange[0], 
-                vmax=vrange[1],
-                center=0,
-                xticklabels=features,
-                yticklabels=y_labels)
-    plt.xticks(rotation=90)
-    
-    # Add horizontal lines to separate clusters
-    current_pos = 0
-    for cluster in unique_clusters:
-        current_pos += np.sum(labels[cluster_order] == cluster)
-        if current_pos < len(labels):  # No line after last cluster
-            plt.axhline(y=current_pos, color='black', linewidth=2)
-    
-    plt.title('Mean Alignment by Subject and Feature\nGrouped by Cluster')
-    plt.tight_layout()
-    
-    if save_path:
-        plt.savefig(save_path)
-        
-def plot_clustered_matrix2(mat, labels, features=None, conditions=None,
+def plot_clustered_matrix(mat, labels, features=None, conditions=None,
                           vrange=None, cmap=COOLWARM, figsize=(15, 10), save_path=None):
     """
     Plot alignment matrix with samples sorted by cluster membership and condition.
