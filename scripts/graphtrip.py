@@ -201,6 +201,26 @@ def main(config_dir, output_dir, verbose, debug, seed):
     else:
         print(f"Biomarkers experiment already exists in {ex_dir}.")
 
+    # Fixed connection density ------------------------------------------------
+    exname = 'test_and_finetune'
+    ex_dir = os.path.join(output_dir, 'fixed_connection_density')
+    if not os.path.exists(ex_dir):
+        config_updates = {}
+        config_updates['output_dir'] = ex_dir
+        config_updates['weights_dir'] = weights_dir
+        config_updates['seed'] = seed
+        config_updates['verbose'] = verbose
+        config_updates['num_epochs'] = 0 # no finetuning
+
+        # Change edge transformation
+        config_updates['dataset'] = copy.deepcopy(config['dataset'])
+        config_updates['dataset']['edge_tfm_type'] = 'DensityThresholdAdjacency'
+        config_updates['dataset']['edge_tfm_params'] = {'density': 0.2,
+                                                        'edge_info': 'functional_connectivity'}
+
+        run(exname, observer, config_updates)
+    else:
+        print(f"Fixed connection density experiment already exists in {ex_dir}.")
 
 if __name__ == "__main__":
     """
