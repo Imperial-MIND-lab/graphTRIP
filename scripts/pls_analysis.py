@@ -1,7 +1,6 @@
 """
-This scripts performs PLS robustness analysis for the interpretability
-results of the X-graphTRIP model. It requires the outputs of the 
-x_graphtrip.py script.
+This scripts performs PLS sensitivity analysis for the interpretability
+results of the X-graphTRIP model. 
 
 Dependencies:
 - outputs/x_graphtrip/grail/job_{fold_shift}/
@@ -26,17 +25,23 @@ import argparse
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import chisquare
 
 from utils.files import add_project_root
 from utils.helpers import sort_features
-from utils.plotting import plot_diverging_bars, plot_diverging_raincloud, plot_histogram
-from utils.plotting import custom_diverging_cmap, PSILO, ESCIT, COOLWARM
+from utils.plotting import plot_diverging_bars, plot_raincloud
+from utils.plotting import custom_diverging_cmap, PSILO, ESCIT
 from utils.statsalg import pls_robustness_analysis, load_fold_data, compute_performance_weighted_means, pls_feature_filtering
 from preprocessing.metrics import get_rsn_mapping
 
 
-def main(grail_dir=None, attention_dir=None, output_dir_name='pls_analysis', 
-         criteria=None, overwrite=False):
+def main(grail_dir:str=None,                     # Path to the GRAIL results directory
+         attention_dir:str=None,                 # Path to the attention weights results directory
+         output_dir_name:str='pls_analysis',     # Name of the output directory, created inside the grail or attention weights directory
+         metric:str='rho',                       # Performance metric to use for the PLS analysis (rho or r)
+         overwrite:bool=False):                  # Whether to overwrite the output directory if it already exists
+    
     # Add project root to paths
     grail_dir = add_project_root(grail_dir) if grail_dir is not None else None
     attention_dir = add_project_root(attention_dir) if attention_dir is not None else None
@@ -47,17 +52,9 @@ def main(grail_dir=None, attention_dir=None, output_dir_name='pls_analysis',
     if attention_dir is not None and not os.path.exists(attention_dir):
         raise FileNotFoundError(f"Attention weights results directory not found: {attention_dir}")
     
-    # Define default inclusion and filtering criteria
-    if criteria is None:
-        inclusion_criteria = {'metric': 'rho', 'criterion': 'greater_than', 'threshold': 0}
-        filtering_criteria = {'pls_weight_stats': {'fdr_p_value': 0.05, 'cohen_d': 0.8},
-                              'weighted_means_stats': {'fdr_p_value': 0.05},
-                              'signed_features': True}
-    else:
-        inclusion_criteria = criteria.get('inclusion', {'metric': 'rho', 'criterion': 'greater_than', 'threshold': 0})
-        filtering_criteria = criteria.get('filtering', {'pls_weight_stats': {'fdr_p_value': 0.05, 'cohen_d': 0.8},
-                                                        'weighted_means_stats': {'fdr_p_value': 0.05},
-                                                        'signed_features': True})
+    # Metric must be rho or r
+    if metric not in ['rho', 'r']:
+        raise ValueError(f"Metric must be rho or r, got {metric}")
     
     # Attention weights ---------------------------------------------------------
     if attention_dir is not None:
@@ -67,10 +64,10 @@ def main(grail_dir=None, attention_dir=None, output_dir_name='pls_analysis',
             save_figs = True
             os.makedirs(ex_dir, exist_ok=True)
             
-            # Save inclusion criteria to inclusion_criteria.json
-            config_path = os.path.join(ex_dir, 'inclusion_criteria.json')
-            with open(config_path, 'w') as f:
-                json.dump(inclusion_criteria, f, indent=4)
+            # Only include significant models
+            inclusion_criteria = {'metric': 'p' if metric == 'r' else 'rho_p', 
+                                  'criterion': 'less_than', 
+                                  'threshold': 0.05}
             
             # Get all job directories and sort by job index
             job_dirs = sorted([d for d in glob.glob(os.path.join(attention_dir, 'job_*'))], 
@@ -83,16 +80,17 @@ def main(grail_dir=None, attention_dir=None, output_dir_name='pls_analysis',
 
             # Aggregate the results for each subject from all job directories
             all_subject_dfs, fold_performances = load_fold_data(job_dirs, filenames, inclusion_criteria)
-            performance = fold_performances[inclusion_criteria['metric']].values
+            assert len(fold_performances) > 0, "No significant models found."
+            performance = fold_performances[metric].values
 
-            # Run PLS analysis
-            pls_patterns, pls_performance_corrs, pls_weight_stats = \
-                pls_robustness_analysis(all_subject_dfs, performance)
+            # Compute performance-weighted means
+            cutoff = 0.0 # make sure to only include significantly positive performance values
+            weighted_means, weighted_means_stats = \
+                compute_performance_weighted_means(all_subject_dfs, performance, performance_cutoff=cutoff)
             
             # Save the results
-            pls_patterns.to_csv(os.path.join(ex_dir, 'pls_patterns.csv'), index=False)
-            pls_performance_corrs.to_csv(os.path.join(ex_dir, 'pls_performance_corrs.csv'), index=False)
-            pls_weight_stats.to_csv(os.path.join(ex_dir, 'pls_weight_stats.csv'), index=True)
+            weighted_means.to_csv(os.path.join(ex_dir, 'weighted_means_significant.csv'), index=False)
+            weighted_means_stats.to_csv(os.path.join(ex_dir, 'weighted_means_stats_significant.csv'), index=True)
 
             # Infer the brain atlas from config.json inside the job directory
             config_path = os.path.join(job_dirs[0], 'config.json')
@@ -102,18 +100,18 @@ def main(grail_dir=None, attention_dir=None, output_dir_name='pls_analysis',
 
             # Compute mean attention within resting-state networks
             rsn_mapping, rsn_names = get_rsn_mapping(atlas)
-            mean_rsn_pls = {rsn: [] for rsn in rsn_names}
+            mean_rsn_attention = {rsn: [] for rsn in rsn_names}
             for rsn_idx, rsn_name in enumerate(rsn_names):
                 # Get the columns for this RSN
-                rsn_columns = pls_patterns.columns[rsn_mapping == rsn_idx]
+                rsn_columns = weighted_means.columns[rsn_mapping == rsn_idx]
 
                 # Average across RSN columns to get the mean attention for this RSN for each subject
-                rsn_pls = pls_patterns[rsn_columns].mean(axis=1)
-                mean_rsn_pls[rsn_name] = list(rsn_pls)
+                rsn_mean = weighted_means[rsn_columns].mean(axis=1)
+                mean_rsn_attention[rsn_name] = list(rsn_mean)
 
             # Save mean RSN attention
-            mean_rsn_pls_df = pd.DataFrame(mean_rsn_pls)
-            mean_rsn_pls_df.to_csv(os.path.join(ex_dir, 'mean_rsn_attention.csv'), index=False)
+            mean_rsn_attention = pd.DataFrame(mean_rsn_attention)
+            mean_rsn_attention.to_csv(os.path.join(ex_dir, 'weighted_mean_rsn_attention.csv'), index=False)
 
             print(f"PLS analysis on attention weights completed. Output saved in {ex_dir}.")
         else:
@@ -121,40 +119,21 @@ def main(grail_dir=None, attention_dir=None, output_dir_name='pls_analysis',
             print(f"PLS analysis on attention weights already exists in {ex_dir}.")
 
             # Load the results for plotting
-            mean_rsn_pls = pd.read_csv(os.path.join(ex_dir, 'mean_rsn_attention.csv'))
-            mean_rsn_pls = mean_rsn_pls.to_dict(orient='list')
-            pls_performance_corrs = pd.read_csv(os.path.join(ex_dir, 'pls_performance_corrs.csv'))
+            mean_rsn_attention = pd.read_csv(os.path.join(ex_dir, 'weighted_mean_rsn_attention.csv'))
 
         # Plot results ------------------------------------------------------------
-        mean_rsn_pls = {k: v for k, v in sorted(mean_rsn_pls.items(), key=lambda item: np.mean(item[1]), reverse=True)}
-        vmax = np.percentile(abs(np.array(list(mean_rsn_pls.values())).flatten()), 75)
-        save_path = os.path.join(ex_dir, 'mean_rsn_attention.png') if save_figs else None
-        plot_diverging_raincloud(mean_rsn_pls, 
-                                cmap=COOLWARM, 
-                                vmax=vmax, 
-                                alpha=0.7, 
-                                box_alpha=0.7, 
-                                scatter_alpha=0.5,
-                                save_path=save_path, 
-                                figsize=(5, 5), 
-                                add_asterisk=True, 
-                                add_colorbar=False);
-
-        # Plot histogram of correlation (r) values of PLS components with fold-model performance
-        save_path = os.path.join(ex_dir, 'pls_correlations_histogram.png') if save_figs else None
-        corr_values = np.abs(pls_performance_corrs['r'].values)
-
-        # Calculate statistics and add to title
-        r_mean = np.mean(corr_values)
-        r_sem = np.std(corr_values) / np.sqrt(len(corr_values))
-        percentage_of_significant_rs = (np.sum(pls_performance_corrs['p'] < 0.05) / len(pls_performance_corrs['p']))*100
-        title = f'r = {r_mean:.4f} ± {r_sem:.4f}; % significant = {percentage_of_significant_rs:.2f}%'
-        plot_histogram(distributions = {'r': corr_values}, 
-                       palette={'r': 'darkblue'}, 
-                       alpha=0.6, 
+        mean_rsn_attention = {k: v for k, v in sorted(mean_rsn_attention.items(), key=lambda item: np.mean(item[1]), reverse=True)}
+        save_path = os.path.join(ex_dir, 'weighted_mean_rsn_attention.png') if save_figs else None
+        offset = 3
+        colors = sns.color_palette("YlGnBu_r", len(mean_rsn_attention)+offset)
+        palette = {name: color for name, color in zip(mean_rsn_attention.keys(), colors)}
+        plot_raincloud(mean_rsn_attention, 
+                       palette=palette, 
                        save_path=save_path, 
-                       figsize=(5, 4),
-                       title=title)
+                       alpha=0.7, 
+                       box_alpha=0.5,
+                       figsize=(5, 5),
+                       sort_by_mean=False)
 
     # GRAIL --------------------------------------------------------------------
     if grail_dir is not None:
@@ -162,11 +141,119 @@ def main(grail_dir=None, attention_dir=None, output_dir_name='pls_analysis',
         if not os.path.exists(ex_dir) or overwrite:
             save_figs = True
             os.makedirs(ex_dir, exist_ok=True)
+                
+            # Get all job directories and sort by job index
+            job_dirs = sorted([d for d in glob.glob(os.path.join(grail_dir, 'job_*'))], 
+                            key=lambda x: int(x.split('_')[-1]))
             
-            # Save inclusion criteria to inclusion_criteria.json
-            config_path = os.path.join(ex_dir, 'inclusion_criteria.json')
-            with open(config_path, 'w') as f:
-                json.dump(inclusion_criteria, f, indent=4)
+            # Get the number of folds from the first job directory
+            fold_files = [f for f in os.listdir(job_dirs[0]) if f.startswith('k') and f.endswith('_mean_alignments.csv')]
+            num_folds = len(fold_files)
+            filenames = [f'k{k}_mean_alignments.csv' for k in range(num_folds)]
+
+            # Only use significance threshold as filtering criterion
+            filtering_criteria = {'pls_weight_stats': {'fdr_p_value': 0.05},     # significant influence on generalisation
+                                  'weighted_means_stats': {'fdr_p_value': 0.05}, # necessary for generalisation
+                                  'signed_features': True}                       # positive, not negative, influence on generalisation
+            
+            # Define output arrays
+            all_influence = []   # PLS cohen's ds for each feature and threshold
+            all_necessity = []   # Weighted-mean cohen's ds for each feature and threshold
+            all_association = [] # 'E', 'P', or 'none' for escitalopram, psilocybin, or no association
+
+            # Load subject GRAIL dfs and fold model performance
+            inclusion_criteria = {'metric': metric, 
+                                  'criterion': 'greater_than', 
+                                  'threshold': 0.0}
+            all_subject_dfs, fold_performances = load_fold_data(job_dirs, filenames, inclusion_criteria)
+            performance = fold_performances[metric].values
+
+            # Perform analysis multiple times including the top n models
+            max_num_models = len(performance)
+            min_num_models = 25
+            step_size = 10
+            for top_n in range(min_num_models, max_num_models+1, step_size):            
+                # Get the data for the top n models
+                top_n_indices = np.argsort(performance)[-top_n:]
+                top_n_performances = performance[top_n_indices]
+                top_n_subject_dfs = {sub: all_subject_dfs[sub].iloc[top_n_indices] for sub in all_subject_dfs}
+
+                # Run PLS analysis
+                _, _, pls_weight_stats = pls_robustness_analysis(top_n_subject_dfs, top_n_performances)
+
+                # Compute performance-weighted means
+                weighted_means, weighted_means_stats = \
+                    compute_performance_weighted_means(top_n_subject_dfs, top_n_performances)
+                
+                # Filter candidate biomarkers
+                filtered_features = pls_feature_filtering(pls_weight_stats, 
+                                                          weighted_means_stats, 
+                                                          filtering_criteria)
+
+                # Get the associations for each feature
+                all_features = list(weighted_means.columns)
+                eso_features = [f for f in filtered_features if weighted_means[f].mean() > 0]
+                psilo_features = [f for f in filtered_features if weighted_means[f].mean() < 0]
+
+                # Store results
+                influence = {
+                    'num_models': top_n,
+                    **{f: pls_weight_stats.loc[f, 'cohen_d'] for f in all_features}
+                }
+                necessity = {
+                    'num_models': top_n,
+                    **{f: weighted_means_stats.loc[f, 'cohen_d'] for f in all_features}
+                }
+                association = {
+                    'num_models': top_n,
+                    **{f: 'E' if f in eso_features else 'P' if f in psilo_features else 'none' for f in all_features}
+                }
+
+                # Append results to output arrays
+                all_influence.append(influence)
+                all_necessity.append(necessity)
+                all_association.append(association)
+
+            # Save results
+            all_influence = pd.DataFrame(all_influence)
+            all_necessity = pd.DataFrame(all_necessity)
+            all_association = pd.DataFrame(all_association)
+            all_influence.to_csv(os.path.join(ex_dir, 'pls_influence.csv'), index=False)
+            all_necessity.to_csv(os.path.join(ex_dir, 'weighted_mean_necessity.csv'), index=False)
+            all_association.to_csv(os.path.join(ex_dir, 'association.csv'), index=False)
+
+            # Get features that are significantly associated with E or P as per chi2 test
+            robust_eso_features = []
+            robust_psilo_features = []
+            for feature in all_association.columns:
+                num_p = (all_association[feature] == 'P').sum()
+                num_e = (all_association[feature] == 'E').sum()
+                num_none = (all_association[feature] == 'none').sum()
+                counts = [num_p, num_e, num_none]
+                expected = [sum(counts)/3] * 3
+                _, p = chisquare(counts, f_exp=expected)
+
+                # If significant, find majority class and add to robust list
+                if p < 0.05:
+                    majority_class = np.argmax(counts) # 0 = P, 1 = E, 2 = none
+                    if majority_class == 0 and num_e == 0: # strictly psilocybin-associated
+                        robust_psilo_features.append(feature)
+                    elif majority_class == 1 and num_p == 0: # strictly escitalopram-associated
+                        robust_eso_features.append(feature)
+
+            # Sort features and save as json
+            robust_eso_features = sort_features(robust_eso_features)
+            robust_psilo_features = sort_features(robust_psilo_features)
+            robust_features = {'escitalopram': robust_eso_features, 
+                               'psilocybin': robust_psilo_features}
+            with open(os.path.join(ex_dir, 'robust_features.json'), 'w') as f:
+                json.dump(robust_features, f, indent=4)
+
+            # --------------------------------------------------------------------------------------------------
+            # Also compute and save the weighted means for significant models ----------------------------------
+            inclusion_criteria = {'metric': 'p' if metric == 'r' else 'rho_p', 
+                                  'criterion': 'less_than', 
+                                  'threshold': 0.05}
             
             # Get all job directories and sort by job index
             job_dirs = sorted([d for d in glob.glob(os.path.join(grail_dir, 'job_*'))], 
@@ -179,40 +266,17 @@ def main(grail_dir=None, attention_dir=None, output_dir_name='pls_analysis',
 
             # Aggregate the results for each subject from all job directories
             all_subject_dfs, fold_performances = load_fold_data(job_dirs, filenames, inclusion_criteria)
-            performance = fold_performances[inclusion_criteria['metric']].values
-
-            # Run PLS analysis
-            pls_patterns, pls_performance_corrs, pls_weight_stats = \
-                pls_robustness_analysis(all_subject_dfs, performance)
-            
-            # Save the results
-            pls_patterns.to_csv(os.path.join(ex_dir, 'pls_patterns.csv'), index=False)
-            pls_performance_corrs.to_csv(os.path.join(ex_dir, 'pls_performance_corrs.csv'), index=False)
-            pls_weight_stats.to_csv(os.path.join(ex_dir, 'pls_weight_stats.csv'), index=True)
+            assert len(fold_performances) > 0, "No significant models found."
+            performance = fold_performances[metric].values
 
             # Compute performance-weighted means
+            cutoff = 0.0 # make sure to only include significantly positive performance values
             weighted_means, weighted_means_stats = \
-                compute_performance_weighted_means(all_subject_dfs, performance)
+                compute_performance_weighted_means(all_subject_dfs, performance, performance_cutoff=cutoff)
             
-            # Save the performance-weighted means
-            weighted_means.to_csv(os.path.join(ex_dir, 'weighted_means.csv'), index=False)
-            weighted_means_stats.to_csv(os.path.join(ex_dir, 'weighted_means_stats.csv'), index=True)
-            
-            # Filter candidate biomarkers
-            filtered_features = pls_feature_filtering(pls_weight_stats, 
-                                                      weighted_means_stats, 
-                                                      filtering_criteria)
-
-            # Sort features based category and weighted-mean sign
-            features_presorted = sort_features(filtered_features)
-            features_sorted = [f for f in features_presorted if weighted_means[f].mean() < 0] + \
-                              [f for f in features_presorted if weighted_means[f].mean() > 0] 
-            
-            # Save filter criteria and sorted features to filter_criteria.json
-            config_path = os.path.join(ex_dir, 'filtering_results.json')
-            filtering_criteria['filtered_features'] = features_sorted
-            with open(config_path, 'w') as f:
-                json.dump(filtering_criteria, f, indent=4)
+            # Save the results
+            weighted_means.to_csv(os.path.join(ex_dir, 'weighted_means_significant.csv'), index=False)
+            weighted_means_stats.to_csv(os.path.join(ex_dir, 'weighted_means_stats_significant.csv'), index=True)
 
             print(f"PLS analysis on GRAIL results completed. Output saved in {ex_dir}.")
         else:
@@ -220,12 +284,13 @@ def main(grail_dir=None, attention_dir=None, output_dir_name='pls_analysis',
             print(f"PLS analysis on GRAIL results already exists in {ex_dir}.")
 
             # Load the results for plotting
-            weighted_means = pd.read_csv(os.path.join(ex_dir, 'weighted_means.csv'))
-            filtering_results = json.load(open(os.path.join(ex_dir, 'filtering_results.json')))
-            features_sorted = filtering_results['filtered_features']
-            pls_performance_corrs = pd.read_csv(os.path.join(ex_dir, 'pls_performance_corrs.csv'))
+            weighted_means = pd.read_csv(os.path.join(ex_dir, 'weighted_means_significant.csv'))
+            robust_features = json.load(open(os.path.join(ex_dir, 'robust_features.json')))
+            robust_eso_features = robust_features['escitalopram']
+            robust_psilo_features = robust_features['psilocybin']
 
         # Plot results ------------------------------------------------------------
+        features_sorted = robust_psilo_features + robust_eso_features
         psilo_escit_cmap = custom_diverging_cmap(PSILO, ESCIT, n_colors=256)
         vmax = np.percentile(abs(weighted_means[features_sorted].values), 75)
         barwidth = 0.65
@@ -248,22 +313,6 @@ def main(grail_dir=None, attention_dir=None, output_dir_name='pls_analysis',
             plt.subplots_adjust(bottom=0.2)
             plt.savefig(save_path, bbox_inches='tight')
 
-        # Plot histogram of correlation (r) values of PLS components with fold-model performance
-        save_path = os.path.join(ex_dir, 'pls_correlations_histogram.png') if save_figs else None
-        corr_values = np.abs(pls_performance_corrs['r'].values)
-
-        # Calculate statistics and add to title
-        r_mean = np.mean(corr_values)
-        r_sem = np.std(corr_values) / np.sqrt(len(corr_values))
-        percentage_of_significant_rs = (np.sum(pls_performance_corrs['p'] < 0.05) / len(pls_performance_corrs['p']))*100
-        title = f'r = {r_mean:.4f} ± {r_sem:.4f}; % significant = {percentage_of_significant_rs:.2f}%'
-        plot_histogram(distributions = {'r': corr_values}, 
-                       palette={'r': 'darkblue'}, 
-                       alpha=0.6, 
-                       save_path=save_path, 
-                       figsize=(5, 4),
-                       title=title)
-
 
 if __name__ == "__main__":
     """
@@ -276,6 +325,8 @@ if __name__ == "__main__":
     parser.add_argument('--attention_dir', type=str, default=None, help='Path to the attention weights results directory')
     parser.add_argument('-o', '--output_dir_name', type=str, default='pls_analysis', \
                         help='Name of the output directory, created inside the grail or attention weights directory')
+    parser.add_argument('--metric', type=str, default='rho', help='Metric to use for the PLS analysis (rho or r)')
+    parser.add_argument('--overwrite', action='store_true', help='Whether to overwrite the output directory if it already exists')
     args = parser.parse_args()
 
     # At least one of the directories must be provided
@@ -283,4 +334,4 @@ if __name__ == "__main__":
         raise ValueError("At least one of the directories must be provided.")
 
     # Run the main function
-    main(args.grail_dir, args.attention_dir, args.output_dir_name)
+    main(args.grail_dir, args.attention_dir, args.output_dir_name, args.metric, args.overwrite)
