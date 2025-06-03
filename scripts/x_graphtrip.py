@@ -129,13 +129,19 @@ if __name__ == "__main__":
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('-j', '--jobid', type=int, default=0, help='Job ID')
-    parser.add_argument('-ci', '--config_id', type=int, default=0, help='Config ID')
+    parser.add_argument('-ci', '--config_id', type=int, default=None, help='Config ID')
     args = parser.parse_args()
 
     # Make sure debugging outputs don't overwrite any existing outputs
     if args.debug:
         if args.output_dir == 'outputs/x_graphtrip/':
             raise ValueError("output_dir must be specified when using debug mode.")
+
+    # Add config subdirectory into output directory, if config_id is provided
+    if args.config_id is not None:
+        args.output_dir = os.path.join(args.output_dir, f'config_{args.config_id}')
+    else:
+        args.config_id = 0
 
     # Run the main function
     main(args.config_file, args.output_dir, args.verbose, args.debug, args.seed, args.jobid, args.config_id)
