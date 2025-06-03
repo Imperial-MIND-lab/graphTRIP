@@ -60,6 +60,11 @@ def run(exname: str, observer: str, config_updates: Dict = {}):
         r = ex.run(config_updates=config_updates)
         npt_run.stop()
 
+        # Save the config as a json file, if it doesn't exist
+        if not os.path.exists(os.path.join(output_dir, 'config.json')):
+            with open(os.path.join(output_dir, 'config.json'), 'w') as f:
+                json.dump(config_updates, f, indent=2, default=lambda x: x.__dict__ if hasattr(x, '__dict__') else str(x))
+
     elif observer == 'FileStorageObserver':
         # Set up FileStorage observer to save experiment outputs to disk
         ex.observers.append(FileStorageObserver(output_dir, 
