@@ -1,0 +1,102 @@
+{
+  "seed": [291],
+  "save_weights": [false],
+  "output_dir": ["outputs/x_graphtrip_screening/BDIonly"],
+  "t0_pred_file": [
+    "outputs/x_graphtrip/tlearner_E_BDIonly/job_2/prediction_results_P.csv",
+    "outputs/x_graphtrip/tlearner_E_BDIonly/job_8/prediction_results_P.csv"
+  ],
+  "t1_pred_file": [
+    "outputs/x_graphtrip/tlearner_P_BDIonly/job_6/prediction_results_E.csv",
+    "outputs/x_graphtrip/tlearner_P_BDIonly/job_8/prediction_results_E.csv"
+  ],
+  "lr": [0.001],
+  "num_epochs": [300],
+  "num_z_samples": [1, 3],
+  "alpha": [0.3, 0.4, 0.5],
+  "dataset": {
+    "study": ["psilodep2"],
+    "session": ["before"],
+    "atlas": ["schaefer100"],
+    "target": [null],
+    "prefilter": [null],
+    "batch_size": [9, 12, 18],
+    "num_folds": [6, 7],
+    "val_split": [0.0],
+    "graph_attrs": [["BDI_Before"]],
+    "context_attrs": [[]],
+    "node_attrs": [["5-HT1A_Believeau-3", "5-HT2A_Believeau-3", "5-HTT_Believeau-3"]],
+    "edge_attrs": [["functional_connectivity"]],
+    "edge_tfm_type": ["LowerAbsThresholdAdjacency"],
+    "edge_tfm_params": {
+      "edge_info": ["functional_connectivity"],
+      "threshold": [0.5]
+    },
+    "add_3Dcoords": [true],
+    "drug_condition": [null],
+    "self_loop_fill_value": [1],
+    "standardise_x": [false]
+  },
+  "mlp_model": {
+    "model_type": ["RegressionMLP"],
+    "params": {
+      "dropout": [0.25],
+      "hidden_dim": [64],
+      "layernorm": [false],
+      "mse_reduction": ["sum"],
+      "num_layers": [4],
+      "output_dim": [1],
+      "reg_strength": [0.01]
+    }
+  },
+  "vgae_model": {
+    "model_type": ["NodeLevelVGAE"],
+    "params": {
+      "dropout": [0.25],
+      "latent_dim": [64],
+      "node_emb_dim": [64],
+      "reg_strength": [0.01]
+    },
+    "node_emb_model_cfg": {
+      "model_type": ["NodeEmbeddingGATv2Conv_withSkip"],
+      "params": {
+        "hidden_dim": [32],
+        "layernorm": [true],
+        "num_heads": [2],
+        "num_layers": [6]
+      }
+    },
+    "encoder_cfg": {
+      "model_type": ["DenseOneLayerEncoder"]
+    },
+    "edge_decoder_cfg": {
+      "model_type": ["MLPEdgeDecoder"],
+      "params": {
+        "act": ["tanh"],
+        "hidden_dim": [32],
+        "num_layers": [3]
+      }
+    },
+    "edge_idx_decoder_cfg": {
+      "model_type": ["MLPEdgeDecoder"],
+      "params": {
+        "act": ["sigmoid"],
+        "hidden_dim": [32],
+        "num_layers": [3]
+      }
+    },
+    "node_decoder_cfg": {
+      "model_type": ["MLPNodeDecoder"],
+      "params": {
+        "hidden_dim": [32],
+        "num_layers": [3]
+      }
+    },
+    "pooling_cfg": {
+      "model_type": ["GlobalAttentionPooling"],
+      "params": {
+        "reduce": ["mean"]
+      }
+    }
+  }
+}
