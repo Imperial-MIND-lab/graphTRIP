@@ -1,6 +1,6 @@
 import seaborn as sns
 import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import LinearSegmentedColormap, ListedColormap
 import matplotlib.colors as mcolors
 
 # import matplotlib
@@ -2382,6 +2382,53 @@ def plot_heatmap(mat, features=None, vrange=None, cmap=COOLWARM, figsize=(15, 10
     
     if save_path:
         plt.savefig(save_path)
+
+def plot_categorical_matrix(df, palette, figsize=None, save_path=None):
+    """Plot a categorical matrix with custom colors.
+    
+    Args:
+        df (pd.DataFrame): DataFrame containing categorical values
+        palette (dict): Mapping of categories to colors
+        figsize (tuple, optional): Figure size (width, height). If None, defaults to (num_cols*0.5, num_rows*0.5)
+        save_path (str, optional): Path to save the figure. If None, figure is displayed
+    """
+    matrix_data = df.copy()
+    feature_cols = df.columns
+    
+    # Set default figsize based on matrix dimensions if not provided
+    if figsize is None:
+        figsize = (matrix_data.shape[1]*0.2, matrix_data.shape[0]*0.2)
+        
+    # Create figure
+    plt.figure(figsize=figsize)
+    
+    # Create color matrix as numeric array
+    color_matrix = np.zeros(matrix_data.shape)
+    color_map = {cat: i for i, cat in enumerate(palette.keys())}
+    for i in range(matrix_data.shape[0]):
+        for j in range(matrix_data.shape[1]):
+            color_matrix[i,j] = color_map[matrix_data.iloc[i,j]]
+    
+    # Create custom colormap
+    cmap = ListedColormap(list(palette.values()))
+    
+    # Plot matrix
+    plt.imshow(color_matrix, aspect='auto', cmap=cmap)
+    
+    # Customize plot
+    plt.xticks(range(len(feature_cols)), feature_cols, rotation=90)
+    plt.yticks(range(len(matrix_data)), range(len(matrix_data)))
+    
+    # Add legend
+    legend_elements = [plt.Rectangle((0,0),1,1, facecolor=color, label=label) 
+                      for label, color in palette.items()]
+    plt.legend(handles=legend_elements, bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.subplots_adjust(bottom=0.2)
+        
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight')
+    else:
+        plt.show()
 
 # VGAE plotting -----------------------------------------------------------------
 
