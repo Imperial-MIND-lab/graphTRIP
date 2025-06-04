@@ -225,11 +225,13 @@ def main(grail_dir:str=None,                     # Path to the GRAIL results dir
             # Get features that are significantly associated with E or P as per chi2 test
             robust_eso_features = []
             robust_psilo_features = []
-            for feature in all_association.columns:
+            for feature in all_features:
                 num_p = (all_association[feature] == 'P').sum()
                 num_e = (all_association[feature] == 'E').sum()
                 num_none = (all_association[feature] == 'none').sum()
                 counts = [num_p, num_e, num_none]
+                if sum(counts) == 0:
+                    raise ValueError(f"No association found for feature {feature}")
                 expected = [sum(counts)/3] * 3
                 _, p = chisquare(counts, f_exp=expected)
 
