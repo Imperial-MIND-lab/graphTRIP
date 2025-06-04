@@ -16,7 +16,7 @@
     "batch_size": [18],
     "num_folds": [7],
     "val_split": [0.0],
-    "graph_attrs": [["QIDS_Before", "BDI_Before", "Stop_SSRI"]],
+    "graph_attrs": [["BDI_Before", "Stop_SSRI"]],
     "context_attrs": [[]],
     "node_attrs": [["5-HT1A_Believeau-3", "5-HT2A_Believeau-3", "5-HTT_Believeau-3"]],
     "edge_attrs": [["functional_connectivity"]],
