@@ -123,7 +123,9 @@ if __name__ == "__main__":
     """
     # Parse command line arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('-c', '--config_file', type=str, default='experiments/configs/x_graphtrip.json', help='Path to the config file')
+    parser.add_argument('-c', '--config_file', type=str, 
+                        default='experiments/configs/x_graphtrip.json', 
+                        help='Path to the config file with X-graphTRIP model config')
     parser.add_argument('-o', '--output_dir', type=str, default='outputs/x_graphtrip/', help='Path to the output directory')
     parser.add_argument('-s', '--seed', type=int, default=291, help='Random seed')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
@@ -131,11 +133,6 @@ if __name__ == "__main__":
     parser.add_argument('-j', '--jobid', type=int, default=0, help='Job ID')
     parser.add_argument('-ci', '--config_id', type=int, default=None, help='Config ID')
     args = parser.parse_args()
-
-    # Make sure debugging outputs don't overwrite any existing outputs
-    if args.debug:
-        if args.output_dir == 'outputs/x_graphtrip/':
-            raise ValueError("output_dir must be specified when using debug mode.")
 
     # Add config subdirectory into output directory, if config_id is provided
     if args.config_id is not None:

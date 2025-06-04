@@ -30,19 +30,18 @@ from utils.configs import load_configs_from_json, fetch_job_config
 from experiments.run_experiment import run
 
 
-def main(config_dir, output_dir, verbose, debug, seed, jobid=-1):
+def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
     # Add project root to paths
-    config_dir = add_project_root(config_dir)
+    config_file = add_project_root(config_file)
     output_dir = add_project_root(output_dir)
 
     # Make sure the config files exist
-    config_file = 'graphtrip.json'
-    if not os.path.exists(os.path.join(config_dir, config_file)):
-        raise FileNotFoundError(f"{config_file} not found in {config_dir}")
+    if not os.path.exists(config_file):
+        raise FileNotFoundError(f"{config_file} not found")
     
     # Load the config
-    config = load_configs_from_json(os.path.join(config_dir, config_file))
-    config = fetch_job_config(config, 0)
+    config = load_configs_from_json(config_file)
+    config = fetch_job_config(config, config_id)
         
     # Experiment settings
     observer = 'FileStorageObserver'
@@ -154,22 +153,26 @@ def main(config_dir, output_dir, verbose, debug, seed, jobid=-1):
 if __name__ == "__main__":
     """
     How to run:
-    python benchmarks.py -c experiments/configs/ -o outputs/ -s 291 -v -dbg -j 0
+    python benchmarks.py -c experiments/configs/graphtrip.json -o outputs/benchmarks/ -s 291 -v -dbg -j 0 -ci 0
     """
     # Parse command line arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('-c', '--config_dir', type=str, default='experiments/configs/', help='Path to the config directory')
+    parser.add_argument('-c', '--config_file', type=str, 
+                        default='experiments/configs/graphtrip.json', 
+                        help='Path to the config file with graphTRIP model config')
     parser.add_argument('-o', '--output_dir', type=str, default='outputs/benchmarks/', help='Path to the output directory')
     parser.add_argument('-s', '--seed', type=int, default=291, help='Random seed')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('-j', '--jobid', type=int, default=-1, help='Job ID. If -1, runs all jobs sequentially.')
+    parser.add_argument('-ci', '--config_id', type=int, default=None, help='Config ID')
     args = parser.parse_args()
 
-    # Make sure debugging outputs don't overwrite any existing outputs
-    if args.debug:
-        if args.output_dir == 'outputs/benchmarks/':
-            raise ValueError("output_dir must be specified when using debug mode.")
+    # Add config subdirectory into output directory, if config_id is provided
+    if args.config_id is not None:
+        args.output_dir = os.path.join(args.output_dir, f'config_{args.config_id}')
+    else:
+        args.config_id = 0
 
     # Run the main function
-    main(args.config_dir, args.output_dir, args.verbose, args.debug, args.seed, args.jobid)
+    main(args.config_file, args.output_dir, args.verbose, args.debug, args.seed, args.jobid, args.config_id)

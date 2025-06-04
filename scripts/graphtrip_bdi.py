@@ -28,19 +28,18 @@ from utils.configs import load_configs_from_json, fetch_job_config
 from experiments.run_experiment import run
 
 
-def main(config_dir, output_dir, verbose, debug, seed):
+def main(config_file, output_dir, verbose, debug, seed, config_id=0):
     # Add project root to paths
-    config_dir = add_project_root(config_dir)
+    config_file = add_project_root(config_file)
     output_dir = add_project_root(output_dir)
 
     # Make sure the config files exist
-    config_file = 'graphtrip.json'
-    if not os.path.exists(os.path.join(config_dir, config_file)):
-        raise FileNotFoundError(f"{config_file} not found in {config_dir}")
+    if not os.path.exists(config_file):
+        raise FileNotFoundError(f"{config_file} not found")
     
     # Load the config
-    config = load_configs_from_json(os.path.join(config_dir, config_file))
-    config = fetch_job_config(config, 0)
+    config = load_configs_from_json(config_file)
+    config = fetch_job_config(config, config_id)
     ingredient_config = {
         'dataset': copy.deepcopy(config['dataset']),
         'vgae_model': copy.deepcopy(config['vgae_model']),
@@ -87,21 +86,25 @@ def main(config_dir, output_dir, verbose, debug, seed):
 if __name__ == "__main__":
     """
     How to run:
-    python graphtrip_bdi.py -c experiments/configs/ -o outputs/ -s 291 -v -dbg
+    python graphtrip_bdi.py -c experiments/configs/graphtrip.json -o outputs/graphtrip_bdi/ -s 291 -v -dbg -ci 0
     """
     # Parse command line arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('-c', '--config_dir', type=str, default='experiments/configs/', help='Path to the config directory')
+    parser.add_argument('-c', '--config_file', type=str, 
+                        default='experiments/configs/graphtrip.json', 
+                        help='Path to the config file with graphTRIP model config')
     parser.add_argument('-o', '--output_dir', type=str, default='outputs/graphtrip_bdi/', help='Path to the output directory')
     parser.add_argument('-s', '--seed', type=int, default=291, help='Random seed')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode')
+    parser.add_argument('-ci', '--config_id', type=int, default=None, help='Config ID')
     args = parser.parse_args()
 
-    # Make sure debugging outputs don't overwrite any existing outputs
-    if args.debug:
-        if args.output_dir == 'outputs/graphtrip_bdi/':
-            raise ValueError("output_dir must be specified when using debug mode.")
+    # Add config subdirectory into output directory, if config_id is provided
+    if args.config_id is not None:
+        args.output_dir = os.path.join(args.output_dir, f'config_{args.config_id}')
+    else:
+        args.config_id = 0
 
     # Run the main function
-    main(args.config_dir, args.output_dir, args.verbose, args.debug, args.seed)
+    main(args.config_file, args.output_dir, args.verbose, args.debug, args.seed, args.config_id)

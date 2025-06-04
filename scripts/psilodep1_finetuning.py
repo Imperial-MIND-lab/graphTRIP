@@ -28,24 +28,24 @@ from utils.configs import load_configs_from_json, fetch_job_config
 from experiments.run_experiment import run
 
 
-def main(config_dir, output_dir, verbose, debug, seed):
+def main(config_file1, config_file2, output_dir, 
+         verbose, debug, seed, config_id1=0, config_id2=0):
     # Add project root to paths
-    config_dir = add_project_root(config_dir)
+    config_file1 = add_project_root(config_file1)
+    config_file2 = add_project_root(config_file2)
     output_dir = add_project_root(output_dir)
 
     # Make sure the config files exist
-    psilodep2_config_file = 'graphtrip.json'
-    psilodep1_config_file = 'psilodep1_finetuning.json'
-    if not os.path.exists(os.path.join(config_dir, psilodep2_config_file)):
-        raise FileNotFoundError(f"{psilodep2_config_file} not found in {config_dir}")
-    if not os.path.exists(os.path.join(config_dir, psilodep1_config_file)):
-        raise FileNotFoundError(f"{psilodep1_config_file} not found in {config_dir}")
+    if not os.path.exists(config_file1):
+        raise FileNotFoundError(f"{config_file1} not found")
+    if not os.path.exists(config_file2):
+        raise FileNotFoundError(f"{config_file2} not found")
     
     # Load the config
-    psilodep2_config = load_configs_from_json(os.path.join(config_dir, psilodep2_config_file))
-    psilodep2_config = fetch_job_config(psilodep2_config, 0)
-    psilodep1_config = load_configs_from_json(os.path.join(config_dir, psilodep1_config_file))
-    psilodep1_config = fetch_job_config(psilodep1_config, 0)
+    psilodep2_config = load_configs_from_json(config_file1)
+    psilodep2_config = fetch_job_config(psilodep2_config, config_id1)
+    psilodep1_config = load_configs_from_json(config_file2)
+    psilodep1_config = fetch_job_config(psilodep1_config, config_id2)
         
     # Experiment settings
     observer = 'FileStorageObserver'
@@ -90,21 +90,38 @@ def main(config_dir, output_dir, verbose, debug, seed):
 if __name__ == "__main__":
     """
     How to run:
-    python psilodep1_finetuning.py -c experiments/configs/ -o outputs/ -s 291 -v -dbg
+    python psilodep1_finetuning.py -c1 experiments/configs/graphtrip.json -c2 experiments/configs/psilodep1_finetuning.json -o outputs/ -s 291 -v -dbg -ci1 0 -ci2 0
     """
     # Parse command line arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('-c', '--config_dir', type=str, default='experiments/configs/', help='Path to the config directory')
+    parser.add_argument('-c1', '--config_file1', type=str, 
+                        default='experiments/configs/graphtrip.json', 
+                        help='Path to the config file with graphTRIP model config')
+    parser.add_argument('-c2', '--config_file2', type=str, 
+                        default='experiments/configs/psilodep1_finetuning.json', 
+                        help='Path to the config file with Psilodep1 finetuning config')
     parser.add_argument('-o', '--output_dir', type=str, default='outputs/psilodep1/', help='Path to the output directory')
     parser.add_argument('-s', '--seed', type=int, default=291, help='Random seed')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode')
+    parser.add_argument('-ci1', '--config_id1', type=int, default=None, help='Config ID')
+    parser.add_argument('-ci2', '--config_id2', type=int, default=None, help='Config ID')
     args = parser.parse_args()
 
-    # Make sure debugging outputs don't overwrite any existing outputs
-    if args.debug:
-        if args.output_dir == 'outputs/psilodep1/':
-            raise ValueError("output_dir must be specified when using debug mode.")
+    # Add config subdirectory into output directory, if config_id is provided
+    if args.config_id1 is not None:
+        if args.config_id2 is not None:
+            args.output_dir = os.path.join(args.output_dir, f'config1_{args.config_id1}', f'config2_{args.config_id2}')
+        else:
+            args.config_id2 = 0
+            args.output_dir = os.path.join(args.output_dir, f'config1_{args.config_id1}')
+    elif args.config_id2 is not None:
+        args.config_id1 = 0
+        args.output_dir = os.path.join(args.output_dir, f'config2_{args.config_id2}')
+    else:
+        args.config_id1 = 0
+        args.config_id2 = 0
 
     # Run the main function
-    main(args.config_dir, args.output_dir, args.verbose, args.debug, args.seed)
+    main(args.config_file1, args.config_file2, args.output_dir, 
+         args.verbose, args.debug, args.seed, args.config_id1, args.config_id2)

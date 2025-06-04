@@ -6,8 +6,8 @@ Dependencies:
 - experiments/configs/tlearner_psilocybin.json
 
 Outputs:
-- outputs/x_graphtrip/tlearner_escitalopram/
-- outputs/x_graphtrip/tlearner_psilocybin/
+- outputs/t_learners/tlearner_escitalopram/
+- outputs/t_learners/tlearner_psilocybin/
 
 Author: Hanna M. Tolle
 Date: 2025-05-31
@@ -27,76 +27,61 @@ from utils.configs import load_configs_from_json, fetch_job_config
 from experiments.run_experiment import run
 
 
-def main(config_dir, output_dir, verbose, debug, seed):
+def main(config_file, output_dir, verbose, debug, seed, config_id=0):
     # Add project root to paths
-    config_dir = add_project_root(config_dir)
+    config_file = add_project_root(config_file)
     output_dir = add_project_root(output_dir)
 
     # Make sure the config files exist
-    config_file_E = 'tlearner_escitalopram.json'
-    config_file_P = 'tlearner_psilocybin.json'
-    if not os.path.exists(os.path.join(config_dir, config_file_E)):
-        raise FileNotFoundError(f"{config_file_E} not found in {config_dir}")
-    if not os.path.exists(os.path.join(config_dir, config_file_P)):
-        raise FileNotFoundError(f"{config_file_P} not found in {config_dir}")
+    if not os.path.exists(config_file):
+        raise FileNotFoundError(f"{config_file} not found")
     
     # Load the config
-    config_E = load_configs_from_json(os.path.join(config_dir, config_file_E))
-    config_P = load_configs_from_json(os.path.join(config_dir, config_file_P))
-    config_E = fetch_job_config(config_E, 0)
-    config_P = fetch_job_config(config_P, 0)
+    config = load_configs_from_json(config_file)
+    config = fetch_job_config(config, config_id)
 
     # Experiment settings
     observer = 'FileStorageObserver'
-    config_E['verbose'] = verbose
-    config_E['seed'] = seed
-    config_E['save_weights'] = True
+    exname = 'train_tlearner'
     if debug:
-        config_E['num_epochs'] = 2
-        config_P['num_epochs'] = 2
+        config['num_epochs'] = 2
 
-    # Train escitalopram T-learner ----------------------------------------------
-    exname = 'train_tlearner'
-    weights_dir = os.path.join(output_dir, 'tlearner_escitalopram')
-
-    # Run the experiment if it doesn't exist
-    if not os.path.exists(weights_dir):
-        config_updates = copy.deepcopy(config_E)
-        config_updates['output_dir'] = weights_dir
+    # Train T-learner ----------------------------------------------------------
+    if not os.path.exists(output_dir):
+        config_updates = copy.deepcopy(config)
+        config_updates['seed'] = seed
+        config_updates['verbose'] = verbose
+        config_updates['output_dir'] = output_dir
         run(exname, observer, config_updates)
     else:
-        print(f"T-learner experiment already exists in {weights_dir}.")
-
-    # Train psilocybin T-learner ----------------------------------------------
-    exname = 'train_tlearner'
-    weights_dir = os.path.join(output_dir, 'tlearner_psilocybin')
-
-    # Run the experiment if it doesn't exist
-    if not os.path.exists(weights_dir):
-        config_updates = copy.deepcopy(config_P)
-        config_updates['output_dir'] = weights_dir
-        run(exname, observer, config_updates)
-    else:
-        print(f"T-learner experiment already exists in {weights_dir}.")
+        print(f"T-learner experiment already exists in {output_dir}.")
 
 if __name__ == "__main__":
     """
     How to run:
-    python tlearners.py -c experiments/configs/ -o outputs/x_graphtrip/ -s 291 -v -dbg
+    python tlearners.py -c experiments/configs/tlearner_escitalopram.json -o outputs/t_learners/ -s 291 -v -dbg -ci 0
+    python tlearners.py -c experiments/configs/tlearner_psilocybin.json -o outputs/t_learners/ -s 291 -v -dbg -ci 0
     """
     # Parse command line arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('-c', '--config_dir', type=str, default='experiments/configs/', help='Path to the config directory')
-    parser.add_argument('-o', '--output_dir', type=str, default='outputs/x_graphtrip/', help='Path to the output directory')
+    parser.add_argument('-c', '--config_file', type=str, 
+                        default='experiments/configs/tlearner_escitalopram.json', 
+                        help='Path to the config file with T-learner config')
+    parser.add_argument('-o', '--output_dir', type=str, default='outputs/t_learners/', help='Path to the output directory')
     parser.add_argument('-s', '--seed', type=int, default=291, help='Random seed')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode')
+    parser.add_argument('-ci', '--config_id', type=int, default=None, help='Config ID')
     args = parser.parse_args()
+        
+    # Add the name of the config file to the output directory
+    args.output_dir = os.path.join(args.output_dir, os.path.basename(args.config_file).split('.')[0])
 
-    # Make sure debugging outputs don't overwrite any existing outputs
-    if args.debug:
-        if args.output_dir == 'outputs/x_graphtrip/':
-            raise ValueError("output_dir must be specified when using debug mode.")
+    # Add config subdirectory into output directory, if config_id is provided
+    if args.config_id is not None:
+        args.output_dir = os.path.join(args.output_dir, f'config_{args.config_id}')
+    else:
+        args.config_id = 0
 
     # Run the main function
-    main(args.config_dir, args.output_dir, args.verbose, args.debug, args.seed)
+    main(args.config_file, args.output_dir, args.verbose, args.debug, args.seed, args.config_id)
