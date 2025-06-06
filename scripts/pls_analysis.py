@@ -155,104 +155,48 @@ def main(grail_dir:str=None,                     # Path to the GRAIL results dir
             filtering_criteria = {'pls_weight_stats': {'fdr_p_value': 0.05},     # significant influence on generalisation
                                   'weighted_means_stats': {'fdr_p_value': 0.05}, # necessary for generalisation
                                   'signed_features': True}                       # positive, not negative, influence on generalisation
-            
-            # Define output arrays
-            all_influence = []   # PLS cohen's ds for each feature and threshold
-            all_necessity = []   # Weighted-mean cohen's ds for each feature and threshold
-            all_association = [] # 'E', 'P', or 'none' for escitalopram, psilocybin, or no association
 
             # Load subject GRAIL dfs and fold model performance
             inclusion_criteria = {'metric': metric, 
                                   'criterion': 'greater_than', 
-                                  'threshold': 0.0}
+                                  'threshold': 0.3}
             all_subject_dfs, fold_performances = load_fold_data(job_dirs, filenames, inclusion_criteria)
             performance = fold_performances[metric].values
 
-            # Perform analysis multiple times including the top n models
-            max_num_models = len(performance)
-            min_num_models = 25
-            step_size = 10
-            for top_n in range(min_num_models, max_num_models+1, step_size):            
-                # Get the data for the top n models
-                top_n_indices = np.argsort(performance)[-top_n:]
-                top_n_performances = performance[top_n_indices]
-                top_n_subject_dfs = {sub: all_subject_dfs[sub].iloc[top_n_indices] for sub in all_subject_dfs}
+            # Perform PLS analysis on all models meeting the inclusion criteria
+            _, _, pls_weight_stats = pls_robustness_analysis(all_subject_dfs, performance)
 
-                # Run PLS analysis
-                _, _, pls_weight_stats = pls_robustness_analysis(top_n_subject_dfs, top_n_performances)
-
-                # Compute performance-weighted means
-                weighted_means, weighted_means_stats = \
-                    compute_performance_weighted_means(top_n_subject_dfs, top_n_performances)
+            # Compute performance-weighted means
+            weighted_means, weighted_means_stats = \
+                compute_performance_weighted_means(all_subject_dfs, performance)
                 
-                # Filter candidate biomarkers
-                filtered_features = pls_feature_filtering(pls_weight_stats, 
-                                                          weighted_means_stats, 
-                                                          filtering_criteria)
+            # Filter candidate biomarkers
+            filtered_features = pls_feature_filtering(pls_weight_stats, 
+                                                        weighted_means_stats, 
+                                                        filtering_criteria)
 
-                # Get the associations for each feature
-                all_features = list(weighted_means.columns)
-                eso_features = [f for f in filtered_features if weighted_means[f].mean() > 0]
-                psilo_features = [f for f in filtered_features if weighted_means[f].mean() < 0]
-
-                # Store results
-                influence = {
-                    'num_models': top_n,
-                    **{f: pls_weight_stats.loc[f, 'cohen_d'] for f in all_features}
-                }
-                necessity = {
-                    'num_models': top_n,
-                    **{f: weighted_means_stats.loc[f, 'cohen_d'] for f in all_features}
-                }
-                association = {
-                    'num_models': top_n,
-                    **{f: 'E' if f in eso_features else 'P' if f in psilo_features else 'none' for f in all_features}
-                }
-
-                # Append results to output arrays
-                all_influence.append(influence)
-                all_necessity.append(necessity)
-                all_association.append(association)
-
-            # Save results
-            all_influence = pd.DataFrame(all_influence)
-            all_necessity = pd.DataFrame(all_necessity)
-            all_association = pd.DataFrame(all_association)
-            all_influence.to_csv(os.path.join(ex_dir, 'pls_influence.csv'), index=False)
-            all_necessity.to_csv(os.path.join(ex_dir, 'weighted_mean_necessity.csv'), index=False)
-            all_association.to_csv(os.path.join(ex_dir, 'association.csv'), index=False)
-
-            # Get features that are significantly associated with E or P as per chi2 test
-            robust_eso_features = []
-            robust_psilo_features = []
-            for feature in all_features:
-                num_p = (all_association[feature] == 'P').sum()
-                num_e = (all_association[feature] == 'E').sum()
-                num_none = (all_association[feature] == 'none').sum()
-                counts = [num_p, num_e, num_none]
-                if sum(counts) == 0:
-                    raise ValueError(f"No association found for feature {feature}")
-                expected = [sum(counts)/3] * 3
-                _, p = chisquare(counts, f_exp=expected)
-
-                # If significant, find majority class and add to robust list
-                if p < 0.05:
-                    majority_class = np.argmax(counts) # 0 = P, 1 = E, 2 = none
-                    if majority_class == 0 and num_e == 0: # strictly psilocybin-associated
-                        robust_psilo_features.append(feature)
-                    elif majority_class == 1 and num_p == 0: # strictly escitalopram-associated
-                        robust_eso_features.append(feature)
+            # Get the associations for each feature
+            all_features = list(weighted_means.columns)
+            eso_features = [f for f in filtered_features if weighted_means[f].mean() > 0]
+            psilo_features = [f for f in filtered_features if weighted_means[f].mean() < 0]
 
             # Sort features and save as json
-            robust_eso_features = sort_features(robust_eso_features)
-            robust_psilo_features = sort_features(robust_psilo_features)
-            robust_features = {'escitalopram': robust_eso_features, 
-                               'psilocybin': robust_psilo_features}
+            all_features = sort_features(all_features)
+            eso_features = sort_features(eso_features)
+            psilo_features = sort_features(psilo_features)
+            robust_features = {'all': all_features,
+                               'escitalopram': eso_features, 
+                               'psilocybin': psilo_features}
             with open(os.path.join(ex_dir, 'robust_features.json'), 'w') as f:
                 json.dump(robust_features, f, indent=4)
 
+            # Save pls weight stats and weighted means stats
+            pls_weight_stats.to_csv(os.path.join(ex_dir, 'pls_weight_stats.csv'), index=True)
+            weighted_means_stats.to_csv(os.path.join(ex_dir, 'weighted_means_stats.csv'), index=True)
+
             # --------------------------------------------------------------------------------------------------
             # Also compute and save the weighted means for significant models ----------------------------------
+            # --------------------------------------------------------------------------------------------------
             inclusion_criteria = {'metric': 'p' if metric == 'r' else 'rho_p', 
                                   'criterion': 'less_than', 
                                   'threshold': 0.05}
@@ -273,12 +217,12 @@ def main(grail_dir:str=None,                     # Path to the GRAIL results dir
 
             # Compute performance-weighted means
             cutoff = 0.0 # make sure to only include significantly positive performance values
-            weighted_means, weighted_means_stats = \
+            weighted_means_significant, weighted_means_stats_significant = \
                 compute_performance_weighted_means(all_subject_dfs, performance, performance_cutoff=cutoff)
             
             # Save the results
-            weighted_means.to_csv(os.path.join(ex_dir, 'weighted_means_significant.csv'), index=False)
-            weighted_means_stats.to_csv(os.path.join(ex_dir, 'weighted_means_stats_significant.csv'), index=True)
+            weighted_means_significant.to_csv(os.path.join(ex_dir, 'weighted_means_significant.csv'), index=False)
+            weighted_means_stats_significant.to_csv(os.path.join(ex_dir, 'weighted_means_stats_significant.csv'), index=True)
 
             print(f"PLS analysis on GRAIL results completed. Output saved in {ex_dir}.")
         else:
@@ -286,29 +230,29 @@ def main(grail_dir:str=None,                     # Path to the GRAIL results dir
             print(f"PLS analysis on GRAIL results already exists in {ex_dir}.")
 
             # Load the results for plotting
-            weighted_means = pd.read_csv(os.path.join(ex_dir, 'weighted_means_significant.csv'))
+            weighted_means_significant = pd.read_csv(os.path.join(ex_dir, 'weighted_means_significant.csv'))
             robust_features = json.load(open(os.path.join(ex_dir, 'robust_features.json')))
-            robust_eso_features = robust_features['escitalopram']
-            robust_psilo_features = robust_features['psilocybin']
+            eso_features = robust_features['escitalopram']
+            psilo_features = robust_features['psilocybin']
 
         # Plot results ------------------------------------------------------------
-        features_sorted = robust_psilo_features + robust_eso_features
+        features_sorted = psilo_features + eso_features
         psilo_escit_cmap = custom_diverging_cmap(PSILO, ESCIT, n_colors=256)
-        vmax = np.percentile(abs(weighted_means[features_sorted].values), 75)
+        vmax = np.percentile(abs(weighted_means_significant[features_sorted].values), 75)
         barwidth = 0.65
         save_path = os.path.join(ex_dir, 'pls_grail_features.png')
-        fig_size = (min(13, len(features_sorted)*barwidth), 5)
-        fig, ax = plot_diverging_bars(weighted_means[features_sorted], 
-                            yline=0, 
-                            cmap=psilo_escit_cmap, 
-                            vmax=vmax, 
-                            alpha=0.6,
-                            add_scatter=True, 
-                            scatter_alpha=0.5, 
-                            scatter_size=20,
-                            figsize=fig_size,
-                            save_path=None, # Don't save yet
-                            add_colorbar=False)
+        fig_size = (min(13, len(features_sorted)*barwidth), 5) # 13 is the max number of features to plot
+        fig, ax = plot_diverging_bars(weighted_means_significant[features_sorted], 
+                                      yline=0, 
+                                      cmap=psilo_escit_cmap, 
+                                      vmax=vmax, 
+                                      alpha=0.6,
+                                      add_scatter=True, 
+                                      scatter_alpha=0.5, 
+                                      scatter_size=20,
+                                      figsize=fig_size,
+                                      save_path=None, # Don't save yet
+                                      add_colorbar=False)
         
         # Add padding below plot for x-tick labels
         if save_figs:
