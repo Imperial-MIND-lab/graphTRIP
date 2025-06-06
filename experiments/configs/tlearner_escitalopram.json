@@ -1,7 +1,7 @@
 {
   "seed": [291],
   "verbose": [false],
-  "save_weights": [false],
+  "save_weights": [true],
   "lr": [0.001],
   "num_epochs": [300],
   "num_z_samples": [3],
