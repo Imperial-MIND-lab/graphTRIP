@@ -26,7 +26,6 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy.stats import chisquare
 
 from utils.files import add_project_root
 from utils.helpers import sort_features

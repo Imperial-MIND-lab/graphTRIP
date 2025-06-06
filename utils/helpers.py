@@ -301,6 +301,9 @@ def get_groups(features):
         [f for f in features if f in last_features],
         [f for f in features if f in node_feature_corrs]
     ] 
+    # Sort each group alphabetically
+    for group in groups:
+        group.sort()
     return groups
 
 def sort_features(features):
