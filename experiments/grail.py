@@ -32,7 +32,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from utils.files import add_project_root
-from utils.helpers import get_logger, check_weights_exist, fix_random_seed, triu_vector2mat_torch
+from utils.helpers import get_logger, check_weights_exist, fix_random_seed, triu_vector2mat_torch, sort_features
 from utils.configs import load_ingredient_configs, match_ingredient_configs
 from utils.annotations import load_receptor_maps
 from utils.statsalg import get_fold_performance, min_significant_r
@@ -291,9 +291,10 @@ def run(_config):
     data = load_data()
 
     # Compute fold-wise performance of each model --------------------------
-    fold_performance = get_fold_performance(weights_dir)
-    fold_performance.to_csv(os.path.join(output_dir, 'fold_performance.csv'), index=False)
-    ex.add_artifact(os.path.join(output_dir, 'fold_performance.csv'))
+    if len(vgaes) > 1:
+        fold_performance = get_fold_performance(weights_dir)
+        fold_performance.to_csv(os.path.join(output_dir, 'fold_performance.csv'), index=False)
+        ex.add_artifact(os.path.join(output_dir, 'fold_performance.csv'))
 
     # Sampling for each subject --------------------------------------------
     start_time = time()
@@ -380,42 +381,44 @@ def run(_config):
         all_fold_alignments.append(mean_alignments)
 
         # Plot mean alignments for this fold
+        sorted_features = sort_features(list(mean_alignments_df.columns))
         save_path = os.path.join(output_dir, f'k{k}_mean_alignments.png')
         vmax = np.percentile(np.abs(mean_alignments_df.values), 95)
-        plot_heatmap(mean_alignments_df.values, 
-                     features=mean_alignments_df.columns, 
+        plot_heatmap(mean_alignments_df[sorted_features].values, 
+                     features=sorted_features, 
                      vrange=(-vmax, vmax), 
                      figsize=(10, 4), 
                      cmap=COOLWARM,
                      save_path=save_path)
 
     # Compute correlations between folds for each subject
-    corr_matrices = []
-    for sub in range(num_subs):
-        # Compute correlation matrix between folds for this subject
-        sub_alignments = np.array([fold_alignments[sub] for fold_alignments in all_fold_alignments])
-        corr_matrix = np.corrcoef(sub_alignments)
-        corr_matrices.append(corr_matrix)
+    if len(vgaes) > 1:
+        corr_matrices = []
+        for sub in range(num_subs):
+            # Compute correlation matrix between folds for this subject
+            sub_alignments = np.array([fold_alignments[sub] for fold_alignments in all_fold_alignments])
+            corr_matrix = np.corrcoef(sub_alignments)
+            corr_matrices.append(corr_matrix)
 
-    # Compute mean correlations between folds
-    mean_correlations = np.mean(corr_matrices, axis=0)
-    np.savetxt(os.path.join(output_dir, 'mean_fold_correlations.csv'), mean_correlations, delimiter=',')
-    ex.add_artifact(os.path.join(output_dir, 'mean_fold_correlations.csv'))
+        # Compute mean correlations between folds
+        mean_correlations = np.mean(corr_matrices, axis=0)
+        np.savetxt(os.path.join(output_dir, 'mean_fold_correlations.csv'), mean_correlations, delimiter=',')
+        ex.add_artifact(os.path.join(output_dir, 'mean_fold_correlations.csv'))
 
-    # Check how many correlations are significant
-    num_features = mean_alignments_df.shape[1]
-    r_critical = min_significant_r(num_features)
+        # Check how many correlations are significant
+        num_features = mean_alignments_df.shape[1]
+        r_critical = min_significant_r(num_features)
 
-    fig, ax = plt.subplots(figsize=(6, 5))
-    sns.heatmap(mean_correlations, ax=ax, cmap=COOLWARM, vmin=-1, vmax=1, 
-                square=True, annot=True, cbar=True)
-    num_unique_pairs = num_folds * (num_folds - 1) / 2
-    num_significant_pairs = np.sum(np.triu(mean_correlations, k=1) > r_critical)
-    fraction_significant_pairs = (num_significant_pairs / num_unique_pairs)*100
-    ax.set_title(f'Significant corrs (r > {r_critical:.2f}): {fraction_significant_pairs:.2f}%');
-    save_path = os.path.join(output_dir, 'mean_fold_correlations.png')
-    plt.savefig(save_path)
-    ex.add_artifact(save_path)
+        fig, ax = plt.subplots(figsize=(6, 5))
+        sns.heatmap(mean_correlations, ax=ax, cmap=COOLWARM, vmin=-1, vmax=1, 
+                    square=True, annot=True, cbar=True)
+        num_unique_pairs = num_folds * (num_folds - 1) / 2
+        num_significant_pairs = np.sum(np.triu(mean_correlations, k=1) > r_critical)
+        fraction_significant_pairs = (num_significant_pairs / num_unique_pairs)*100
+        ax.set_title(f'Significant corrs (r > {r_critical:.2f}): {fraction_significant_pairs:.2f}%');
+        save_path = os.path.join(output_dir, 'mean_fold_correlations.png')
+        plt.savefig(save_path)
+        ex.add_artifact(save_path)
 
     # Log the runtime
     run_time = (time()-start_time)/60
