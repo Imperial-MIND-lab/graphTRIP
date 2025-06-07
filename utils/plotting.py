@@ -963,7 +963,7 @@ def plot_legend(color_dict, orientation='horizontal', size=(6, 1), label=None, s
 
 # Dominance analysis plots ------------------------------------------------------
 
-def permutation_importance_bar_chart(importance_scores, 
+def permutation_importance_bar_chart(df, ylabel='Importance Scores',
                                      y_column='mean', yerr_column='std', feature_column='feature',
                                      save_path=None, color=PSILO, alpha=0.5):
     """
@@ -984,21 +984,21 @@ def permutation_importance_bar_chart(importance_scores,
         Alpha (transparency) value for the bars
     """
     # Create figure
-    num_features = len(importance_scores)
+    num_features = len(df)
     fig, ax = plt.subplots(1, 1, figsize=(num_features*0.5, 6))
     
     # Create bar chart
     bars = ax.bar(range(num_features), 
-                  importance_scores[y_column], 
-                  yerr=importance_scores[yerr_column], 
+                  df[y_column], 
+                  yerr=df[yerr_column], 
                   align='center',
                   color=color,
                   alpha=alpha)
     
     # Customize axes
-    ax.set_ylabel('Importance Scores')
+    ax.set_ylabel(ylabel)
     ax.set_xticks(range(num_features))
-    ax.set_xticklabels(importance_scores[feature_column], rotation=90)
+    ax.set_xticklabels(df[feature_column], rotation=90)
     
     # Add horizontal grid lines
     ax.yaxis.grid(True, linestyle='--', color='gray', alpha=0.5)
