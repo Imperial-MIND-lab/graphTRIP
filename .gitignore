@@ -4,9 +4,11 @@ __pycache__/
 
 # Outputs and weights
 outputs/
+notebooks/figures/
 
 # Unused code
 junk/
+notebooks/sandbox.ipynb
 
 # VScode degugging configs
 .vscode/
