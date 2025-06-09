@@ -91,7 +91,8 @@ def patient_ids_to_sample_ids(patient_ids: List[str], study: str):
     elif study == 'psilodep1':
         prefilter = {'Exclusion': 0, 'missing_raw_before': 0}
     else:
-        raise ValueError(f'Prefilter not specified for study {study}.')
+        raise ValueError(f'Prefilter not specified for study {study}. \n'
+                         'Edit utils.annotations.patient_ids_to_sample_ids() to add your prefilter.')
     annotations = load_annotations(study, prefilter)
     all_patient_ids = annotations['Patient'].tolist()
     sample_ids = [all_patient_ids.index(patient_id) for patient_id in patient_ids]
@@ -142,7 +143,8 @@ def get_drug_label(drug: str, study: str = 'psilodep2') -> int:
         else:
             raise ValueError("Unknown drug.")
     else:
-        raise ValueError("Unknown study.")
+        raise ValueError("Unknown study. \n"
+                         "Edit utils.annotations.get_drug_label() to add your study.")
     
 def get_tr(study: str = 'psilodep2'):
     '''Returns the repetition time (TR) in seconds.'''
@@ -151,7 +153,8 @@ def get_tr(study: str = 'psilodep2'):
     elif study == 'psilodep1':
         return 2.0
     else:
-        raise ValueError("Unknown study.")
+        raise ValueError("Unknown study. \n"
+                         "Edit utils.annotations.get_tr() to add the TR for your study.")
     
 def get_categorical_annotations(study: str = 'psilodep2'):
     '''Returns a list of column names that should be converted to categorical type.'''
@@ -160,7 +163,8 @@ def get_categorical_annotations(study: str = 'psilodep2'):
     elif study == 'psilodep1':
         return ['Gender']
     else:
-        raise ValueError("Unknown study.")
+        raise ValueError("Unknown study. \n"
+                         "Edit utils.annotations.get_categorical_annotations() to add your study.")
     
 def get_cat2num_dict(category: str):
     '''Returns a dictionary with categorical values as keys and numerical values as keys.'''
@@ -169,7 +173,8 @@ def get_cat2num_dict(category: str):
     elif category == 'Gender':
         return {'M': 1, 'F': -1}
     else:
-        raise ValueError("Unknown category.")
+        raise ValueError("Unknown category. \n"
+                         "Edit utils.annotations.get_cat2num_dict() to add your category.")
     
 def load_receptor_maps(atlas: str, receptor_subset: List[str] = None):
     '''Loads receptor maps for the given atlas.'''
@@ -214,7 +219,8 @@ def load_rotated_rois(atlas, n_permutations):
         # Load rotated ROIs shape: (num_regions, num_rotations) 
         rotated_roi_indices = pd.read_csv(file, header=None).iloc[:, :n_permutations].values 
     else:
-        raise ValueError(f'No rotated ROIs available for atlas {atlas}.')
+        raise ValueError(f'No rotated ROIs available for atlas {atlas}. \n'
+                         'Edit utils.annotations.load_rotated_rois() to add your atlas.')
     return rotated_roi_indices
 
 def load_ut_axis(atlas: str):
@@ -224,5 +230,6 @@ def load_ut_axis(atlas: str):
     elif atlas == 'schaefer200':
         ut_axis = np.loadtxt(os.path.join(project_root(), 'data', 'raw', 'transmodal_axis', 'Schaefer200_SA_Axis.csv'))
     else:
-        raise ValueError(f'No UT axis available for atlas {atlas}.')
+        raise ValueError(f'No UT axis available for atlas {atlas}. \n'
+                         'Edit utils.annotations.load_ut_axis() to add your atlas.')
     return ut_axis

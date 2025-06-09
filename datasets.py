@@ -40,7 +40,8 @@ class Attrs:
         elif study=='psilodep1':
             self.graph += ['Gender', 'Age', 'HAMD_Before', 'QIDS_Before', 'LOTR_Before', 'BDI_Before', 'Condition', 'Stop_SSRI']
         else:
-            print(f'Clinical features for {study} unknown.')
+            print(f'Clinical features for {study} unknown. \n'
+                  'Edit datasets.Attrs.add_clinical_graph_attrs() to add your study.')
 
     def is_identical(self, attrs: Any) -> bool:
         '''Check if attrs matches the fields of self.'''
@@ -389,7 +390,8 @@ def get_num_nodes(atlas: str) -> int:
 
     available = ['schaefer100', 'schaefer200', 'aal']
     if atlas not in available:
-        raise ValueError("Invalid name. Valid options are: " + ", ".join(available))
+        raise ValueError("Invalid name. Valid options are: " + ", ".join(available) + "\n"
+                         "Edit datasets.get_num_nodes() to add the number of nodes for your atlas.")
 
     if atlas == 'schaefer100':
         return 100
@@ -407,7 +409,8 @@ def get_default_prefilter(study: str) -> Dict[str, Any]:
     elif study == 'psilodep1':
         return {'Exclusion': 0, 'missing_raw_before': 0}
     else:
-        raise ValueError(f'Prefilter not specified for study {study}.')
+        raise ValueError(f'Prefilter not specified for study {study}. \n'
+                         'Edit datasets.get_default_prefilter() to add your prefilter.')
     
 def get_default_target(study: str) -> str:
     '''Returns the default target for a given study.'''
@@ -416,7 +419,8 @@ def get_default_target(study: str) -> str:
     elif study == 'psilodep1':
         return 'QIDS_1week'
     else:
-        raise ValueError(f'Target not specified for study {study}.')
+        raise ValueError(f'Target not specified for study {study}. \n'
+                         'Edit datasets.get_default_target() to add your target.')
 
 # BrainGraphDataset class -----------------------------------------------------------
     
@@ -565,7 +569,7 @@ class BrainGraphDataset(InMemoryDataset):
             features = pd.read_csv(feature_file)
             return features
         else:
-            raise FileNotFoundError
+            raise FileNotFoundError(f'{feature_file} not found for subject {subject}.')
         
     def _get_edge_features(self, subject):
         feature_filepath = get_filepath(root=self.root, 
@@ -578,7 +582,7 @@ class BrainGraphDataset(InMemoryDataset):
             features = pd.read_csv(feature_file)
             return features
         else:
-            raise FileNotFoundError
+            raise FileNotFoundError(f'{feature_file} not found for subject {subject}.')
         
     def _get_transforms(self):
         # Create list with transforms
