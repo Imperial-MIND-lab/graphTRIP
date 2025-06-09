@@ -1,73 +1,160 @@
-# graph-based Treatment Response Interpretable Predictions (graphTRIP)
-This repository contains code for predicting clinical outcomes of anitdepressant treatment from neuroimaging data using graphTRIP.
+# graphTRIP: Graph-based Treatment Response Interpretable Predictions
+
+This repository contains the full codebase for reproducing results from our study *Accurate and Interpretable Prediction of Antidepressant Treatment Outcomes via Geometric Deep Learning*. It also includes some hopefully useful guidance for how to apply the graphTRIP pipeline to your own data.
 
 ## Installation
-Dependencies can be installed with conda using the `environment.yml` file.
-```conda env create -f environment.yml```
 
-This code connects to the Neptune.ai database to store outputs and configurations. Running the code as is requires setting up a Neptune account and API token.
-Alternatively, Neptune can be avoided by running all experiments with the FileStorageObserver instead.
+Clone the repository and install all dependencies via Conda:
 
-## Usage
-First, the neuroimaging data must be preprocessed. This can be done for the desired parcellations by running the preprocessing submodule.
-Preprocessing requires fMRI data and clinical data from each patient (see dependencies).
-```
-atlas_configs=('schaefer100')
-atlas=${atlas_configs[$PBS_ARRAY_INDEX-1]}
+```bash
+conda env create -f environment.yml
+conda activate graphtrip
 ```
 
-python -m preprocessing.preprocess psilodep2 before $atlas
+Experiments are optionally integrated with [Neptune.ai](https://neptune.ai/) for logging configurations and outputs. If you wish to use Neptune, set up an account and export your API token. Alternatively, you can bypass Neptune entirely using the `FileStorageObserver`.
 
-After preprocessing, the graphTRP pipeline can be run with the command:
+## Apply graphTRIP to Your Data
+
+The full pipeline consists of four main stages. Each step depends on outputs from the previous.
+
+#### Step 1: Construct a Dataset
+
+The main interface is the `BrainGraphDataset` class (`datasets.py`), uniquely defined by a combination of `study`, `session`, and `atlas`.
+
+```python
+from dataset import BrainGraphDataset
+
+dataset = BrainGraphDataset(
+    study='psilodep2',
+    session='before',
+    atlas='schaefer100'
+)
 ```
-python main.py ${PBS_JOBNAME} ${PBS_ARRAY_INDEX}
+
+This initializes a dataset object using graph files stored in:
+
+```
+data/raw/{study}/{session}/{atlas}/S{subject_id}/
+├── node.csv
+├── edge.csv
+├── bold.csv (optional)
 ```
 
-## Usage
-Replicating the entire project involves three steps, each producing the dependencides of the next step. 
+Each graph can also include graph-level attributes (e.g., clinical scores, treatment condition) via:
 
-#### Step 1: Preprocessing
-Th preprocessing submodule computes edge and node features (like FC and REACT maps) from the voxelwise fMRI data and saves a torch_geometric dataset object into project_root/data/processed. This dataset interfaces with our models. Note your fMRI data is assumed to be preprocessed (as in denoised, registered, etc) beforehand.
+```
+data/raw/{study}/annotations.csv
+```
 
-Dependencies:
-- The voxelwise fMRI data for each subject should be stored in `data_dir/f{study}/f{session}/f"S{subject_id}"/raw_filename`. Make sure to specify data_dir and raw_filename inside utils/files.py > raw_data_dir() and get_raw_filename(), respectively.
-- There should also be a file with the clinical outcome measures: data_dir/{study}/clinical_outcomes.csv
-- The clinical_outcomes.csv file is expected to have a column called "Patients" with the patient ids.
+Ensure this file contains a `Patient` column matching subject IDs, and that any additional graph attributes appear as columns. To define which attributes to load by default, modify the `Attrs.add_clinical_graph_attrs()` method.
 
-Steps:
-1. Download 5-HT PET data and compute REACT maps as described in preprocessing/react/react_readme.md. 
-   This will create a folder `data/raw/{study}/{session}/MNI_2mm`, which is required for the preprocessing submodule.
-2. Run the preprocessing submodule for each dataset:
-    ```
-    python -m preprocessing.preprocess study session atlas
-    ```
-   For example, we processed the pre-treatment (session=before) data for our primary dataset (study=psilodep2) and the validation dataset (study=psilodep1) for the three atlases: schaefer100, schaefer200, and AAL.
-   All of this was run with `job_scripts/preprocessing.sh`.
+To force reload a modified dataset, run:
 
-#### Step 2: Model training
-This submodule performs the model training and saves weights.
+```python
+dataset = BrainGraphDataset(
+    study='psilodep2',
+    session='before',
+    atlas='schaefer100',
+    force_reload=True
+)
+```
 
-Dependencies:
-- experiments/configs/graphTRIP.json     # Model configuration of the graphTRIP model
-- experiments/configs/atlas_bound.json   # Model configuration of the atlas-bound model
-- experiments/configs/hybrid.json        # Model configuration of the hybrid model
-- experiments/configs/control_mlp.json   # Model configuration of the control MLP model
+I recommend including all candidate node, edge and graph features upon first initialization. You can later train a model on a subset of features by specifying this in the configuration files.
 
-Steps:
-1. We trained the main models as follows.
-    ```
-    python -m training.train_models -c experiments/configs/ -o outputs/ -s 291
-    ```
-   This trains the graphTRIP, atlas-bound and hybrid models and saves the weights inside `outputs/f{model_name}/weights`.
-2. We trained models on psilodep1 (the validation dataset) without pretraining. This step is only necessary for replicating the results in Fig.4d of the paper. This was done with the job scripts `job_scripts/train_graphTRIP_on_psilodep1.sh` and `job_scripts/train_mlp_on_psilodep1.sh`.
+#### Step 2: Train a Model
 
-#### Step 3: Post-hoc analysis
+To train a graphTRIP model:
 
+```bash
+python -m experiments.run_experiment train_jointly FileStorageObserver --config_json=my_config.json
+```
 
-#### Step 4 (optional): Figure making
-All figures were produced with `figures.ipynb`. 
-The notebook depends on the results from the previous steps.
+Results will be saved to:
 
+```
+outputs/runs/{config_json}/
+```
+
+unless overridden via the `--output_dir` argument or by setting the `output_dir` field in your JSON config.
+
+Note: training on fully connected graphs increases training time and often leads to oversmoothing. You want to use a sparsely connected yet sufficiently informative graph structure.
+
+## Reproducing Our Results
+
+To fully replicate the results reported in our paper, you will need:
+
+* Access to the `psilodep2` (primary) and `psilodep1` (validation) datasets.
+* All open-access normative molecular target maps described in the paper.
+
+Example directory structure:
+
+```
+data/
+├── processed/
+├── raw/
+│   ├── psilodep1/
+│   ├── psilodep2/
+│   │   ├── annotations.csv
+│   │   └── before/
+│   │       └── schaefer100/
+│   │           ├── S01/
+│   │           │   ├── node.csv
+│   │           │   ├── edge.csv
+│   │           │   └── bold.csv
+│   │           └── ...
+│   ├── receptor_maps/
+│   │   └── schaefer100/
+│   │       └── schaefer100_receptor_maps.csv
+│   ├── spatial_coordinates/
+│   │   └── Schaefer2018_100Parcels_7Networks_order_FSLMNI152_2mm.Centroid_RAS.csv
+│   └── transmodal_axis/
+│       └── Schaefer100_SA_Axis.csv
+```
+
+#### Replication Steps
+
+1. Download the 5-HT PET data and compute REACT maps as described in
+   `preprocessing/react/react_readme.md`.
+
+   This creates:
+
+   ```
+   data/raw/{study}/{session}/MNI_2mm/
+   ```
+
+2. Run preprocessing for each dataset. For example:
+
+   ```bash
+   python -m preprocessing.preprocess psilodep2 before schaefer100
+   ```
+
+3. Run primary scripts (no dependencies on other outputs):
+
+   ```bash
+   qsub job_scripts/primary_jobs.sh
+   ```
+
+4. Run secondary scripts (depend on outputs from primary scripts):
+
+   ```bash
+   qsub job_scripts/secondary_jobs.sh
+   ```
+
+5. Post-hoc analysis:
+
+   ```bash
+   qsub job_scripts/posthoc_analysis.sh
+   ```
+
+6. Generate all figures with the jupyter notebook `notebooks/figures.ipynb`.
 
 ## Citation
-When using this code, we'd be grateful if you cite us: Tolle et al. (2025). Cheers!
+
+If you use this codebase or model in your work, we'd be grateful if you could cite:
+
+**Tolle et al. (2025).**
+*Accurate and Interpretable Prediction of Antidepressant Treatment Outcomes via Geometric Deep Learning.*
+
+Thank you and have fun with graphTRIP!
+
+```
