@@ -46,7 +46,7 @@ Each graph can also include graph-level attributes (e.g., clinical scores, treat
 data/raw/{study}/annotations.csv
 ```
 
-Ensure this file contains a `Patient` column matching subject IDs, and that any additional graph attributes appear as columns. To define which attributes to load by default, modify the `Attrs.add_clinical_graph_attrs()` method.
+Ensure this file contains a `Patient` column matching subject IDs, and that any additional graph attributes appear as columns. To define which attributes to load by default, modify the `Attrs.add_clinical_graph_attrs()` method inside `datasets.py`.
 
 To force reload a modified dataset, run:
 
@@ -156,5 +156,3 @@ If you use this codebase or model in your work, we'd be grateful if you could ci
 *Accurate and Interpretable Prediction of Antidepressant Treatment Outcomes via Geometric Deep Learning.*
 
 Thank you and have fun with graphTRIP!
-
-```
