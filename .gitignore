@@ -9,6 +9,7 @@ notebooks/figures/
 # Unused code
 junk/
 notebooks/sandbox.ipynb
+notebooks/print_models.ipynb
 
 # VScode degugging configs
 .vscode/
