@@ -1,4 +1,4 @@
-# graphTRIP: Graph-based Treatment Response Interpretable Predictions
+# graphTRIP: Graph-based Treatment Response Interpretability and Prediction
 
 This repository contains the full codebase for reproducing results from our study *Accurate and Interpretable Prediction of Antidepressant Treatment Response from Receptor-informed Neuroimaging*. It also includes some hopefully useful guidance for how to apply the graphTRIP pipeline to your own data.
 
