@@ -1,6 +1,6 @@
 # graphTRIP: Graph-based Treatment Response Interpretable Predictions
 
-This repository contains the full codebase for reproducing results from our study *Accurate and Interpretable Prediction of Antidepressant Treatment Outcomes via Geometric Deep Learning*. It also includes some hopefully useful guidance for how to apply the graphTRIP pipeline to your own data.
+This repository contains the full codebase for reproducing results from our study *Accurate and Interpretable Prediction of Antidepressant Treatment Response from Receptor-informed Neuroimaging*. It also includes some hopefully useful guidance for how to apply the graphTRIP pipeline to your own data.
 
 ## Installation
 
@@ -153,6 +153,6 @@ data/
 If you use this codebase or model in your work, we'd be grateful if you could cite:
 
 **Tolle et al. (2025).**
-*Accurate and Interpretable Prediction of Antidepressant Treatment Outcomes via Geometric Deep Learning.*
+*Accurate and Interpretable Prediction of Antidepressant Treatment Response from Receptor-informed Neuroimaging.*
 
 Thank you and have fun with graphTRIP!
