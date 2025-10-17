@@ -10,7 +10,7 @@ sys.path.append('../')
 
 from typing import Dict, Optional
 import torch
-from torch_geometric.utils import to_dense_adj, scatter
+from torch_geometric.utils import to_dense_adj, scatter, to_dense_batch
 from torch_geometric.data import Data
 from torch_geometric.nn import GATv2Conv
 from torch_geometric.nn.resolver import activation_resolver
@@ -675,6 +675,74 @@ class AttentionNetPooling(torch.nn.Module):
         scores = scores - scores.max(dim=0, keepdim=True)[0]  # log-sum-exp trick for stability
         weights = torch.nn.functional.softmax(scores, dim=0)  # [num_nodes, 1]
         return weights
+    
+    def penalty(self):
+        return self.reg_strength * L2_reg(self)
+
+class GraphTransformerPooling(torch.nn.Module):
+    """
+    Graph transformer-based pooling layer.
+    Applies self-attention among all nodes in each graph (multi-head),
+    producing contextualised node embeddings that are then mean- or
+    attention-pooled into a graph-level vector.
+    """
+    HANDLES_CONTEXT = False
+    @classmethod
+    def can_handle_context(cls):
+        return cls.HANDLES_CONTEXT
+    
+    def __init__(self, pooling_dim: int, 
+                 num_heads: int = 4,
+                 ff_hidden_dim: int = None, 
+                 dropout: float = 0.1,
+                 reg_strength: float = 0.01,
+                 reduce: str = 'mean'):
+        super().__init__()
+        self.pooling_dim = pooling_dim
+        self.num_heads = num_heads
+        self.reduce = reduce
+        self.output_dim = pooling_dim
+        self.dropout = torch.nn.Dropout(dropout)
+
+        # Multi-head self-attention
+        self.attn = torch.nn.MultiheadAttention(pooling_dim, 
+            num_heads, dropout=dropout, batch_first=True)
+
+        # Feedforward network (position-wise)
+        ff_hidden_dim = ff_hidden_dim or 2 * pooling_dim
+        self.ff = torch.nn.Sequential(
+            torch.nn.Linear(pooling_dim, ff_hidden_dim),
+            torch.nn.ReLU(),
+            torch.nn.Linear(ff_hidden_dim, pooling_dim),
+        )
+        self.reg_strength = reg_strength
+        self.norm1 = torch.nn.LayerNorm(pooling_dim)
+        self.norm2 = torch.nn.LayerNorm(pooling_dim)
+
+    def forward(self, z, batch_index):
+        # Convert node features to dense batch form: [B, N_max, D]
+        z_dense, mask = to_dense_batch(z, batch_index)
+        # z_dense: [batch_size, num_nodes, embed_dim]
+        # mask: [batch_size, num_nodes]
+
+        # Self-attention: contextualise node embeddings within each graph
+        attn_out, _ = self.attn(z_dense, z_dense, z_dense,
+                                key_padding_mask=~mask)  # mask=False -> attend only to valid nodes
+        z_dense = self.norm1(z_dense + self.dropout(attn_out))
+
+        # Feed-forward transformation
+        ff_out = self.ff(z_dense)
+        z_dense = self.norm2(z_dense + self.dropout(ff_out))
+
+        # Pooling: mean or attention over valid nodes
+        if self.reduce == 'mean':
+            pooled = (z_dense * mask.unsqueeze(-1)).sum(dim=1) / mask.sum(dim=1, keepdim=True)
+        elif self.reduce == 'sum':
+            pooled = (z_dense * mask.unsqueeze(-1)).sum(dim=1)
+        else:
+            raise ValueError("reduce must be 'mean' or 'sum'")
+
+        return pooled
     
     def penalty(self):
         return self.reg_strength * L2_reg(self)

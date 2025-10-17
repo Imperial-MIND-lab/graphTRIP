@@ -8,7 +8,7 @@ from models.models import (
     # Encoder models
     DenseEncoder, DenseOneLayerEncoder,
     # Pooling layers
-    GlobalAttentionPooling, ConcatPooling, AttentionNetPooling,
+    GlobalAttentionPooling, ConcatPooling, AttentionNetPooling, GraphTransformerPooling,
     # Decoder models 
     Decoder, 
     # Permutation invariant decoders
@@ -20,5 +20,6 @@ __all__ = ['GraphLevelVGAE', 'NodeLevelVGAE',
            'NodeEmbeddingMLP', 'NodeEmbeddingGATv2Conv', 'NodeEmbeddingGATv2Conv_withSkip',
            'DenseEncoder', 'DenseOneLayerEncoder',
            'GlobalAttentionPooling', 'ConcatPooling', 'AttentionNetPooling',
+           'GraphTransformerPooling',
            'Decoder',
            'MLPNodeDecoder', 'InnerProductEdgeDecoder', 'MLPEdgeDecoder']

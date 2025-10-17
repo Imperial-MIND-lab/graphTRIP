@@ -55,6 +55,17 @@
             "reduce": "mean"
         }
     },
+    "GraphTransformerPooling": {
+        "required_params": [],
+        "optional_params": {
+            "pooling_dim": null,
+            "num_heads": 4,
+            "ff_hidden_dim": null,
+            "dropout": null,
+            "reg_strength": null,
+            "reduce": "mean"
+        }
+    },
     "DenseEncoder": {
         "required_params": ["latent_dim"],
         "optional_params": {
