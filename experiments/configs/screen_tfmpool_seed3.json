@@ -1,5 +1,5 @@
 {
-  "seed": [2],
+  "seed": [3],
   "save_weights": [false],
   "lr": [0.001],
   "num_epochs": [300],
