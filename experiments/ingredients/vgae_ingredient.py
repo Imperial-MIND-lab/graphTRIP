@@ -39,7 +39,8 @@ def vgae_cfg(dataset):
               'num_edge_attr': len(dataset['edge_attrs']),
               'num_graph_attr': len(dataset['graph_attrs']),
               'num_cond_attrs': len(dataset['cond_attrs']),
-              'num_context_attrs': len(dataset['context_attrs'])}
+              'num_context_attrs': len(dataset['context_attrs']),
+              'max_spd_dist': dataset['max_spd_dist']}
 
     # Node embedding model
     node_emb_model_cfg = {'model_type': 'NodeEmbeddingGCN'}
@@ -72,10 +73,14 @@ def build_vgae(model_type, params,
                node_decoder_cfg, 
                edge_decoder_cfg,
                edge_idx_decoder_cfg):
-    # Make sure params have the correct num_nodes
-    updated_params = copy.deepcopy(params)
+               
+    # If node_emb_model is NodeEmbeddingGraphormer, max_spd_dist must be provided
+    if node_emb_model_cfg['model_type'] == 'NodeEmbeddingGraphormer' \
+        and params['max_spd_dist'] is None:
+        raise ValueError("max_spd_dist must be provided for NodeEmbeddingGraphormer")    
     
     # Combine all config dictionaries
+    updated_params = copy.deepcopy(params)
     combined_params = {'params': updated_params,
                        'node_emb_model_cfg': node_emb_model_cfg,
                        'pooling_cfg': pooling_cfg,

@@ -246,6 +246,20 @@ class AddLabel(BaseTransform):
     def forward(self, data: Data) -> Data:
         data.y = torch.tensor(self.labels[data.subject.item()+1])
         return data
+
+class AddSPD(BaseTransform):
+    """
+    Adds precomputed SPD matrices to each data object.
+    Expects a dictionary {patient_id: spd_tensor}.
+    """
+    def __init__(self, spd_dict: Dict):
+        self.spd_dict = spd_dict
+
+    def forward(self, data: Data) -> Data:
+        patient_id = data.subject.item() + 1
+        spd = self.spd_dict[patient_id]
+        data.spd = spd
+        return data
     
 class SetGraphAttr(BaseTransform):
     '''

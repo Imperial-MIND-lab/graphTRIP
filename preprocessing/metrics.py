@@ -629,6 +629,31 @@ def granger_causality(bold = None, atlas = None, maxlag=1, test_name='ssr_chi2te
 
     return {'granger_causality': output}
 
+def compute_spd(edge_index: torch.Tensor, num_nodes: int, max_dist: int = 10) -> torch.Tensor:
+    '''
+    Computes the shortest path distance (SPD) matrix for a given edge index.
+    
+    Parameters:
+    ----------
+    edge_index (torch.Tensor): Edge index tensor of shape (2, num_edges)
+    num_nodes (int): Number of nodes in the graph
+    max_dist (int): Maximum distance to consider
+
+    Returns:
+    --------
+    spd (torch.Tensor): Shortest path distance matrix of shape (num_nodes, num_nodes)
+    '''
+    G = nx.Graph()
+    G.add_nodes_from(range(num_nodes))
+    edges = edge_index.t().tolist()
+    G.add_edges_from(edges)
+    lengths = dict(nx.all_pairs_shortest_path_length(G))
+    spd = torch.full((num_nodes, num_nodes), fill_value=max_dist + 1)
+    for i in range(num_nodes):
+        for j, d in lengths[i].items():
+            spd[i, j] = min(d, max_dist) 
+    return spd
+
 # ======================================================================================= #
 # GRAPH FEATURE FUNCTIONS 
 # Functions that return scalars, derived from adjacency matrices.

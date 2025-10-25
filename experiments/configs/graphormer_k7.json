@@ -1,0 +1,95 @@
+{
+    "seed": [0],
+    "output_dir": ["outputs/graphormer_k7_seed0"],
+    "save_weights": [false],
+    "lr": [0.001],
+    "num_epochs": [300],
+    "num_z_samples": [1],
+    "alpha": [0.5],
+    "dataset": {
+      "study": ["psilodep2"],
+      "session": ["before"],
+      "atlas": ["schaefer100"],
+      "target": ["QIDS_Final_Integration"],
+      "batch_size": [9, 12],
+      "num_folds": [7],
+      "val_split": [0.0],
+      "graph_attrs": [["QIDS_Before", "BDI_Before", "Condition", "Stop_SSRI"]],
+      "context_attrs": [[]],
+      "node_attrs": [["5-HT1A_Believeau-3", "5-HT2A_Believeau-3", "5-HTT_Believeau-3"]],
+      "edge_attrs": [["functional_connectivity"]],
+      "edge_tfm_type": ["DensityThresholdAdjacency"],
+      "edge_tfm_params": {
+        "edge_info": ["functional_connectivity"],
+        "density": [0.2]
+      },
+      "add_3Dcoords": [true],
+      "self_loop_fill_value": [1],
+      "max_spd_dist": [10],
+      "standardise_x": [false]
+    },
+    "mlp_model": {
+      "model_type": ["RegressionMLP"],
+      "params": {
+        "dropout": [0.25],
+        "hidden_dim": [128],
+        "layernorm": [false],
+        "mse_reduction": ["sum"],
+        "num_layers": [4],
+        "output_dim": [1],
+        "reg_strength": [0.01]
+      }
+    },
+    "vgae_model": {
+      "model_type": ["NodeLevelVGAE"],
+      "params": {
+        "dropout": [0.25],
+        "latent_dim": [32, 64],
+        "node_emb_dim": [32, 64],
+        "reg_strength": [0.01]
+      },
+      "node_emb_model_cfg": {
+        "model_type": ["NodeEmbeddingGraphormer"],
+        "params": {
+          "hidden_dim": [32, 64],
+          "layernorm": [true],
+          "num_heads": [2, 4],
+          "num_layers": [4, 6]
+        }
+      },
+      "encoder_cfg": {
+        "model_type": ["DenseOneLayerEncoder"]
+      },
+      "edge_decoder_cfg": {
+        "model_type": ["MLPEdgeDecoder"],
+        "params": {
+          "act": ["tanh"],
+          "hidden_dim": [32],
+          "num_layers": [3]
+        }
+      },
+      "edge_idx_decoder_cfg": {
+        "model_type": ["MLPEdgeDecoder"],
+        "params": {
+          "act": ["sigmoid"],
+          "hidden_dim": [32],
+          "num_layers": [3]
+        }
+      },
+      "node_decoder_cfg": {
+        "model_type": ["MLPNodeDecoder"],
+        "params": {
+          "hidden_dim": [32],
+          "num_layers": [3]
+        }
+      },
+      "pooling_cfg": {
+        "model_type": ["GraphTransformerPooling"],
+        "params": {
+          "reduce": ["mean"],
+          "num_heads": [2, 4],
+          "ff_hidden_dim": [64]
+        }
+      }
+    }
+  }

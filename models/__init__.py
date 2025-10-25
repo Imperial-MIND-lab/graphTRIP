@@ -5,6 +5,7 @@ from models.models import (
     StandardMLP, RegressionMLP, LogisticRegressionMLP,
     # Node embedding models
     NodeEmbeddingMLP, NodeEmbeddingGATv2Conv, NodeEmbeddingGATv2Conv_withSkip,
+    NodeEmbeddingGraphormer,
     # Encoder models
     DenseEncoder, DenseOneLayerEncoder,
     # Pooling layers
@@ -18,6 +19,7 @@ from models.models import (
 __all__ = ['GraphLevelVGAE', 'NodeLevelVGAE', 
            'StandardMLP', 'RegressionMLP', 'LogisticRegressionMLP',
            'NodeEmbeddingMLP', 'NodeEmbeddingGATv2Conv', 'NodeEmbeddingGATv2Conv_withSkip',
+           'NodeEmbeddingGraphormer',
            'DenseEncoder', 'DenseOneLayerEncoder',
            'GlobalAttentionPooling', 'ConcatPooling', 'AttentionNetPooling',
            'GraphTransformerPooling',

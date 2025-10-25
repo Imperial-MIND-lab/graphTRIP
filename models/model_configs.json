@@ -31,6 +31,18 @@
             "reg_strength": null
         }
     },
+    "NodeEmbeddingGraphormer": {
+        "required_params": ["num_node_attr", "num_cond_attrs", "num_edge_attr", "node_emb_dim"],
+        "optional_params": {
+            "max_spd_dist": null,
+            "hidden_dim": 32,
+            "num_layers": 3,
+            "num_heads": 4,
+            "dropout": null,
+            "reg_strength": null,
+            "layernorm": true
+        }
+    },
     "ConcatPooling": {
         "required_params": ["num_nodes"],
         "optional_params": {
@@ -135,7 +147,8 @@
             "node_emb_dim": 32,
             "latent_dim": 32,
             "dropout": 0.25,
-            "reg_strength": 0.01
+            "reg_strength": 0.01,
+            "max_spd_dist": null
         }
     }
 }

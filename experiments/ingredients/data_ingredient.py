@@ -17,7 +17,7 @@ import numpy as np
 import torch
 
 from datasets import *
-from preprocessing.metrics import load_3d_coords
+from preprocessing.metrics import load_3d_coords, compute_spd
 
 
 # Create the ingredient --------------------------------------------------------
@@ -54,6 +54,7 @@ def data_cfg():
     if self_loop_fill_value != 1:
         transforms += [RemoveSelfLoops(), 
                        AddSelfLoops(fill_value=self_loop_fill_value)]
+    max_spd_dist = None # Max shortest path dist. If None, no SPD embeddings are added.
         
     # Node transforms
     add_3Dcoords = False         # Whether to add 3D coordinates as node features.
@@ -76,7 +77,7 @@ def data_cfg():
 def load_data(study, session, atlas, target, prefilter,
               node_attrs, edge_attrs, graph_attrs, context_attrs,
               edge_tfm_type, edge_tfm_params, transforms, 
-              add_3Dcoords, drug_condition):
+              add_3Dcoords, drug_condition, max_spd_dist):
     '''Loads the dataset for the given configurations.'''   
     # Create the attributes object
     attrs = Attrs(node=node_attrs, edge=edge_attrs, graph=graph_attrs)
@@ -107,6 +108,14 @@ def load_data(study, session, atlas, target, prefilter,
                                 target=target,
                                 edge_tfm=edge_tfm,
                                 transforms=all_tfms)
+
+    # Add SPD embeddings if max_spd_dist is not None
+    if max_spd_dist is not None:
+        spd_cache = {}
+        for data in dataset:
+            spd = compute_spd(data.edge_index, data.num_nodes, max_spd_dist)
+            spd_cache[data.subject.item()+1] = spd
+        dataset.transform.transforms.append(AddSPD(spd_cache))
     
     # Update context attributes in the filter transform if needed
     if context_attrs:
