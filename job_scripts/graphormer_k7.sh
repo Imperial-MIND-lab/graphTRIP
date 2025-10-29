@@ -9,4 +9,4 @@ module load anaconda3/personal
 source activate graphtrip
 
 cd ~/projects/graphTRIP/experiments
-python run_experiment.py train_jointly NeptuneObserver --jobid=${PBS_ARRAY_INDEX} --config_json='graphormer_job49k7.json'
+python run_experiment.py train_jointly FileStorageObserver --jobid=${PBS_ARRAY_INDEX} --config_json='graphormer_job49k7.json'
