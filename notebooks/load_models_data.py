@@ -83,9 +83,9 @@ def load_mlps(config: dict, latent_dim: int, weights_dir: str, weight_filenames:
     """
     # Load configs
     extra_dim = config.get('extra_dim', None) or len(config['dataset']['graph_attrs'])
-    hidden_dim = config.get('hidden_dim', None) or max(latent_dim, extra_dim)
+    hidden_dim = config['params'].get('hidden_dim', None) or max(latent_dim, extra_dim)
     model_type = config.get('model_type', None)
-    params = config.get('params', {})
+    params = copy.deepcopy(config.get('params', {}))
     params['hidden_dim'] = hidden_dim
 
     mlps = []

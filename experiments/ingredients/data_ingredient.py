@@ -158,7 +158,7 @@ def load_dataset_from_configs(config):
     valid_args = ['study', 'session', 'atlas', 'target', 'prefilter',
                   'node_attrs', 'edge_attrs', 'graph_attrs', 'context_attrs',
                   'edge_tfm_type', 'edge_tfm_params', 'transforms',
-                  'add_3Dcoords', 'drug_condition']
+                  'add_3Dcoords', 'drug_condition', 'max_spd_dist']
     input_args = {k: config[k] for k in valid_args if k in config}
     return load_data(**input_args)
 
