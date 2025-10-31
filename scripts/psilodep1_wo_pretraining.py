@@ -72,12 +72,10 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=0, config_id=0):
             config_updates['dataset']['context_attrs'] = [] # drug is constant in psilodep1
 
             # Add all graph attributes, available in psilodep1
-            graph_attrs = ["Gender", 
-                            "Age", 
-                            "HAMD_Before", 
-                            "QIDS_Before", 
-                            "LOTR_Before", 
-                            "BDI_Before"]
+            graph_attrs = ["HAMD_Before", 
+                           "QIDS_Before", 
+                           "LOTR_Before", 
+                           "BDI_Before"]
             config_updates['dataset']['graph_attrs'] = graph_attrs
             config_updates['mlp_model']['extra_dim'] = len(graph_attrs)
 
@@ -103,7 +101,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=0, config_id=0):
 if __name__ == "__main__":
     """
     How to run:
-    python psilodep1_wo_pretraining.py -c experiments/configs/graphtrip.json -o outputs/psilodep1/wo_pretraining/ -s 291 -v -dbg -ci 0
+    python psilodep1_wo_pretraining.py -c experiments/configs/graphtrip.json -o outputs/psilodep1/wo_pretraining/ -s 0 -v -dbg -ci 0
     """
     # Parse command line arguments
     parser = argparse.ArgumentParser()
@@ -111,7 +109,7 @@ if __name__ == "__main__":
                         default='experiments/configs/graphtrip.json', 
                         help='Path to the config file with graphTRIP model config')
     parser.add_argument('-o', '--output_dir', type=str, default='outputs/psilodep1/wo_pretraining', help='Path to the output directory')
-    parser.add_argument('-s', '--seed', type=int, default=291, help='Initial random seed')
+    parser.add_argument('-s', '--seed', type=int, default=0, help='Initial random seed')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('-j', '--jobid', type=int, default=0, help='Job ID')
