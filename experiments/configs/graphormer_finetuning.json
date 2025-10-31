@@ -1,0 +1,36 @@
+{
+    "seed": [0],
+    "save_weights": [false],
+    "weights_dir": ["outputs/graphTRIP_GRAPHORMER/pretrain_for_psilodep1/job_0"],
+    "output_dir": ["outputs/graphTRIP_GRAPHORMER/finetune_on_psilodep1"],
+    "num_epochs": [30, 50, 100],
+    "num_z_samples": [1],
+    "alpha": [0.0],
+    "vgae_lr": [0.0],
+    "mlp_lr": [0.001],
+    "rho": [0.4, 0.5],
+    "leak_rate": [0.9, 0.95],
+    "dataset": {
+      "study": ["psilodep1"],
+      "session": ["before"],
+      "atlas": ["schaefer100"],
+      "target": ["QIDS_1week", "QIDS_3months"],
+      "batch_size": [7],
+      "num_folds": [7],
+      "val_split": [0.0],
+      "graph_attrs": [
+        ["QIDS_Before", "BDI_Before"], 
+        ["QIDS_Before", "BDI_Before", "HAMD_Before", "LOTR_Before"]],
+      "context_attrs": [[]],
+      "node_attrs": [["5-HT1A_Believeau-3", "5-HT2A_Believeau-3", "5-HTT_Believeau-3"]],
+      "edge_attrs": [["functional_connectivity"]],
+      "edge_tfm_type": ["DensityThresholdAdjacency"],
+      "edge_tfm_params": {
+        "edge_info": ["functional_connectivity"],
+        "density": [0.2]
+      },
+      "add_3Dcoords": [true],
+      "self_loop_fill_value": [1],
+      "standardise_x": [false]
+    }
+}
