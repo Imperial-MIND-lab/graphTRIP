@@ -850,7 +850,7 @@ class GlobalAttentionPooling(torch.nn.Module):
         self.reduce = reduce
         self.output_dim = pooling_dim
 
-    def forward(self, node_embeddings, batch_index):
+    def forward(self, z, batch_index):
         '''
         Parameters:
         ----------
@@ -858,17 +858,17 @@ class GlobalAttentionPooling(torch.nn.Module):
         batch_index (torch.Tensor): assigns each node to a graph [nodes_in_batch]
         '''
         # Compute attention weights
-        scores = self.attention(node_embeddings)  # [nodes_in_batch, 1]
+        scores = self.attention(z)  # [nodes_in_batch, 1]
         scores = scores - scores.max(dim=0, keepdim=True)[0]  # log-sum-exp trick for stability
         weights = torch.nn.functional.softmax(scores, dim=0)
 
         # Weighted average over nodes in each graph using batch_index
-        pooled = scatter(weights * node_embeddings, batch_index, dim=0, reduce=self.reduce)
+        pooled = scatter(weights * z, batch_index, dim=0, reduce=self.reduce)
         return pooled
     
-    def get_attention_weights(self, node_embeddings):
+    def get_attention_weights(self, z, batch_index=None):
         # Compute attention weights
-        scores = self.attention(node_embeddings)  # [num_nodes, 1]
+        scores = self.attention(z)  # [num_nodes, 1]
         scores = scores - scores.max(dim=0, keepdim=True)[0]  # log-sum-exp trick for stability
         weights = torch.nn.functional.softmax(scores, dim=0)  # [num_nodes, 1]
         return weights
@@ -913,7 +913,7 @@ class AttentionNetPooling(torch.nn.Module):
         pooled = scatter(weights * z[:, :self.output_dim], batch_index, dim=0, reduce=self.reduce)
         return pooled
     
-    def get_attention_weights(self, z):
+    def get_attention_weights(self, z, batch_index=None):
         # Compute attention weights
         scores = self.attention_net(z)  # [num_nodes, 1]
         scores = scores - scores.max(dim=0, keepdim=True)[0]  # log-sum-exp trick for stability
@@ -987,6 +987,50 @@ class GraphTransformerPooling(torch.nn.Module):
             raise ValueError("reduce must be 'mean' or 'sum'")
 
         return pooled
+
+    def get_attention_weights(self, z, batch_index):
+        """
+        Returns the self-attention weights (averaged over heads)
+        for each graph in the batch.
+
+        Parameters
+        ----------
+        z : torch.Tensor
+            Node embeddings [num_nodes, pooling_dim]
+        batch_index : torch.Tensor
+            Batch vector mapping each node to its graph [num_nodes]
+
+        Returns
+        -------
+        attn_avg : torch.Tensor
+            Attention weight matrices averaged over heads [batch_size, num_nodes, num_nodes],
+            where N = max number of nodes in the batch.
+        mask : torch.Tensor
+            Boolean mask indicating valid nodes [batch_size, num_nodes]
+        """
+
+        # Multi-head self-attention
+        z_dense, mask = to_dense_batch(z, batch_index) 
+        _, attn_weights = self.attn(
+            z_dense, z_dense, z_dense,
+            key_padding_mask=~mask,
+            need_weights=True,
+            average_attn_weights=False  # keep per-head attention
+        ) # [batch_size, num_heads, num_nodes, num_nodes]
+
+        # Average over heads
+        attn_avg = attn_weights.mean(dim=1)  # [batch_size, num_nodes, num_nodes]
+
+        # Mask out invalid nodes (padding)
+        attn_avg = attn_avg * mask[:, None, :].float() * mask[:, :, None].float()
+
+        # Compute inbound attention weights
+        inbound = attn_avg.sum(dim=-2)
+        inbound = inbound * mask.float() / mask.sum(dim=-2, keepdim=True).float()
+        # outbound = attn_avg.sum(dim=-1)
+        # outbound = outbound * mask.float() / mask.sum(dim=-1, keepdim=True).float()
+
+        return inbound
     
     def penalty(self):
         return self.reg_strength * L2_reg(self)

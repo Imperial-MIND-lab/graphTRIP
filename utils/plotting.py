@@ -529,12 +529,12 @@ def true_vs_pred_scatter(ypreds, marker_col=None, style=None, title=None,
     plt.ylim(min_val, max_val)
     plt.gca().set_aspect('equal', adjustable='box')
     
-    if title is None:
-        r, p = pearsonr(ypreds[xcol], ypreds[ycol])
-        mae = np.mean(np.abs(ypreds[xcol] - ypreds[ycol]))
-        mae_std = np.std(np.abs(ypreds[xcol] - ypreds[ycol]))
-        title = f'r={r:.4f}, p={p:.4e}, MAE={mae:.4f} ± {mae_std:.4f}'
-    plt.title(title)
+    title = title or ''
+    r, p = pearsonr(ypreds[xcol], ypreds[ycol])
+    mae = np.mean(np.abs(ypreds[xcol] - ypreds[ycol]))
+    mae_std = np.std(np.abs(ypreds[xcol] - ypreds[ycol]))
+    full_title = f'r={r:.4f}, p={p:.4e}, MAE={mae:.4f} ± {mae_std:.4f}'
+    plt.title(title + '\n' + full_title)
     
     if save_path:
         format = save_path.split('.')[-1]

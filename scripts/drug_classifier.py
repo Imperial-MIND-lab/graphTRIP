@@ -49,7 +49,7 @@ def main(config_file, output_dir, verbose, debug, seed, config_id=0):
 
     # Train drug classifier ----------------------------------------------------
     exname = 'train_classifier'
-    weights_dir = os.path.join(output_dir, 'weights')
+    weights_dir = os.path.join(output_dir, 'weights', f'seed_{seed}')
 
     # Run the experiment if it doesn't exist
     if not os.path.exists(weights_dir):
@@ -61,7 +61,7 @@ def main(config_file, output_dir, verbose, debug, seed, config_id=0):
 
     # Permutation importance ---------------------------------------------------
     exname = 'permutation_importance_classifier'
-    ex_dir = os.path.join(output_dir, 'permutation_importance')
+    ex_dir = os.path.join(output_dir, 'permutation_importance', f'seed_{seed}')
     if not os.path.exists(ex_dir):
         config_updates = {}
         config_updates['output_dir'] = ex_dir
@@ -84,7 +84,7 @@ if __name__ == "__main__":
                         default='experiments/configs/drug_classifier.json', 
                         help='Path to the config file with drug classifier config')
     parser.add_argument('-o', '--output_dir', type=str, default='outputs/drug_classifier/', help='Path to the output directory')
-    parser.add_argument('-s', '--seed', type=int, default=291, help='Random seed')
+    parser.add_argument('-s', '--seed', type=int, default=0, help='Random seed')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('-ci', '--config_id', type=int, default=None, help='Config ID')

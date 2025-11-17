@@ -54,7 +54,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
     # 1. Control MLP benchmark -----------------------------------------------
     if jobid == 0 or jobid == -1:
         exname = 'train_mlp'
-        ex_dir = os.path.join(output_dir, 'control_mlp')
+        ex_dir = os.path.join(output_dir, 'control_mlp', f'seed_{seed}')
         if os.path.exists(add_project_root(ex_dir)):
             print(f"Experiment {exname} already exists in {ex_dir}")
         else:
@@ -92,7 +92,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
     # 2. PCA benchmark -------------------------------------------------------
     if jobid == 1 or jobid == -1:
         exname = 'pca_benchmark'
-        ex_dir = os.path.join(output_dir, 'pca_benchmark')
+        ex_dir = os.path.join(output_dir, 'pca_benchmark', f'seed_{seed}')
 
         # Check if the experiment has already been run
         if os.path.exists(add_project_root(ex_dir)):
@@ -122,7 +122,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
     # 3. t-SNE benchmark -----------------------------------------------------
     if jobid == 2 or jobid == -1:
         exname = 'tsne_benchmark'
-        ex_dir = os.path.join(output_dir, 'tsne_benchmark')
+        ex_dir = os.path.join(output_dir, 'tsne_benchmark', f'seed_{seed}')
 
         # Check if the experiment has already been run
         if os.path.exists(add_project_root(ex_dir)):
@@ -161,7 +161,7 @@ if __name__ == "__main__":
                         default='experiments/configs/graphtrip.json', 
                         help='Path to the config file with graphTRIP model config')
     parser.add_argument('-o', '--output_dir', type=str, default='outputs/benchmarks/', help='Path to the output directory')
-    parser.add_argument('-s', '--seed', type=int, default=291, help='Random seed')
+    parser.add_argument('-s', '--seed', type=int, default=0, help='Random seed')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('-j', '--jobid', type=int, default=-1, help='Job ID. If -1, runs all jobs sequentially.')

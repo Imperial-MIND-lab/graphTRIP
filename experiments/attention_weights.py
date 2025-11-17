@@ -101,8 +101,9 @@ def match_config(config: Dict) -> Dict:
     
     # Pooling must be AttentionNetPooling or GlobalAttentionPooling
     assert config_updates['vgae_model']['pooling_cfg']['model_type'] == 'AttentionNetPooling' or \
-           config_updates['vgae_model']['pooling_cfg']['model_type'] == 'GlobalAttentionPooling', \
-        "Pooling must be AttentionNetPooling or GlobalAttentionPooling."
+           config_updates['vgae_model']['pooling_cfg']['model_type'] == 'GlobalAttentionPooling' or \
+           config_updates['vgae_model']['pooling_cfg']['model_type'] == 'GraphTransformerPooling', \
+        "Pooling must be AttentionNetPooling, GlobalAttentionPooling or GraphTransformerPooling."
     
     return config_updates
 
@@ -139,7 +140,7 @@ def get_attention_weights(vgaes, data, context_value=None):
             z_with_context = torch.cat([out.mu, context], dim=1)
             
             # Get the attention weights
-            attention_weights[k, sub] = vgae.pooling.get_attention_weights(z_with_context).detach().numpy().flatten()
+            attention_weights[k, sub] = vgae.pooling.get_attention_weights(z_with_context, batch.batch).detach().numpy().flatten()
 
     # Create DataFrame with attention weights using atlas labels
     atlas = get_atlas(data.atlas)

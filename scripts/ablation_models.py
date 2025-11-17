@@ -26,10 +26,9 @@ from utils.configs import load_configs_from_json, fetch_job_config
 from experiments.run_experiment import run
 
 
-def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
+def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=None):
     # Add project root to paths
     config_file = add_project_root(config_file)
-    output_dir = add_project_root(output_dir)
 
     # Make sure the config files exist
     if not os.path.exists(config_file):
@@ -37,7 +36,10 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
     
     # Load the config
     config = load_configs_from_json(config_file)
-    config = fetch_job_config(config, config_id)
+    if config_id is not None:
+        config = fetch_job_config(config, config_id)
+    else:
+        config = fetch_job_config(config, 0)
         
     # Experiment settings
     observer = 'FileStorageObserver'
@@ -46,6 +48,19 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
     config['save_weights'] = True
     if debug:
         config['num_epochs'] = 2
+
+    # Output directory
+    if output_dir is None:
+        output_dir = config.get('output_dir', 'outputs/ablation_models/')
+    output_dir = add_project_root(output_dir)
+
+    # Add config subdirectory into output directory, if config_id is provided
+    if config_id is not None:
+        output_dir = os.path.join(output_dir, f'config_{config_id}')
+    else:
+        config_id = 0
+    output_dir = add_project_root(output_dir)
+    config['output_dir'] = output_dir
 
     # Train ablation models ----------------------------------------------------
     exname = 'train_jointly'
@@ -56,7 +71,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
         node_features = [node_features[jobid]]
 
     for node_feature in node_features:
-        weights_dir = os.path.join(output_dir, node_feature)
+        weights_dir = os.path.join(output_dir, node_feature, f'seed_{seed}')
 
         # Run the experiment if it doesn't exist
         if not os.path.exists(weights_dir):
@@ -83,19 +98,14 @@ if __name__ == "__main__":
     parser.add_argument('-c', '--config_file', type=str, 
                         default='experiments/configs/graphtrip.json', 
                         help='Path to the config file with graphTRIP model config')
-    parser.add_argument('-o', '--output_dir', type=str, default='outputs/ablation_models/', help='Path to the output directory')
-    parser.add_argument('-s', '--seed', type=int, default=291, help='Random seed')
+    parser.add_argument('-o', '--output_dir', type=str, default=None, 
+                        help='Path to the output directory')
+    parser.add_argument('-s', '--seed', type=int, default=0, help='Random seed')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('-j', '--jobid', type=int, default=-1, help='Job ID. If -1, runs all jobs sequentially.')
     parser.add_argument('-ci', '--config_id', type=int, default=None, help='Config ID')
     args = parser.parse_args()
-        
-    # Add config subdirectory into output directory, if config_id is provided
-    if args.config_id is not None:
-        args.output_dir = os.path.join(args.output_dir, f'config_{args.config_id}')
-    else:
-        args.config_id = 0
 
     # Run the main function
     main(args.config_file, args.output_dir, args.verbose, args.debug, args.seed, args.jobid, args.config_id)

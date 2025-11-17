@@ -1,6 +1,4 @@
 {
-    "seed": [0],
-    "output_dir": ["outputs/graphTRIP_GRAPHORMER"],
     "save_weights": [true],
     "lr": [0.001],
     "num_epochs": [300],
