@@ -7,7 +7,7 @@ License: BSD-3-Clause
 """
 
 import os
-import json
+from typing import List
 from dominance_analysis import Dominance
 from sklearn.linear_model import LinearRegression
 from sklearn.cross_decomposition import PLSRegression
@@ -17,12 +17,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import networkx as nx
+import itertools
 from sklearn.decomposition import PCA
 from statsmodels.stats.multitest import fdrcorrection
 from scipy import stats
 from scipy.stats import pearsonr, spearmanr
-from sklearn.metrics import mutual_info_score
+from sklearn.metrics import mutual_info_score, r2_score
 from scipy.stats import chi2_contingency
+from sklearn.model_selection import KFold
+from sklearn.linear_model import ElasticNetCV
 
 
 # Helper functions --------------------------------------------------------------
@@ -1040,3 +1043,190 @@ def pls_feature_filtering(pls_weight_stats: pd.DataFrame,
         return signed_features
     
     return list(common_features)
+
+def calculate_subject_consistency(
+    results_base_dir: str, 
+    filenames: List[str], 
+    subdir_name_pattern: str = 'seed_*',
+    relevant_columns: List[str] = None
+) -> pd.DataFrame:
+    """
+    Loads results from multiple subdirectories and files, treating each specific file 
+    in each specific subdirectory as an independent model run.
+
+    It calculates the row-wise (subject-wise) correlation consistency across ALL 
+    loaded model runs (seeds * filenames).
+
+    For each subject (row), it calculates the correlation of their data vector between 
+    all unique pairs of loaded runs.
+
+    Args:
+        results_base_dir: Path to the parent directory containing result subfolders.
+        filenames: List of filenames to load within each subdirectory. 
+                   Each file is treated as an independent model.
+        subdir_name_pattern: Glob pattern to identify subdirectories (default: 'seed_*').
+        relevant_columns: Optional[List[str]]; if provided, only consider these columns for correlation.
+
+    Returns:
+        pd.DataFrame: DataFrame with index as subject ID and columns:
+                      ['mean_corr', 'std_corr', 'se_corr'].
+    """
+    
+    # 1. Find Subdirectories
+    subdirs = sorted([
+        d for d in glob.glob(os.path.join(results_base_dir, subdir_name_pattern))
+        if os.path.isdir(d)
+    ])
+
+    if not subdirs:
+        raise ValueError(f"No subdirectories found matching {subdir_name_pattern}")
+
+    print(f"Found {len(subdirs)} directories. Scanning for {len(filenames)} files per directory...")
+
+    all_run_dfs = []
+    reference_columns = None
+    
+    # 2. Load Data: Flatten structure (Seeds x Folds)
+    for d in subdirs:
+        for fname in filenames:
+            fpath = os.path.join(d, fname)
+            
+            if not os.path.exists(fpath):
+                print(f"Warning: Missing file {fname} in {d}. Skipping this specific run.")
+                continue
+            
+            try:
+                df = pd.read_csv(fpath)
+                
+                # Optionally select relevant_columns
+                if relevant_columns is not None:
+                    missing_cols = set(relevant_columns) - set(df.columns)
+                    if missing_cols:
+                        print(f"Warning: Missing columns {missing_cols} in {fpath}. Skipping this run.")
+                        continue
+                    df = df[relevant_columns]
+                
+                if reference_columns is None:
+                    reference_columns = df.columns.tolist()
+                else:
+                    # Reorder columns to match reference to ensure feature alignment
+                    # If columns are missing or different, this helps catch it or align it
+                    if set(df.columns) != set(reference_columns):
+                        print(f"Warning: Column mismatch in {fpath}. Aligning to reference.")
+                    # Select columns in correct order
+                    df = df[reference_columns]
+
+                all_run_dfs.append(df)
+            except Exception as e:
+                print(f"Error reading {fpath}: {e}")
+
+    num_total_runs = len(all_run_dfs)
+    if num_total_runs < 2:
+        raise ValueError(f"Insufficient valid data loaded. Needed >= 2 runs, found {num_total_runs}.")
+
+    # Check shapes
+    base_shape = all_run_dfs[0].shape
+    for i, df in enumerate(all_run_dfs):
+        if df.shape != base_shape:
+            raise ValueError(f"Shape mismatch in loaded run index {i}. Expected {base_shape}, got {df.shape}")
+
+    print(f"Computing consistency across {num_total_runs} total independent models (Seeds x Folds) for {base_shape[0]} subjects...")
+
+    # 3. Compute Correlations
+    # We convert to a 3D numpy array: (Num_Runs, Num_Subjects, Num_Features)
+    data_stack = np.stack([df.values for df in all_run_dfs])
+    
+    n_subjects = base_shape[0]
+    results = []
+    
+    # Generate all unique pairs of run indices (e.g., (0,1), (0,2)... (n, n-1))
+    run_pairs = list(itertools.combinations(range(num_total_runs), 2))
+    
+    for subject_idx in range(n_subjects):
+        correlations = []
+        
+        # Extract the vector for this subject across all runs
+        # Shape: (Num_Runs, Num_Features)
+        subject_vectors = data_stack[:, subject_idx, :]
+        
+        # Calculate correlation for every pair of runs
+        for run_i, run_j in run_pairs:
+            vec_a = subject_vectors[run_i]
+            vec_b = subject_vectors[run_j]
+            
+            # Handle constant vectors (std=0) which cause NaN correlation
+            if np.std(vec_a) == 0 or np.std(vec_b) == 0:
+                corr = np.nan
+            else:
+                # np.corrcoef returns [[1, r], [r, 1]]
+                corr = np.corrcoef(vec_a, vec_b)[0, 1]
+                
+            correlations.append(corr)
+            
+        # Compute Stats
+        correlations = np.array(correlations)
+        
+        mean_r = np.nanmean(correlations)
+        std_r = np.nanstd(correlations)
+        
+        count_valid = np.sum(~np.isnan(correlations))
+        se_r = std_r / np.sqrt(count_valid) if count_valid > 0 else np.nan
+        
+        results.append({
+            'subject': subject_idx,
+            'mean_corr': mean_r,
+            'std_corr': std_r,
+            'se_corr': se_r
+        })
+
+    return pd.DataFrame(results)
+
+def elasticnet_cv_predict(X, y, subject_ids=None, n_splits=7, random_state=0, verbose=True):
+    """
+    Run k-fold CV ElasticNet prediction given X, y, [optional] conditions vector.
+    Returns a DataFrame with columns: 'prediction', 'label', and 'Condition' (if provided).
+    """
+
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+
+    y_preds_all = []
+    y_true_all = []
+    subject_ids_all = []
+
+    # Loop over folds
+    for fold_i, (train_idx, test_idx) in enumerate(kf.split(X)):
+        X_train, X_test = X[train_idx], X[test_idx]
+        y_train, y_test = y[train_idx], y[test_idx]
+
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
+
+        model = ElasticNetCV(cv=5, random_state=random_state, max_iter=10000)
+        model.fit(X_train_scaled, y_train)
+        preds = model.predict(X_test_scaled)
+
+        y_preds_all.extend(preds)
+        y_true_all.extend(y_test)
+        if subject_ids is not None:
+            subject_ids_all.extend(subject_ids[test_idx])
+        else:
+            subject_ids_all.extend([None]*len(test_idx))
+        if verbose:
+            print(f"Fold {fold_i+1}/{n_splits} complete.")
+
+    y_true_all = np.array(y_true_all)
+    y_preds_all = np.array(y_preds_all)
+    subject_ids_all = np.array(subject_ids_all)
+
+    r_value, _ = pearsonr(y_true_all, y_preds_all)
+    r2_val = r2_score(y_true_all, y_preds_all)
+
+    if verbose:
+        print("\n--- Final Results (Aggregated) ---")
+        print(f"Pearson Correlation (r): {r_value:.3f}")
+        print(f"Coefficient of Determination (R²): {r2_val:.3f}")
+
+    df = pd.DataFrame({'prediction': y_preds_all, 'label': y_true_all, 'subject_id': subject_ids_all})
+    df = df.sort_values('subject_id').reset_index(drop=True)
+    return df

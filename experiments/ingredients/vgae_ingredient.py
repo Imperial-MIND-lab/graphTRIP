@@ -311,6 +311,47 @@ def get_test_reconstructions(vgaes, dataset, test_indices,
     
     return adj_orig_rcn, x_orig_rcn, fold_assignments
 
+def get_mean_test_reconstructions(test_indices_dict, vgaes_dict, data):
+    """
+    Compute mean adj_orig_rcn and x_orig_rcn across seeds.
+
+    Parameters
+    ----------
+    test_indices_dict : dict
+        Dict mapping seed keys to test indices arrays.
+    vgaes_dict : dict
+        Dict mapping seed keys to VGAE models.
+    data : object
+        Dataset or data object required by get_test_reconstructions.
+
+    Returns
+    -------
+    mean_adj_orig_rcn : dict
+        Dict with 'original' and 'reconstructed' keys containing mean adjacency reconstructions.
+    mean_x_orig_rcn : dict
+        Dict with 'original', 'reconstructed', and 'feature_names' for node features.
+    """
+    adj_orig_rcn_list = []
+    x_orig_rcn_list = []
+    for seed_key in test_indices_dict:
+        num_folds = max(test_indices_dict[seed_key]) + 1
+        test_indices_list = [np.where(test_indices_dict[seed_key] == fold)[0] for fold in range(num_folds)]
+        vgae = vgaes_dict[seed_key]
+        adj_rcn, x_rcn, _ = get_test_reconstructions(vgae, data, test_indices_list, mean_std=None)
+        adj_orig_rcn_list.append(adj_rcn)
+        x_orig_rcn_list.append(x_rcn)
+
+    mean_adj_orig_rcn = {
+        'original': np.mean([d['original'] for d in adj_orig_rcn_list], axis=0),
+        'reconstructed': np.mean([d['reconstructed'] for d in adj_orig_rcn_list], axis=0)
+    }
+    mean_x_orig_rcn = {
+        'original': np.mean([d['original'] for d in x_orig_rcn_list], axis=0),
+        'reconstructed': np.mean([d['reconstructed'] for d in x_orig_rcn_list], axis=0),
+        'feature_names': x_orig_rcn_list[0]['feature_names']
+    }
+    return mean_adj_orig_rcn, mean_x_orig_rcn
+
 def evaluate_fc_reconstructions(adj_orig_rcn):
     '''
     Compute correlations and MAE between original and reconstructed FC matrices.

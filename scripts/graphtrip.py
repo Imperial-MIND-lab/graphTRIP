@@ -1,6 +1,5 @@
 """
-This scripts trains the main graphTRIP model on the primary dataset,
-and performs all post-hoc analyses.
+This scripts trains the main graphTRIP model on the primary dataset.
 
 Dependencies:
 - experiments/configs/graphtrip.json
@@ -12,8 +11,6 @@ Outputs:
 - outputs/graphtrip/transfer_atlas/aal/
 - outputs/graphtrip/attention_weights/
 - outputs/graphtrip/grail/
-- outputs/graphtrip/grail_posthoc/
-- outputs/graphtrip/test_biomarkers/
 
 Author: Hanna M. Tolle
 Date: 2025-05-31
@@ -161,61 +158,6 @@ def main(config_file, output_dir, verbose, debug, seed, config_id=None):
         run(exname, observer, config_updates)
     else:
         print(f"GRAIL experiment already exists in {ex_dir}.")
-
-    # # GRAIL posthoc ----------------------------------------------------------
-    # exname = 'grail_posthoc'
-    # ex_dir = os.path.join(output_dir, 'grail_posthoc')
-    # if not os.path.exists(ex_dir):
-    #     os.makedirs(ex_dir, exist_ok=True)
-    #     grail_dir = os.path.join(output_dir, 'grail')
-
-    #     # Compute fold-mean alignments
-    #     fold_dfs = []
-    #     for k in range(config['dataset']['num_folds']):
-    #         fold_df = pd.read_csv(os.path.join(grail_dir, f'k{k}_mean_alignments.csv'))
-    #         fold_dfs.append(fold_df)
-    #     mean_alignments = pd.concat(fold_dfs).groupby(level=0).mean()
-    #     mean_alignments.to_csv(os.path.join(ex_dir, 'mean_alignments.csv'))
-
-    #     # Analysis settings
-    #     filter_percentile = 75
-    #     num_seeds = 10
-    #     seed = 291
-
-    #     # Save analysis config
-    #     grail_posthoc_config = {
-    #         'filter_percentile': filter_percentile,
-    #         'num_seeds': num_seeds,
-    #         'seed': seed,
-    #     }
-    #     with open(os.path.join(ex_dir, 'config.json'), 'w') as f:
-    #         json.dump(grail_posthoc_config, f, indent=4)
-
-    #     # Run analysis
-    #     cluster_labels, features_filtered = grail_posthoc_analysis(mean_alignments,
-    #                                                                num_seeds, seed,
-    #                                                                filter_percentile)
-    #     # Save results
-    #     np.savetxt(os.path.join(ex_dir, 'cluster_labels.csv'), cluster_labels, delimiter=',')
-    #     with open(os.path.join(ex_dir, 'features_filtered.json'), 'w') as f:
-    #         json.dump(features_filtered, f, indent=4)
-    # else:
-    #     print(f"GRAIL posthoc experiment already exists in {ex_dir}.")
-
-    # # Test biomarkers ----------------------------------------------------------
-    # exname = 'test_biomarkers'
-    # ex_dir = os.path.join(output_dir, 'test_biomarkers')
-    # if not os.path.exists(ex_dir):
-    #     config_updates = {}
-    #     config_updates['output_dir'] = ex_dir
-    #     config_updates['weights_dir'] = weights_dir
-    #     config_updates['seed'] = seed
-    #     config_updates['verbose'] = verbose
-    #     config_updates['all_rsn_conns'] = False
-    #     config_updates['n_pca_components'] = 10
-    #     run(exname, observer, config_updates)
-    # else:
-    #     print(f"Biomarkers experiment already exists in {ex_dir}.")
 
 if __name__ == "__main__":
     """

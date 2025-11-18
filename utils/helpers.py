@@ -16,6 +16,8 @@ import importlib
 import logging
 from torch_geometric.data import Data
 import copy
+from typing import List, Optional
+import glob
 
 
 def rank_models(summary_df):
@@ -313,3 +315,248 @@ def sort_features(features):
     for group in groups:
         sorted_features.extend(group)
     return sorted_features
+
+# Results aggregation functions -----------------------------------------------
+
+def aggregate_prediction_results(
+    results_file: str,
+    merge_column: str = 'subject_id', 
+    subdir_name_pattern: str = 'seed_*'
+) -> pd.DataFrame:
+    """
+    Aggregates prediction CSVs from subdirectories by averaging numeric columns
+    aligned by a specific merge column (e.g., subject_id). 
+    
+    Args:
+        results_file: Output CSV file to read from or write to.
+        merge_column: The column name used to match rows across files (primary key).
+        subdir_name_pattern: Pattern to identify subdirectories containing results.
+    
+    Returns:
+        pd.DataFrame: The aggregated and averaged DataFrame.
+    """
+    # If the results_file exists, just load and return it
+    if os.path.exists(results_file):
+        print(f"Output file found at {results_file}. Loading existing results.")
+        return pd.read_csv(results_file)
+
+    # Otherwise, aggregate from subdirectories
+    base_dir = os.path.dirname(results_file)
+    file_name = os.path.basename(results_file)
+
+    # Find subdirectories matching the pattern
+    subdirs = [
+        d for d in glob.glob(os.path.join(base_dir, subdir_name_pattern))
+        if os.path.isdir(d)]
+
+    dataframes = []
+    for subdir in subdirs:
+        file_path = os.path.join(subdir, file_name)
+        if not os.path.exists(file_path):
+            print(f"Warning: File not found at {file_path}. Skipping.")
+            continue
+        try:
+            df = pd.read_csv(file_path)
+            if merge_column not in df.columns:
+                print(f"Warning: '{merge_column}' not found in {file_path}. Skipping.")
+                continue
+            dataframes.append(df)
+        except Exception as e:
+            print(f"Error reading {file_path}: {e}")
+
+    if not dataframes:
+        raise ValueError("No valid DataFrames were loaded. Check your paths and filenames.")
+
+    # Aggregate and average
+    combined_df = pd.concat(dataframes, ignore_index=True)
+    aggregated_df = combined_df.groupby(merge_column).mean(numeric_only=True).reset_index()
+
+    # Save to results_file
+    output_dir = os.path.dirname(results_file)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    aggregated_df.to_csv(results_file, index=False)
+    print(f"Aggregated results saved to {results_file}")
+
+    return aggregated_df
+
+def aggregate_importance_scores(
+    results_file: str,
+    merge_column: str = 'feature',
+    subdir_name_pattern: str = 'seed_*'
+) -> pd.DataFrame:
+    """
+    Aggregates importance CSVs from subdirectories by averaging the 'mean'
+    values per feature, and computes the std and standard error (se)
+    of the means for each feature.
+
+    Args:
+        results_file: Output CSV file to read from or write to.
+        merge_column: The column name used to match rows across files (primary key, default 'feature').
+        subdir_name_pattern: Pattern to identify subdirectories containing results.
+
+    Returns:
+        pd.DataFrame: Aggregated DataFrame with columns: feature, mean, std, se.
+    """
+
+    # If the results_file exists, just load and return it
+    if os.path.exists(results_file):
+        print(f"Output file found at {results_file}. Loading existing results.")
+        return pd.read_csv(results_file)
+
+    # Otherwise, aggregate from subdirectories
+    base_dir = os.path.dirname(results_file)
+    file_name = os.path.basename(results_file)
+
+    subdirs = [
+        d for d in glob.glob(os.path.join(base_dir, subdir_name_pattern))
+        if os.path.isdir(d)
+    ]
+
+    dataframes = []
+    for subdir in subdirs:
+        file_path = os.path.join(subdir, file_name)
+        if not os.path.exists(file_path):
+            print(f"Warning: File not found at {file_path}. Skipping.")
+            continue
+        try:
+            df = pd.read_csv(file_path)
+            # Require at least merge_column and 'mean'
+            if merge_column not in df.columns or "mean" not in df.columns:
+                print(f"Warning: Required columns not found in {file_path}. Skipping.")
+                continue
+            # Only keep feature and mean
+            df = df[[merge_column, "mean"]]
+            dataframes.append(df)
+        except Exception as e:
+            print(f"Error reading {file_path}: {e}")
+
+    if not dataframes:
+        raise ValueError("No valid DataFrames were loaded. Check your paths and filenames.")
+
+    combined_df = pd.concat(dataframes, ignore_index=True)
+
+    # Group by feature and calculate mean, std, and se for 'mean' values per feature
+    agg = combined_df.groupby(merge_column)["mean"].agg(
+        mean="mean", std="std", count="count"
+    ).reset_index()
+    agg["se"] = agg["std"] / np.sqrt(agg["count"])
+    agg = agg[[merge_column, "mean", "std", "se"]]  # drop 'count'
+
+    # Save to results_file
+    output_dir = os.path.dirname(results_file)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    agg.to_csv(results_file, index=False)
+    print(f"Aggregated importance results saved to {results_file}")
+
+    return agg
+
+def load_test_fold_indices(weights_base_dir, subdir_name_pattern='seed_*'):
+    """
+    Loads test_fold_indices.csv from all subdirectories matching a pattern in weights_base_dir.
+    Returns a dictionary mapping subdir names to the loaded indices.
+    """
+    test_indices_dict = {}
+    subdirs = sorted([
+        d for d in glob.glob(os.path.join(weights_base_dir, subdir_name_pattern))
+        if os.path.isdir(d)
+    ])
+    for subdir in subdirs:
+        test_indices_path = os.path.join(subdir, 'test_fold_indices.csv')
+        subdir_name = os.path.basename(subdir)
+        if os.path.exists(test_indices_path):
+            test_indices = np.loadtxt(test_indices_path, dtype=int)
+            test_indices_dict[subdir_name] = test_indices
+        else:
+            print(f"Warning: {test_indices_path} not found, skipping {subdir_name}")
+    return test_indices_dict, subdirs
+
+def aggregate_attention_results(results_base_dir, subdir_name_pattern: str = 'seed_*'):
+    """
+    Aggregates attention, dominance analysis, and RSN attention results from multiple subdirectories.
+    If the aggregated dataframes are already present in results_base_dir, loads them.
+    Otherwise, computes the means across subdirectories and saves them (does NOT overwrite).
+    
+    Returns
+    -------
+    attn_weights_df: DataFrame
+        Averaged mean_attention_weights_original across subdirectories.
+    da_df: DataFrame
+        Averaged da_receptors_utaxis_stats across subdirectories.
+    rsn_attn_df: DataFrame
+        Averaged mean_rsn_attention_weights_original across subdirectories.
+    """
+    attn_weights_file = os.path.join(results_base_dir, 'mean_attention_weights_original.csv')
+    da_file = os.path.join(results_base_dir, 'da_receptors_utaxis_stats.csv')
+    rsn_attn_file = os.path.join(results_base_dir, 'mean_rsn_attention_weights_original.csv')
+
+    # Try to load if already exists
+    files_exist = all([os.path.exists(f) for f in [attn_weights_file, da_file, rsn_attn_file]])
+    if files_exist:
+        attn_weights_df = pd.read_csv(attn_weights_file)
+        da_df = pd.read_csv(da_file, index_col=0)
+        rsn_attn_df = pd.read_csv(rsn_attn_file)
+        return attn_weights_df, da_df, rsn_attn_df
+
+    # Otherwise, aggregate from all subdirs
+    subdirs = sorted([
+        d for d in glob.glob(os.path.join(results_base_dir, subdir_name_pattern))
+        if os.path.isdir(d)
+    ])
+
+    attn_weights_dfs = []
+    da_dfs = []
+    rsn_attn_dfs = []
+    for subdir in subdirs:
+        # Mean attention weights, original context
+        attn_file = os.path.join(subdir, 'mean_attention_weights_original.csv')
+        if os.path.exists(attn_file):
+            attn_weights = pd.read_csv(attn_file)
+            attn_weights_dfs.append(attn_weights)
+        # Dominance analysis results
+        da_subfile = os.path.join(subdir, 'da_receptors_utaxis_stats.csv')
+        if os.path.exists(da_subfile):
+            da_results = pd.read_csv(da_subfile, index_col=0)
+            da_dfs.append(da_results)
+        # Mean attention weights per resting-state network
+        rsn_file = os.path.join(subdir, 'mean_rsn_attention_weights_original.csv')
+        if os.path.exists(rsn_file):
+            rsn_attn = pd.read_csv(rsn_file)
+            rsn_attn_dfs.append(rsn_attn)
+
+    # ATTENTION WEIGHTS
+    attn_weights_df = None
+    if attn_weights_dfs:
+        attn_weights_df = pd.concat(attn_weights_dfs, axis=0, ignore_index=False)
+        attn_weights_df = attn_weights_df.groupby(attn_weights_df.index).mean().reset_index(drop=True)
+        # Save if not exists
+        if not os.path.exists(attn_weights_file):
+            attn_weights_df.to_csv(attn_weights_file, index=False)
+
+    # DOMINANCE ANALYSIS (DA)
+    da_df = None
+    if da_dfs:
+        df_concat = pd.concat(da_dfs, axis=0)
+        numeric_cols = df_concat.select_dtypes(include=[np.number]).columns
+        da_numeric_mean = df_concat[numeric_cols].groupby(df_concat.index).mean()
+        non_numeric_cols = [col for col in df_concat.columns if col not in numeric_cols]
+        if non_numeric_cols:
+            da_non_numeric = df_concat[non_numeric_cols].groupby(df_concat.index).first()
+            da_df = pd.concat([da_numeric_mean, da_non_numeric], axis=1)
+            da_df = da_df[df_concat.columns]
+        else:
+            da_df = da_numeric_mean
+        # Save if not exists
+        if not os.path.exists(da_file):
+            da_df.to_csv(da_file) 
+
+    # RSN ATTENTION WEIGHTS
+    rsn_attn_df = None
+    if rsn_attn_dfs:
+        rsn_attn_df = pd.concat(rsn_attn_dfs, axis=0, ignore_index=False)
+        rsn_attn_df = rsn_attn_df.groupby(rsn_attn_df.index).mean().reset_index(drop=True)
+        if not os.path.exists(rsn_attn_file):
+            rsn_attn_df.to_csv(rsn_attn_file, index=False)
+
+    return attn_weights_df, da_df, rsn_attn_df
