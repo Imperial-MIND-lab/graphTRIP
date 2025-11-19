@@ -1,7 +1,7 @@
-{ 
-    "seed": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-    "output_dir": ["outputs/graphtrip_elasticnet"],
-    "save_weights": [true],
+{   
+    "seed": [0],
+    "output_dir": ["outputs/graphtrip_with_simple_mlps"],
+    "save_weights": [false],
     "lr": [0.001],
     "num_epochs": [300],
     "num_z_samples": [1],
@@ -32,11 +32,11 @@
       "model_type": ["RegressionMLP"],
       "params": {
         "dropout": [0.25],
-        "hidden_dim": [128],
+        "hidden_dim": [32],
         "layernorm": [false],
         "mse_reduction": ["sum"],
-        "num_layers": [4],
-        "output_dim": [1],
+        "num_layers": [1],
+        "output_dim": [1, 2],
         "reg_strength": [0.01]
       }
     },

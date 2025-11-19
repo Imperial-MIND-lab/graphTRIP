@@ -40,7 +40,7 @@ def L1_reg(model):
     reg_loss = 0.
     for name, param in model.named_parameters():
         if 'weight' in name:
-            reg_loss += torch.norm(param, p=1)
+            reg_loss += torch.sum(torch.abs(param))
     return reg_loss
 
 def L2_reg(model):
@@ -48,8 +48,17 @@ def L2_reg(model):
     l2_loss = 0.
     for name, param in model.named_parameters():
         if 'weight' in name:
-            l2_loss += torch.norm(param, p=2)
+            l2_loss += torch.sum(torch.square(param))
     return l2_loss
+
+def elasticnet_reg(model, l1_ratio: float = 0.5):
+    '''Elasticnet regularization.'''
+    reg_loss = 0.
+    for name, param in model.named_parameters():
+        if 'weight' in name:
+            reg_loss += l1_ratio * torch.sum(torch.abs(param))
+            reg_loss += (1 - l1_ratio) * torch.sum(torch.square(param))
+    return reg_loss
 
 def make_node_ids(num_nodes: int, batch_size: int):
     '''
@@ -249,7 +258,7 @@ class RegressionMLP(StandardMLP):
         self.mse_reduction = mse_reduction
 
     def penalty(self):
-        return self.reg_strength * L2_reg(self)
+        return self.reg_strength * elasticnet_reg(self)
     
     def loss(self, ypred, ytrue):
         loss = torch.nn.functional.mse_loss(ypred, ytrue, reduction=self.mse_reduction)
