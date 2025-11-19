@@ -35,8 +35,8 @@
         "hidden_dim": [32],
         "layernorm": [false],
         "mse_reduction": ["sum"],
-        "num_layers": [1],
-        "output_dim": [1, 2],
+        "num_layers": [2, 3],
+        "output_dim": [1],
         "reg_strength": [0.01]
       }
     },
