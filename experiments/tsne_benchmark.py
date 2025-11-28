@@ -34,9 +34,26 @@ class TSNEDataset(torch.utils.data.Dataset):
     def __init__(self, embeddings, targets, clinical_data, subject_ids):
         assert embeddings.shape[0] == targets.shape[0] == clinical_data.shape[0], \
             "Embeddings, targets and clinical data must have the same number of samples."
-        self.embeddings = torch.tensor(embeddings, dtype=torch.float32)
-        self.targets = torch.tensor(targets, dtype=torch.float32)
-        self.clinical_data = torch.tensor(clinical_data, dtype=torch.float32)
+        
+        if isinstance(embeddings, torch.Tensor):
+            self.embeddings = embeddings.clone().detach().to(dtype=torch.float32)
+        else:
+            self.embeddings = torch.tensor(embeddings, dtype=torch.float32)
+        
+        if isinstance(targets, torch.Tensor):
+            self.targets = targets.clone().detach().to(dtype=torch.float32)
+        else:
+            self.targets = torch.tensor(targets, dtype=torch.float32)
+        
+        # Match MLP output shape
+        if self.targets.dim() == 1:
+            self.targets = self.targets.unsqueeze(-1)
+        
+        if isinstance(clinical_data, torch.Tensor):
+            self.clinical_data = clinical_data.clone().detach().to(dtype=torch.float32)
+        else:
+            self.clinical_data = torch.tensor(clinical_data, dtype=torch.float32)
+        
         self.subject_ids = subject_ids
 
     def __len__(self):
@@ -71,6 +88,7 @@ def cfg():
     num_epochs = 200      # Number of epochs to train
     n_components = 3      # Number of t-SNE components
     perplexity = 30       # t-SNE perplexity
+    balance_attrs = None  # attrs to balance on for k-fold CV. If None, no balancing.
 
 # Match configs function -------------------------------------------------------
 def match_config(config: Dict) -> Dict:
@@ -285,7 +303,14 @@ def run(_config):
     data = load_data()
     assert _config['perplexity'] < len(data), "perplexity must be less than the number of samples."
     tsne_dataset = create_tsne_dataset(data)
-    train_loaders, val_loaders, test_loaders, test_indices = get_tsne_dataloaders(tsne_dataset, seed=seed)
+    
+    # Get dataloaders with optional balancing
+    balance_attrs = _config['balance_attrs']
+    if balance_attrs is not None:
+        train_loaders, val_loaders, test_loaders, test_indices = get_balanced_tsne_dataloaders(
+            tsne_dataset, data, balance_attrs, seed=seed)
+    else:
+        train_loaders, val_loaders, test_loaders, test_indices = get_tsne_dataloaders(tsne_dataset, seed=seed)
 
     device = torch.device(_config['device'])
     logger.info(f'Using device: {device}')

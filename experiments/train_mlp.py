@@ -56,6 +56,7 @@ def cfg():
     # Training configurations
     lr = 0.001            # Learning rate.
     num_epochs = 200      # Number of epochs to train.
+    balance_attrs = None  # attrs to balance on for k-fold CV. If None, no balancing.
 
 # Match configs function -------------------------------------------------------
 def match_config(config: Dict) -> Dict:
@@ -98,6 +99,16 @@ def get_x(batch, device):
     x = torch.cat([graph_features, node_features, edge_features], dim=1)
     return x.to(device)
 
+@ex.capture
+def get_dataloaders(data, balance_attrs, seed):
+    if balance_attrs is not None:
+        train_loaders, val_loaders, test_loaders, test_indices, mean_std \
+            = get_balanced_kfold_dataloaders(data, balance_attrs=balance_attrs, seed=seed)
+    else:
+        train_loaders, val_loaders, test_loaders, test_indices, mean_std \
+            = get_kfold_dataloaders(data, seed=seed)
+    return train_loaders, val_loaders, test_loaders, test_indices, mean_std
+
 # Main function ----------------------------------------------------------------
 @ex.automain
 def run(_config):
@@ -116,7 +127,7 @@ def run(_config):
 
     # Get dataloaders
     data = load_data()
-    train_loaders, val_loaders, test_loaders, test_indices, _ = get_kfold_dataloaders(data, seed=seed)
+    train_loaders, val_loaders, test_loaders, test_indices, _ = get_dataloaders(data, seed=seed)
     device = torch.device(_config['device'])
     logger.info(f'Using device: {device}')
 

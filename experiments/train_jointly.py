@@ -59,6 +59,7 @@ def cfg():
     num_epochs = 300      # Number of epochs to train.
     num_z_samples = 1     # 0 for training MLP on the means of VGAE latent variables.
     alpha = 0.5           # Loss = alpha*vgae_loss + (1-alpha)*mlp_loss
+    balance_attrs = None  # attrs to balance on for k-fold CV. If None, no balancing.
 
 # Match configs function -------------------------------------------------------
 def match_config(config: Dict) -> Dict:
@@ -83,6 +84,16 @@ def test_vgae_mlp(vgae, mlp, loader, device, num_z_samples):
                                                         device=device, num_z_samples=num_z_samples)
     return vgae_test_loss, mlp_test_loss
 
+@ex.capture
+def get_dataloaders(data, balance_attrs, seed):
+    if balance_attrs is not None:
+        train_loaders, val_loaders, test_loaders, test_indices, mean_std \
+            = get_balanced_kfold_dataloaders(data, balance_attrs=balance_attrs, seed=seed)
+    else:
+        train_loaders, val_loaders, test_loaders, test_indices, mean_std \
+            = get_kfold_dataloaders(data, seed=seed)
+    return train_loaders, val_loaders, test_loaders, test_indices, mean_std
+
 # Main function ----------------------------------------------------------------
 @ex.automain
 def run(_config):
@@ -103,7 +114,7 @@ def run(_config):
     # Get dataloaders
     data = load_data()
     train_loaders, val_loaders, test_loaders, test_indices, mean_std \
-        = get_kfold_dataloaders(data, seed=seed)
+        = get_dataloaders(data, seed=seed)
     device = torch.device(_config['device'])
     logger.info(f'Using device: {device}')
 

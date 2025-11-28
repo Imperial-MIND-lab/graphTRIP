@@ -98,8 +98,11 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
         if os.path.exists(add_project_root(ex_dir)):
             print(f"Experiment {exname} already exists in {ex_dir}")
         else:
-            # Use the same MLP and dataset configs as the main model
+            # Use the same training, MLP and dataset configs as the main model
             config_updates = {}
+            config_updates['balance_attrs'] = config['balance_attrs']
+            config_updates['lr'] = config['lr']
+            config_updates['num_epochs'] = config['num_epochs']
             config_updates['mlp_model'] = copy.deepcopy(config['mlp_model'])
             config_updates['dataset'] = copy.deepcopy(config['dataset'])
 
@@ -128,8 +131,11 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
         if os.path.exists(add_project_root(ex_dir)):
             print(f"Experiment {exname} already exists in {ex_dir}")
         else:
-            # Use the same MLP and dataset configs as the main model
+            # Use the same training, MLP and dataset configs as the main model
             config_updates = {}
+            config_updates['balance_attrs'] = config['balance_attrs']
+            config_updates['lr'] = config['lr']
+            config_updates['num_epochs'] = config['num_epochs']
             config_updates['mlp_model'] = copy.deepcopy(config['mlp_model'])
             config_updates['dataset'] = copy.deepcopy(config['dataset'])
 
