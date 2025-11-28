@@ -112,6 +112,7 @@ def main():
     parser.add_argument('--output_dir', type=str, default=None, help='The name of the output directory (for FileStorageObserver).')
     parser.add_argument('--jobid', type=int, default=None, help='Job index (for array jobs).')
     parser.add_argument('--config_json', type=str, default=None, help='JSON file with config updates or ranges, located in experiments/configs/.')
+    parser.add_argument('--seed', type=int, default=None, help='Random seed for reproducibility.')
     args = parser.parse_args()
     
     if args.config_json is None:
@@ -142,6 +143,14 @@ def main():
 
     if args.jobid is not None:
         config_updates['output_dir'] = os.path.join(config_updates['output_dir'], f'job_{args.jobid}')
+    
+    # Add seed to config_updates if provided
+    if args.seed is not None:
+        if 'seed' in config_updates:
+            print(f"Warning: Seed {args.seed} already specified in config. Overwriting with {config_updates['seed']}.")
+        config_updates['seed'] = args.seed
+        # Add seed directory (inside job_dir if jobid is specified)
+        config_updates['output_dir'] = os.path.join(config_updates['output_dir'], f'seed_{args.seed}')
     
     # Set up experiment and observer
     run(args.exname, args.observer, config_updates)

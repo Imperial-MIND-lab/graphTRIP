@@ -5,6 +5,7 @@ __pycache__/
 # Outputs and weights
 outputs/
 notebooks/figures/
+notebooks/config_tables/
 
 # Unused code
 junk/
