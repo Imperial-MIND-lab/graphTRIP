@@ -11,6 +11,10 @@ License: BSD-3-Clause
 import sys
 sys.path.append('graphTRIP/')
 
+# # non-interactive backend
+# import matplotlib
+# matplotlib.use('Agg') 
+
 from sacred import Experiment
 from experiments.ingredients.data_ingredient import * 
 from experiments.ingredients.vgae_ingredient import * 
@@ -103,6 +107,7 @@ def cfg(dataset):
     # Training configurations
     logit_C = 1.0         # Inverse reg. strength for logit (smaller = stronger reg)
     n_pca_components = 0  # Performs PCA on Z if n_pca_components > 0
+    n_permutations = 1000 # Number of permutations for AUC permutation test
 
 # Match configs function -------------------------------------------------------
 def match_config(config: Dict) -> Dict:
@@ -229,8 +234,13 @@ def run(_config):
         precision = precision_score(y_test, y_pred_test, average='binary', zero_division=0)
         recall = recall_score(y_test, y_pred_test, average='binary', zero_division=0)
         f1 = f1_score(y_test, y_pred_test, average='binary', zero_division=0)
-        roc_auc = roc_auc_score(y_test, y_prob_test)
-        
+        try:
+            roc_auc = roc_auc_score(y_test, y_prob_test)
+        except ValueError:
+            # roc_auc_score can fail if y_prob_test has only one class
+            roc_auc = np.nan
+            logger.warning(f"Fold {k}: roc_auc_score failed, setting to NaN")
+            
         # Log metrics for this fold
         ex.log_scalar(f'fold{k}/accuracy', accuracy)
         ex.log_scalar(f'fold{k}/precision', precision)
@@ -268,7 +278,7 @@ def run(_config):
         pca_var_explained_df = pd.DataFrame(pca_var_explained)
         pca_var_explained_df.to_csv(os.path.join(output_dir, 'pca_var_explained.csv'), index=False)
 
-    # Evaluate overall results
+    # Evaluate overall results ----------------------------------------------------------
     y_true = all_outputs_df['label'].values
     y_prob = all_outputs_df['prediction'].values
     y_pred = (y_prob > 0.5).astype(int)
@@ -295,8 +305,58 @@ def run(_config):
     logger.info(f"Final results: accuracy={accuracy:.4f}, precision={precision:.4f}, \
                  recall={recall:.4f}, f1={f1:.4f}, roc_auc={roc_auc:.4f}, \
                  logit_C={logit_C:.4f}, n_pca_components={n_pca_components}")
+    
+    # Permutation test for ROC AUC --------------------------------------------
+    n_permutations = _config['n_permutations']  
+    rng = np.random.default_rng(seed)
+    perm_aucs = np.empty(n_permutations)
+    for i in range(n_permutations):
+        # Shuffle labels (treatment assignment) to simulate random assignment
+        y_perm = rng.permutation(y_true)
+        try:
+            perm_aucs[i] = roc_auc_score(y_perm, y_prob)
+        except ValueError:
+            # roc_auc_score can fail if y_perm has only one class
+            perm_aucs[i] = np.nan
 
-    # Classification evaluation plots
+    # Drop any failed permutations (should be rare for balanced labels)
+    perm_aucs = perm_aucs[~np.isnan(perm_aucs)]
+
+    # One-sided p-value: probability AUC_null >= AUC_observed
+    p_value = (np.sum(perm_aucs >= roc_auc) + 1) / (len(perm_aucs) + 1)
+
+    # Save permutation AUCs
+    perm_auc_path = os.path.join(output_dir, 'perm_aucs.csv')
+    pd.DataFrame({'perm_auc': perm_aucs}).to_csv(perm_auc_path, index=False)
+
+    # Log p-value
+    logger.info(f"Permutation test: observed AUC = {roc_auc:.4f}, "
+                f"null mean = {np.mean(perm_aucs):.4f}, "
+                f"null sd = {np.std(perm_aucs):.4f}, "
+                f"p = {p_value:.4g}, n_perm = {len(perm_aucs)}")
+
+    # Histogram of null AUCs with observed AUC marked
+    plt.figure(figsize=(8, 6))
+    sns.histplot(perm_aucs, bins=50, kde=True)
+    plt.axvline(roc_auc, linestyle='--', linewidth=2,
+                color='red', label=f'Observed AUC = {roc_auc:.3f}')
+    plt.xlabel('AUC under label permutation')
+    plt.ylabel('Frequency')
+    plt.title(
+        f'Permutation test for propensity AUC\n'
+        f'Observed = {roc_auc:.3f}, '
+        f'Null mean = {np.mean(perm_aucs):.3f}, '
+        f'SD = {np.std(perm_aucs):.3f}, '
+        f'p = {p_value:.3g}, '
+        f'n_perm = {len(perm_aucs)}'
+    )
+    plt.legend(loc='upper right')
+    plt.tight_layout()
+    perm_hist_path = os.path.join(output_dir, 'auc_permutation_hist.png')
+    plt.savefig(perm_hist_path)
+    image_files.append(perm_hist_path)
+
+    # Classification evaluation plots --------------------------------------------
     # 1. Confusion Matrix
     plt.figure(figsize=(8, 6))
     cm = confusion_matrix(y_true, y_pred)
