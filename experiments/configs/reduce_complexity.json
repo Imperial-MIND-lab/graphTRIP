@@ -1,10 +1,11 @@
 {   
-    "output_dir": ["outputs/reduce_complexity"],
+    "output_dir": ["outputs/reduce_complexity_L2reg"],
     "save_weights": [false],
     "lr": [0.001],
     "num_epochs": [300],
     "num_z_samples": [1],
     "alpha": [0.5],
+    "balance_attrs": [null, ["Condition"]],
     "dataset": {
       "study": ["psilodep2"],
       "session": ["before"],
@@ -14,8 +15,8 @@
       "num_folds": [7],
       "val_split": [0.0],
       "graph_attrs": [
-        ["QIDS_Before", "BDI_Before", "Condition", "Stop_SSRI"],
-        ["QIDS_Before", "BDI_Before", "Condition"]
+        ["QIDS_Before", "BDI_Before", "Condition"],
+        ["QIDS_Before", "BDI_Before", "Condition", "Stop_SSRI"]
       ],
       "context_attrs": [[]],
       "node_attrs": [["5-HT1A_Believeau-3", "5-HT2A_Believeau-3", "5-HTT_Believeau-3"]],
@@ -34,10 +35,10 @@
       "model_type": ["RegressionMLP"],
       "params": {
         "dropout": [0.25],
-        "hidden_dim": [16, 32, 64],
+        "hidden_dim": [32, 64],
         "layernorm": [false],
         "mse_reduction": ["sum"],
-        "num_layers": [2, 3, 4],
+        "num_layers": [3, 4],
         "output_dim": [1],
         "reg_strength": [0.01]
       }
