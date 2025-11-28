@@ -258,7 +258,7 @@ class RegressionMLP(StandardMLP):
         self.mse_reduction = mse_reduction
 
     def penalty(self):
-        return self.reg_strength * elasticnet_reg(self)
+        return self.reg_strength * L2_reg(self)
     
     def loss(self, ypred, ytrue):
         loss = torch.nn.functional.mse_loss(ypred, ytrue, reduction=self.mse_reduction)
