@@ -3,7 +3,7 @@
 #PBS -l select=1:ncpus=4:mem=4gb
 #PBS -l walltime=6:00:00
 #PBS -N reduce_complexity
-#PBS -J 0-863  # Total jobs = MAX_NUM_CONFIGS × number_of_seeds (e.g., 10 configs × 10 seeds = 100 jobs)
+#PBS -J 0-863 
 
 module load anaconda3/personal
 source activate graphtrip
