@@ -8,6 +8,7 @@ Date: 2024-11-02
 import sys
 sys.path.append('../')
 
+import abc
 from typing import Dict, Optional
 import torch
 from torch_geometric.utils import to_dense_adj, scatter, to_dense_batch
@@ -1044,6 +1045,89 @@ class GraphTransformerPooling(torch.nn.Module):
     def penalty(self):
         return self.reg_strength * L2_reg(self)
 
+# Untrainable pooling layers ---------------------------------------------------
+'''
+Pooling layers without trainable parameters.
+'''
+
+class UntrainablePooling(torch.nn.Module, metaclass=abc.ABCMeta):
+    '''
+    Base class for untrainable pooling layers.
+    '''
+    HANDLES_CONTEXT = False
+    @classmethod
+    def can_handle_context(cls):
+        return cls.HANDLES_CONTEXT
+    
+    def __init__(self, pooling_dim: int):
+        super().__init__()
+        self.output_dim = pooling_dim
+
+    @abc.abstractmethod
+    def forward(self, z, batch_index):
+        pass
+
+    def penalty(self):
+        return 0.
+
+class DummyPooling(UntrainablePooling):
+    '''
+    Placeholder for a pooling layer; does not perform any pooling.
+    '''
+    def forward(self, z, batch_index):
+        return z
+
+class MeanPooling(UntrainablePooling):
+    """
+    Untrainable global mean pooling over nodes in each graph.
+    Output shape: [num_graphs, pooling_dim].
+    """
+    def __init__(self, pooling_dim: int):
+        super().__init__(pooling_dim)
+        self.output_dim = pooling_dim
+
+    def forward(self, z, batch_index):
+        # z: [num_nodes, D], batch_index: [num_nodes]
+        # scatter will aggregate per graph index
+        pooled = scatter(z, batch_index, dim=0, reduce='mean')
+        return pooled
+
+class MeanStdPooling(UntrainablePooling):
+    """
+    Concatenate per-graph mean and std of node embeddings.
+    Output dim: 2 * pooling_dim.
+    """
+    def __init__(self, pooling_dim: int, eps: float = 1e-6):
+        super().__init__(pooling_dim)
+        self.eps = eps
+        self.output_dim = 2 * pooling_dim
+
+    def forward(self, z, batch_index):
+        # z: [num_nodes, D], batch_index: [num_nodes]
+        mean = scatter(z, batch_index, dim=0, reduce='mean')  # [B, D]
+        mean_sq = scatter(z * z, batch_index, dim=0, reduce='mean')  # E[z^2]
+        var = (mean_sq - mean ** 2).clamp_min(self.eps)
+        std = torch.sqrt(var)
+        pooled = torch.cat([mean, std], dim=-1)  # [B, 2D]
+        return pooled
+
+class DeepSetsMomentPooling(UntrainablePooling):
+    """
+    Simple DeepSets-style pooling using first and second moments:
+    concat(mean(z), mean(z^2)).
+    Output dim: 2 * pooling_dim.
+    """
+    def __init__(self, pooling_dim: int):
+        super().__init__(pooling_dim)
+        self.output_dim = 2 * pooling_dim
+
+    def forward(self, z, batch_index):
+        # [num_nodes, D], [num_nodes]
+        mean = scatter(z, batch_index, dim=0, reduce='mean')
+        mean_sq = scatter(z * z, batch_index, dim=0, reduce='mean')
+        pooled = torch.cat([mean, mean_sq], dim=-1)  # [B, 2D]
+        return pooled
+    
 # Decoders ---------------------------------------------------------------------
 '''
 Decoders take latent variables and return original node features or edge features.
@@ -1594,6 +1678,27 @@ class NodeLevelVGAE(torch.nn.Module):
             if module is not None:
                 for param in module.parameters():
                     param.requires_grad = True
+
+    def reinit_pooling(self, new_pooling_cfg: dict = None):
+        ''' Reinitialise the pooling, possibly with new config.'''
+        if new_pooling_cfg is not None:
+            # Check if new configs are valid
+            updated_params = self._get_module_params(new_pooling_cfg)
+            updated_params['pooling_dim'] = self.params['latent_dim']
+            pooling_class = globals()[new_pooling_cfg['model_type']]
+            if pooling_class.can_handle_context():
+                updated_params['num_context_attrs'] = self.params['num_context_attrs']
+            elif self.params['num_context_attrs'] > 0:
+                raise ValueError(f"Pooling layer '{new_pooling_cfg['model_type']}' \
+                                   cannot handle context attributes. " \
+                                 f"Set 'num_context_attrs' to 0 or change pooling layer.")
+            self.pooling = init_model(new_pooling_cfg['model_type'], new_pooling_cfg['params'])
+        else:
+            # If no new config, we don't need to check them again
+            self.pooling = init_model(self.pooling_cfg['model_type'], self.pooling_cfg['params'])
+        # Update readout dimension and modules list
+        self.readout_dim = self.pooling.output_dim
+        self.modules[2] = self.pooling
     
     def penalty(self):
         reg_loss = sum(m.penalty() for m in self.modules if m is not None)     

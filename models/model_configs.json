@@ -78,6 +78,30 @@
             "reduce": "mean"
         }
     },
+    "DummyPooling": {
+        "required_params": [],
+        "optional_params": {
+            "pooling_dim": null
+        }
+    },
+    "MeanPooling": {
+        "required_params": [],
+        "optional_params": {
+            "pooling_dim": null
+        }
+    },
+    "MeanStdPooling": {
+        "required_params": [],
+        "optional_params": {
+            "pooling_dim": null
+        }
+    },
+    "DeepSetsMomentPooling": {
+        "required_params": [],
+        "optional_params": {
+            "pooling_dim": null
+        }
+    },
     "DenseEncoder": {
         "required_params": ["latent_dim"],
         "optional_params": {
