@@ -25,12 +25,8 @@ sys.path.append("../")
 import os
 import copy
 import argparse
-import json
-import pandas as pd
-import numpy as np
 from utils.files import add_project_root
 from utils.configs import load_configs_from_json, fetch_job_config
-from utils.statsalg import grail_posthoc_analysis
 from experiments.run_experiment import run
 
 
@@ -87,6 +83,7 @@ def main(config_file, output_dir, verbose, debug, seed, config_id=None):
     if not os.path.exists(weights_dir):
         config_updates = copy.deepcopy(config)
         config_updates['output_dir'] = weights_dir
+        config_updates['save_weights'] = True
         run(exname, observer, config_updates)
     else:
         print(f"graphTRIP experiment already exists in {weights_dir}.")
@@ -125,6 +122,7 @@ def main(config_file, output_dir, verbose, debug, seed, config_id=None):
             config_updates['num_epochs'] = 0 # no finetuning
             config_updates['output_dir'] = ex_dir
             config_updates['weights_dir'] = weights_dir
+            config_updates['save_weights'] = False 
 
             run(exname, observer, config_updates)
         else:
@@ -158,6 +156,40 @@ def main(config_file, output_dir, verbose, debug, seed, config_id=None):
         run(exname, observer, config_updates)
     else:
         print(f"GRAIL experiment already exists in {ex_dir}.")
+
+    # Train linear regression head on VGAE representations ------------------------
+    exname = 'train_linreg_on_z'
+    ex_dir = os.path.join(output_dir, 'linreg_on_z', f'seed_{seed}')
+    if not os.path.exists(ex_dir):
+        
+        # Training configurations
+        config_updates = {}
+        config_updates['ridge_alpha'] = 1.0    # standard setting
+        config_updates['n_pca_components'] = 0 # no PCA dimensionality reduction
+
+        # Other settings
+        config_updates['output_dir'] = ex_dir
+        config_updates['weights_dir'] = weights_dir
+        config_updates['seed'] = seed
+        config_updates['verbose'] = verbose
+        config_updates['save_weights'] = False 
+        run(exname, observer, config_updates)
+    else:
+        print(f"Linear regression head experiment already exists in {ex_dir}.")
+
+    # Ablation analysis: train VGAE with a regression head end-to-end ------------------------
+    exname = 'train_jointly'
+    ex_dir = os.path.join(output_dir, 'vgae_with_regression_head', f'seed_{seed}')
+    if not os.path.exists(ex_dir):
+        config_updates = copy.deepcopy(config)
+        config_updates['mlp_model']['params']['num_layers'] = 1 # no hidden layers
+        config_updates['output_dir'] = ex_dir
+        config_updates['seed'] = seed
+        config_updates['verbose'] = verbose
+        config_updates['save_weights'] = False 
+        run(exname, observer, config_updates)
+    else:
+        print(f"Train VGAE with regression head experiment already exists in {ex_dir}.")
 
 if __name__ == "__main__":
     """
