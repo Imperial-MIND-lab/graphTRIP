@@ -11,6 +11,8 @@ notebooks/config_tables/
 junk/
 notebooks/sandbox.ipynb
 notebooks/print_models.ipynb
+notebooks/graphormer.ipynb
+notebooks/graphormer_figures.ipynb
 
 # VScode degugging configs
 .vscode/
@@ -18,3 +20,7 @@ experiments/configs/dbg.json
 
 # Data
 data/
+
+# Helper bash scripts
+scp.sh
+
