@@ -48,12 +48,12 @@ def main(config_file, output_dir, verbose, debug, seed, jobid, config_id=0):
         config['num_epochs'] = 2
 
     # Job ID determines the fold to train (must be 0 <= jobid < num_folds)
+    num_folds_loocv = 42 # 42 patients in the dataset
     if jobid is None:
         this_k = None # train all folds sequentially
     else:
-        num_folds = config['dataset']['num_folds']
-        if jobid < 0 or jobid >= num_folds:
-            raise ValueError(f"Job ID must be 0 <= jobid < {num_folds}")
+        if jobid < 0 or jobid >= num_folds_loocv:
+            raise ValueError(f"Job ID must be 0 <= jobid < {num_folds_loocv}")
         this_k = jobid
 
     # Train VGAE (unsupervised training) ---------------------------------------
@@ -72,7 +72,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid, config_id=0):
 
     # Train with LOOCV
     config_updates['this_k'] = this_k
-    config_updates['dataset']['num_folds'] = 42 # 42 patients in the dataset
+    config_updates['dataset']['num_folds'] = num_folds_loocv
     config_updates['dataset']['batch_size'] = 1
     config_updates['dataset']['val_split'] = 0.
 
