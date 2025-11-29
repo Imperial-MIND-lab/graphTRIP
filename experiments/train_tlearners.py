@@ -30,8 +30,12 @@ import pandas as pd
 import numpy as np
 import logging
 import matplotlib.pyplot as plt
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Ridge, ElasticNet
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.decomposition import PCA
 from typing import Dict
+from sklearn.preprocessing import StandardScaler
 
 from utils.files import add_project_root
 from utils.helpers import fix_random_seed, get_logger, check_weights_exist
@@ -45,39 +49,6 @@ ex = Experiment('train_tlearners', ingredients=[data_ingredient,
                                               vgae_ingredient])
 logger = get_logger()
 ex.logger = logger
-
-# Helper functions ------------------------------------------------------------
-def extract_latent_representations(vgae, data, device):
-    '''
-    Extracts latent representations (z) from a VGAE for the given data.
-    
-    Parameters:
-    ----------
-    vgae: Trained VGAE model
-    data: Dataset or list of data samples
-    device: torch device
-    
-    Returns:
-    -------
-    z: numpy array of shape (n_samples, latent_dim) - latent representations
-    y: numpy array of shape (n_samples,) - target values
-    clinical_data: numpy array of shape (n_samples, n_clinical_features) - clinical data
-    subject_ids: numpy array of shape (n_samples,) - subject IDs
-    '''
-    vgae = vgae.eval().to(device)
-    with torch.no_grad():
-        batch = next(iter(DataLoader(data, batch_size=len(data), shuffle=False))).to(device)
-        context = get_context(batch)
-        out = vgae(batch)
-        z = vgae.readout(out.mu, context, batch.batch)
-        
-        # Convert to numpy
-        z = z.cpu().numpy()
-        y = batch.y.cpu().numpy().flatten()
-        clinical_data = batch.graph_attr.cpu().numpy()
-        subject_ids = batch.subject.cpu().numpy().flatten()
-    
-    return z, y, clinical_data, subject_ids
 
 # Define configurations --------------------------------------------------------
 @ex.config
@@ -101,7 +72,9 @@ def cfg(dataset):
                         'test_fold_indices': ['test_fold_indices.csv']} 
 
     # Training configurations
-    ridge_alpha = 1.0     # Regularization strength for Ridge regression
+    prediction_head_type = 'RidgeRegression'
+    n_pca_components = 0  # If > 0, apply PCA before fitting regression head
+    standardize_data = True  # If True, standardize features before fitting regression head
 
     # Condition settings
     annotations_file = 'data/raw/psilodep2/annotations.csv'
@@ -155,6 +128,63 @@ def match_config(config: Dict) -> Dict:
     
     return config_updates
 
+# Helper functions ------------------------------------------------------------
+def extract_latent_representations(vgae, data, device):
+    '''
+    Extracts latent representations (z) from a VGAE for the given data.
+    
+    Parameters:
+    ----------
+    vgae: Trained VGAE model
+    data: Dataset or list of data samples
+    device: torch device
+    
+    Returns:
+    -------
+    z: numpy array of shape (n_samples, latent_dim) - latent representations
+    y: numpy array of shape (n_samples,) - target values
+    clinical_data: numpy array of shape (n_samples, n_clinical_features) - clinical data
+    subject_ids: numpy array of shape (n_samples,) - subject IDs
+    '''
+    vgae = vgae.eval().to(device)
+    with torch.no_grad():
+        batch = next(iter(DataLoader(data, batch_size=len(data), shuffle=False))).to(device)
+        context = get_context(batch)
+        out = vgae(batch)
+        z = vgae.readout(out.mu, context, batch.batch)
+        
+        # Convert to numpy
+        z = z.cpu().numpy()
+        y = batch.y.cpu().numpy().flatten()
+        clinical_data = batch.graph_attr.cpu().numpy()
+        subject_ids = batch.subject.cpu().numpy().flatten()
+    
+    return z, y, clinical_data, subject_ids
+
+def create_prediction_model(model_type: str, seed: int):
+    '''
+    Creates a prediction model based on the model type with fixed parameters.
+    
+    Parameters:
+    ----------
+    model_type: str - One of 'RidgeRegression', 'ElasticNet', 'RandomForestRegressor', 'HistGradientBoostingRegressor'
+    seed: int - Random seed
+    
+    Returns:
+    -------
+    model: sklearn model instance
+    '''
+    if model_type == 'RidgeRegression':
+        return Ridge(alpha=1.0, random_state=seed)
+    elif model_type == 'ElasticNet':
+        return ElasticNet(alpha=1.0, l1_ratio=0.5, random_state=seed)
+    elif model_type == 'RandomForestRegressor':
+        return RandomForestRegressor(n_estimators=100, max_depth=3, min_samples_leaf=5, random_state=seed)
+    elif model_type == 'HistGradientBoostingRegressor':
+        return HistGradientBoostingRegressor(max_depth=3, min_samples_leaf=5, random_state=seed)
+    else:
+        raise ValueError(f'Unknown model_type: {model_type}.')
+
 # Main function ----------------------------------------------------------------
 @ex.automain
 def run(_config):
@@ -164,7 +194,9 @@ def run(_config):
     verbose = _config['verbose']
     save_weights = _config['save_weights']
     seed = _config['seed']
-    ridge_alpha = _config['ridge_alpha']
+    prediction_head_type = _config['prediction_head_type']
+    n_pca_components = _config['n_pca_components']
+    standardize_data = _config['standardize_data']
     weights_dir = add_project_root(_config['weights_dir'])
     weight_filenames = _config['weight_filenames']
 
@@ -239,7 +271,10 @@ def run(_config):
                         cond2: init_outputs_dict(data)}
     other_cond_outputs = {cond1: init_outputs_dict(data),  # trained on cond1, evaluated on cond2
                          cond2: init_outputs_dict(data)}   # trained on cond2, evaluated on cond1
-    ridge_models = {cond1: [], cond2: []}
+    pred_models = {cond1: [], cond2: []}
+    pca_transformers = {cond1: [], cond2: []}
+    pca_var_explained = {cond1: [], cond2: []}
+    scalers = {cond1: [], cond2: []}
 
     for train_cond in [cond1, cond2]:
         logger.info(f'Training t-learners for condition: {train_cond} (LOOCV)')
@@ -264,18 +299,49 @@ def run(_config):
             
             # Prepare training features
             x_train = np.concatenate([z_train, clinical_train], axis=1)
+            original_dim = x_train.shape[1]
             
-            # Train Ridge regression model
-            ridge_model = Ridge(alpha=ridge_alpha, random_state=seed)
-            ridge_model.fit(x_train, y_train)
-            ridge_models[train_cond].append(ridge_model)
+            # Standardize features before PCA or model fitting
+            scaler = None
+            if standardize_data:
+                scaler = StandardScaler()
+                x_train = scaler.fit_transform(x_train)
+            scalers[train_cond].append(scaler)
+
+            # Apply PCA if requested
+            pca = None
+            if n_pca_components > 0:
+                pca = PCA(n_components=n_pca_components, random_state=seed)
+                x_train = pca.fit_transform(x_train)
+                var_expl_dict = {f'PC{i+1}': pca.explained_variance_ratio_[i] for i in range(n_pca_components)}
+                pca_var_explained[train_cond].append(var_expl_dict)
+                if verbose:
+                    logger.info(f"LOOCV ({train_cond}), held_out_{held_out_idx}: Applied PCA, reduced from {original_dim} to {n_pca_components} dimensions")
+                    logger.info(f"LOOCV ({train_cond}), held_out_{held_out_idx}: PCA variance explained: {var_expl_dict}")
+            else:
+                pca_var_explained[train_cond].append(None)
+            pca_transformers[train_cond].append(pca)
+
+            # Create and train prediction model
+            pred_model = create_prediction_model(prediction_head_type, seed)
+            pred_model.fit(x_train, y_train)
+            pred_models[train_cond].append(pred_model)
             
             # Evaluate on held-out sample (same condition)
             held_out_data = data[np.array([held_out_idx])]
             z_test_same, y_test_same, clinical_test_same, subject_test_same = extract_latent_representations(
                 vgae, held_out_data, device)
             x_test_same = np.concatenate([z_test_same, clinical_test_same], axis=1)
-            y_pred_same = ridge_model.predict(x_test_same)
+            
+            # Apply standardization transformation if used
+            if scaler is not None:
+                x_test_same = scaler.transform(x_test_same)
+            
+            # Apply PCA transformation if used
+            if pca is not None:
+                x_test_same = pca.transform(x_test_same)
+            
+            y_pred_same = pred_model.predict(x_test_same)
             
             # Store outputs for same condition
             outputs_same = {'prediction': y_pred_same, 
@@ -292,7 +358,16 @@ def run(_config):
                 z_test_other, y_test_other, clinical_test_other, subject_test_other = extract_latent_representations(
                     vgae, other_cond_data, device)
                 x_test_other = np.concatenate([z_test_other, clinical_test_other], axis=1)
-                y_pred_other = ridge_model.predict(x_test_other)
+                
+                # Apply standardization transformation if used
+                if scaler is not None:
+                    x_test_other = scaler.transform(x_test_other)
+                
+                # Apply PCA transformation if used
+                if pca is not None:
+                    x_test_other = pca.transform(x_test_other)
+                
+                y_pred_other = pred_model.predict(x_test_other)
                 
                 # Store outputs for other condition
                 outputs_other = {'prediction': y_pred_other, 
@@ -311,13 +386,42 @@ def run(_config):
             # Save model weights if requested
             if save_weights:
                 import pickle
-                model_path = os.path.join(output_dir, f'held_out_{held_out_idx}_ridge_model_{train_cond}.pkl')
+                model_path = os.path.join(output_dir, f'held_out_{held_out_idx}_pred_model_{train_cond}.pkl')
                 with open(model_path, 'wb') as f:
-                    pickle.dump(ridge_model, f)
+                    pickle.dump(pred_model, f)
+                if scaler is not None:
+                    scaler_path = os.path.join(output_dir, f'held_out_{held_out_idx}_scaler_{train_cond}.pkl')
+                    with open(scaler_path, 'wb') as f:
+                        pickle.dump(scaler, f)
+                if pca is not None:
+                    pca_path = os.path.join(output_dir, f'held_out_{held_out_idx}_pca_{train_cond}.pkl')
+                    with open(pca_path, 'wb') as f:
+                        pickle.dump(pca, f)
 
     # Print training time
     end_time = time()
     logger.info(f"Training completed after {(end_time-start_time)/60:.2f} minutes.")
+
+    # Save PCA variance explained for each condition ---------------------------
+    for cond in [cond1, cond2]:
+        if len(pca_var_explained[cond]) > 0 and any(v is not None for v in pca_var_explained[cond]):
+            # Filter out None values (where PCA was not applied)
+            var_expl_list = [v for v in pca_var_explained[cond] if v is not None]
+            if len(var_expl_list) > 0:
+                pca_var_explained_df = pd.DataFrame(var_expl_list)
+                pca_var_explained_file = os.path.join(output_dir, f'pca_var_explained_{cond}.csv')
+                pca_var_explained_df.to_csv(pca_var_explained_file, index=False)
+                logger.info(f"Saved PCA variance explained for {cond} to {pca_var_explained_file}")
+                
+                # Log summary statistics for variance explained
+                if n_pca_components > 0:
+                    for pc_idx in range(n_pca_components):
+                        pc_name = f'PC{pc_idx+1}'
+                        mean_var = pca_var_explained_df[pc_name].mean()
+                        std_var = pca_var_explained_df[pc_name].std()
+                        ex.log_scalar(f'pca_var_explained/{cond}/{pc_name}/mean', mean_var)
+                        ex.log_scalar(f'pca_var_explained/{cond}/{pc_name}/std', std_var)
+                        logger.info(f"PCA {pc_name} for {cond}: mean={mean_var:.4f}, std={std_var:.4f}")
 
     # Process and save outputs for each condition ------------------------------
     # Same-condition predictions (trained on cond, evaluated on cond)
