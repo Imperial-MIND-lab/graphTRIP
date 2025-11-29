@@ -62,7 +62,9 @@ def cfg():
     lr = 0.001            # Learning rate.
     num_epochs = 300      # Number of epochs to train.
     balance_attrs = None  # attrs to balance on for k-fold CV. If None, no balancing.
-    this_k = None         # If None, train all folds sequentially. If 0 <= this_k < num_folds, train only fold this_k. If this_k == num_foldss, only load models and evaluate.
+    this_k = None         # If None, train all folds sequentially. 
+                          # If 0 <= this_k < num_folds, train only fold this_k. 
+                          # If this_k == num_folds, only load models and evaluate.
 
 # Match configs function -------------------------------------------------------
 def match_config(config: Dict) -> Dict:
@@ -85,72 +87,6 @@ def get_dataloaders(data, balance_attrs, seed):
         train_loaders, val_loaders, test_loaders, test_indices, mean_std \
             = get_kfold_dataloaders(data, seed=seed)
     return train_loaders, val_loaders, test_loaders, test_indices, mean_std
-
-def save_single_fold_test_indices(test_indices_k, k, output_dir):
-    '''
-    Saves the test fold assignments for a single fold k.
-    
-    Parameters:
-    ----------
-    test_indices_k (list): list of test indices for fold k.
-    k (int): fold number.
-    output_dir (str): path to the output directory.
-    '''
-    # Create a list where test_indices_k[i] = k for all i in test_indices_k
-    fold_assignments = [k] * len(test_indices_k)
-    
-    # Save the list as a csv file
-    indices_file = os.path.join(output_dir, f'k{k}_test_fold_indices.csv')
-    df = pd.DataFrame({'test_idx': test_indices_k, 'fold': fold_assignments})
-    df.to_csv(indices_file, index=False, header=False)
-    
-    return indices_file
-
-def aggregate_test_fold_indices(output_dir, num_folds):
-    '''
-    Aggregates all k{k}_test_fold_indices.csv files into a single test_fold_indices.csv.
-    
-    Parameters:
-    ----------
-    output_dir (str): path to the output directory.
-    num_folds (int): number of folds.
-    
-    Returns:
-    -------
-    str: path to the aggregated test_fold_indices.csv file.
-    '''
-    # Find the maximum index across all folds
-    max_idx = -1
-    for k in range(num_folds):
-        fold_file = os.path.join(output_dir, f'k{k}_test_fold_indices.csv')
-        if not os.path.exists(fold_file):
-            raise FileNotFoundError(f'Test fold indices file not found: {fold_file}')
-        
-        df = pd.read_csv(fold_file, header=None)
-        if len(df) > 0:
-            max_idx = max(max_idx, df[0].max())
-    
-    # Initialize array with -1 (unassigned)
-    all_fold_assignments = [-1] * (max_idx + 1)
-    
-    # Load all individual fold files and assign fold numbers
-    for k in range(num_folds):
-        fold_file = os.path.join(output_dir, f'k{k}_test_fold_indices.csv')
-        df = pd.read_csv(fold_file, header=None)
-        test_indices_k = df[0].values.astype(int)
-        fold_k = df[1].values.astype(int)
-        
-        # Store the mapping
-        for test_idx, fold in zip(test_indices_k, fold_k):
-            if test_idx < len(all_fold_assignments):
-                all_fold_assignments[test_idx] = fold
-    
-    # Save the aggregated list
-    indices_file = os.path.join(output_dir, 'test_fold_indices.csv')
-    df = pd.DataFrame(all_fold_assignments)
-    df.to_csv(indices_file, index=False, header=False)
-    
-    return indices_file
 
 # Main function ----------------------------------------------------------------
 @ex.automain
@@ -183,17 +119,8 @@ def run(_config):
                 weight_file = os.path.join(output_dir, f'k{k}_vgae_weights.pth')
                 if not os.path.exists(weight_file):
                     raise FileNotFoundError(f'Weight file {weight_file} not found. Cannot perform evaluation.')
-            
-            # Check if all test fold indices files exist
-            for k in range(num_folds):
-                test_indices_file = os.path.join(output_dir, f'k{k}_test_fold_indices.csv')
-                if not os.path.exists(test_indices_file):
-                    raise FileNotFoundError(f'Test fold indices file {test_indices_file} not found. Cannot perform evaluation.')
-            
-            # Aggregate all test fold indices files
-            aggregate_test_fold_indices(output_dir, num_folds)
         else:
-            raise ValueError(f'Invalid this_k value: {this_k}. Must be None, 0 <= this_k < {num_folds}, or {num_folds + 1}.')    
+            raise ValueError(f'Invalid this_k value: {this_k}. Must be None, 0 <= this_k < {num_folds}, or {num_folds}.')    
 
     # Get dataloaders
     data = load_data()
@@ -204,21 +131,12 @@ def run(_config):
 
     # Handle this_k == num_folds case (evaluation only)
     if this_k == num_folds:
+        # Save test indices right after loading dataloaders
+        save_test_indices(test_indices, output_dir)
+        
         # Load all trained VGAEs
         weight_filenames = [f'k{k}_vgae_weights.pth' for k in range(num_folds)]
         vgaes = load_trained_vgaes(output_dir, weight_filenames, device=device)
-        
-        # Load aggregated test indices
-        test_indices_file = os.path.join(output_dir, 'test_fold_indices.csv')
-        if not os.path.exists(test_indices_file):
-            raise FileNotFoundError(f'Test fold indices file not found: {test_indices_file}')
-        
-        # Reconstruct test_indices list from the aggregated file
-        fold_assignments = np.loadtxt(test_indices_file, dtype=int)
-        test_indices = [[] for _ in range(num_folds)]
-        for idx, fold in enumerate(fold_assignments):
-            if fold >= 0:
-                test_indices[fold].append(idx)
         
         # Continue to evaluation section
         start_time = time()
@@ -290,20 +208,13 @@ def run(_config):
             if this_k is None:
                 best_vgae_states.append(copy.deepcopy(vgae.state_dict()))
 
-            # Save test fold assignments for this specific fold
-            if this_k is not None:
-                save_single_fold_test_indices(test_indices[k], k, output_dir)
-
         # Print training time
         end_time = time()
         logger.info(f"VGAE training completed after {(end_time-start_time)/60:.2f} minutes.")
 
         # Save test fold assignments (only if training all folds)
         if this_k is None:
-            test_indices_file = save_test_indices(test_indices, output_dir)
-        else:
-            # For single fold, we already saved the temporary file
-            test_indices_file = None
+            save_test_indices(test_indices, output_dir)
 
     # Plot results ----------------------------------------------------------------
     # Load all trained VGAEs
