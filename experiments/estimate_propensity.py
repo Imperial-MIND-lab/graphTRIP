@@ -105,9 +105,10 @@ def cfg(dataset):
                         'test_fold_indices': ['test_fold_indices.csv']} 
 
     # Training configurations
-    logit_C = 1.0         # Inverse reg. strength for logit (smaller = stronger reg)
-    n_pca_components = 0  # Performs PCA on Z if n_pca_components > 0
-    n_permutations = 1000 # Number of permutations for AUC permutation test
+    reinit_pooling = False   # Whether to reinitialise the VGAE pooling module
+    logit_C = 1.0            # Inverse reg. strength for logit (smaller = stronger reg)
+    n_pca_components = 0     # Performs PCA on Z if n_pca_components > 0
+    n_permutations = 1000    # Number of permutations for AUC permutation test
 
 # Match configs function -------------------------------------------------------
 def match_config(config: Dict) -> Dict:
@@ -123,6 +124,9 @@ def match_config(config: Dict) -> Dict:
     # Various dataset related configs may mismatch, but other configs must match
     config_updates = copy.deepcopy(config)
     exceptions = ['graph_attrs', 'target']
+    reinit_pooling = config.get('reinit_pooling', False)
+    if reinit_pooling:
+        exceptions.append('pooling_cfg')
     config_updates = match_ingredient_configs(config=config,
                                               previous_config=previous_config,
                                               ingredients=ingredients,
@@ -155,6 +159,7 @@ def run(_config):
     num_folds = _config['dataset']['num_folds']
     weights_dir = add_project_root(_config['weights_dir'])
     weight_filenames = _config['weight_filenames']
+    reinit_pooling = _config['reinit_pooling']
 
     # Create output directories, fix seed
     os.makedirs(output_dir, exist_ok=True)
@@ -167,7 +172,11 @@ def run(_config):
     logger.info(f'Using device: {device}')
 
     # Load pretrained VGAEs
-    pretrained_vgaes = load_trained_vgaes(weights_dir, weight_filenames['vgae'], device=device)  
+    if reinit_pooling:
+        # Initializes VGAE with new pooling module and doesn't load the weights from the old model, so should be safe to do
+        pretrained_vgaes = load_trained_vgaes(weights_dir, weight_filenames['vgae'], device=device, exclude_module='pooling')
+    else:
+        pretrained_vgaes = load_trained_vgaes(weights_dir, weight_filenames['vgae'], device=device)  
 
     # Get test fold indices
     test_indices = np.loadtxt(os.path.join(weights_dir, weight_filenames['test_fold_indices'][0]), dtype=int)
