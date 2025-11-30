@@ -73,7 +73,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid, config_id=0):
     # Train with LOOCV
     config_updates['this_k'] = this_k
     config_updates['dataset']['num_folds'] = num_folds_loocv
-    config_updates['dataset']['batch_size'] = 1
+    config_updates['dataset']['batch_size'] = 7
     config_updates['dataset']['val_split'] = 0.
 
     # Remove pooling layer from VGAE config

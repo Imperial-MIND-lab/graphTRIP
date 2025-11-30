@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #PBS -l select=1:ncpus=4:mem=4gb
-#PBS -l walltime=00:30:00
+#PBS -l walltime=01:30:00
 #PBS -N unsupervised_vgae_training
 #PBS -J 0-419
 
