@@ -2,7 +2,7 @@
 
 #PBS -l select=1:ncpus=4:mem=4gb
 #PBS -l walltime=4:00:00
-#PBS -N reduce_complexity_2
+#PBS -N standardise_mlp_inputs
 #PBS -J 0-319
 
 module load anaconda3/personal
@@ -13,7 +13,7 @@ cd ~/projects/graphTRIP/experiments
 # Settings
 OBSERVER='NeptuneObserver'
 EXNAME='train_jointly'
-CONFIG_JSON='reduce_complexity_2.json'
+CONFIG_JSON='standardise_mlp_inputs.json'
 SEEDS=(0 1 2 3 4 5 6 7 8 9)
 MAX_NUM_CONFIGS=32
 

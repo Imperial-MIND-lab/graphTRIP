@@ -275,6 +275,52 @@ class SetGraphAttr(BaseTransform):
         data.graph_attr[:, attr_idx] = self.attr_value
         return data
     
+class StandardiseGraphAttributes(BaseTransform):
+    """Transform to standardise graph attributes using pre-computed mean and std."""
+    def __init__(self, stats: Union[Dict[str, tuple], pd.DataFrame] = None):
+        """
+        Parameters:
+        -----------
+        stats : Dict[str, tuple] or pd.DataFrame, optional
+            If dict: Maps graph attribute names to (mean, std) tuples.
+                Example: {'QIDS_Before': (15.5, 5.2), 'BDI_Before': (20.3, 8.1)}
+            If DataFrame: Must have columns ['feature', 'mean', 'std'] or use feature names
+                as index with 'mean' and 'std' columns.
+                Example: pd.DataFrame({'mean': [15.5, 20.3], 'std': [5.2, 8.1]}, 
+                                     index=['QIDS_Before', 'BDI_Before'])
+        
+        Note:
+        -----
+        The graph attributes to standardise are inferred from the keys/index of stats.
+        Attributes with std=0 will be skipped to avoid division by zero.
+        """
+        if stats is None:
+            self.stats = {}
+        elif isinstance(stats, pd.DataFrame):
+            # Convert DataFrame to dict
+            if 'feature' in stats.columns:
+                # DataFrame has 'feature' column
+                self.stats = {row['feature']: (row['mean'], row['std']) 
+                             for _, row in stats.iterrows()}
+            else:
+                # DataFrame has feature names as index
+                self.stats = {idx: (row['mean'], row['std']) 
+                             for idx, row in stats.iterrows()}
+        else:
+            self.stats = stats
+
+    def forward(self, data: Data) -> Data:
+        if not self.stats:
+            return data
+        
+        for attr_name, (mean, std) in self.stats.items():
+            attr_idx = get_list_idx(data.attr_names.graph, attr_name)           
+            if std == 0:
+                continue  # Skip if std is zero to avoid division by zero
+            data.graph_attr[:, attr_idx] = (data.graph_attr[:, attr_idx] - mean) / std
+        
+        return data
+    
 class AddNormNodeAttr(BaseTransform):
     '''
     Adds normative (i.e. same for all subjects) node attributes 

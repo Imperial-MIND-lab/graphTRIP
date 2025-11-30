@@ -220,10 +220,11 @@ class StandardMLP(torch.nn.Module):
                     self.layers.append(torch.nn.Dropout(p=dropout))
 
         # Add layer normalization
-        if layernorm:
-            self.layers.append(torch.nn.LayerNorm(layer_dims[-1]))
+        self.layernorm = torch.nn.LayerNorm(layer_dims[0]) if layernorm else None
 
     def forward(self, x):
+        if self.layernorm is not None:
+            x = self.layernorm(x)
         for layer in self.layers:
             x = layer(x)
         return x

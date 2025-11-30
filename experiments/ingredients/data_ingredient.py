@@ -71,6 +71,7 @@ def data_cfg():
     num_folds = 6         # Number of folds for k-fold cross-validation. 1 for no cross-validation.
     fold_shift = 0        # Shift the fold indices by this amount.
     batch_size = 7        # Batch size.
+    graph_attrs_to_standardise = [] # List of graph attributes to standardise.
 
 # Captured functions -----------------------------------------------------------
 @data_ingredient.capture
@@ -293,13 +294,24 @@ def get_train_mean_std(train_dataset):
     std = all_features.std(dim=0)
     return mean, std
 
+def get_graph_attrs_stats_dict(train_dataset, graph_attrs_to_standardise):
+    '''Returns the mean and standard deviation of the graph attributes of the training set.'''
+    stats = {}
+    all_graph_attrs = train_dataset[0].attr_names.graph
+    for attr in graph_attrs_to_standardise:
+        attr_idx = get_list_idx(all_graph_attrs, attr)
+        attr_values = [data.graph_attr[0, attr_idx].item() for data in train_dataset]
+        stats[attr] = (np.mean(attr_values), np.std(attr_values))
+    return stats
+
 def reverse_standardisation(x_reconstructed, mean, std):
     '''Reverses the standardisation of the node attributes.'''
     return x_reconstructed * std + mean
 
 @data_ingredient.capture
 def get_kfold_dataloaders(dataset, num_folds, batch_size, val_split, 
-                          fold_shift, standardise_x, seed=None):
+                          fold_shift, standardise_x, 
+                          graph_attrs_to_standardise, seed=None):
     '''
     Returns the K-fold train, validation, and test dataloaders.
     If val_split > 0, also returns the validation dataloader. Validation
@@ -350,6 +362,7 @@ def get_kfold_dataloaders(dataset, num_folds, batch_size, val_split,
         train_dataset = dataset[train_index]
         test_dataset = dataset[test_index]
 
+        # Node attribute standardisation ---------------------------------------
         if standardise_x:
             # Get the mean and standard deviation of the training set
             mean, std = get_train_mean_std(train_dataset)
@@ -363,6 +376,15 @@ def get_kfold_dataloaders(dataset, num_folds, batch_size, val_split,
 
             if val_split > 0:
                 val_dataset.transform = T.Compose([*val_dataset.transform.transforms, standardise_tfm])
+
+        # Graph attribute standardisation ---------------------------------------
+        if len(graph_attrs_to_standardise) > 0:
+            graph_attrs_stats = get_graph_attrs_stats_dict(train_dataset, graph_attrs_to_standardise)
+            standardise_graph_tfm = StandardiseGraphAttributes(stats=graph_attrs_stats)
+            train_dataset.transform = T.Compose([*train_dataset.transform.transforms, standardise_graph_tfm])
+            test_dataset.transform = T.Compose([*test_dataset.transform.transforms, standardise_graph_tfm])
+            if val_split > 0:
+                val_dataset.transform = T.Compose([*val_dataset.transform.transforms, standardise_graph_tfm])
 
         # Make the train, validation, and test dataloaders
         train_loaders.append(DataLoader(
@@ -622,7 +644,8 @@ def get_balanced_kfold_splits(dataset, num_folds, balance_attrs, seed=None):
 @data_ingredient.capture
 def get_balanced_kfold_dataloaders(dataset, balance_attrs, 
                                    num_folds, batch_size, val_split, 
-                                   standardise_x, seed=None):
+                                   standardise_x, 
+                                   graph_attrs_to_standardise, seed=None):
     '''
     Returns balanced K-fold train, validation, and test dataloaders.
     
@@ -633,6 +656,7 @@ def get_balanced_kfold_dataloaders(dataset, balance_attrs,
     batch_size (int): Batch size for the dataloaders
     val_split (float): Fraction of the training set to use as validation set
     standardise_x (bool): Whether to standardise the node features
+    graph_attrs_to_standardise (list): List of graph attribute names to standardise
     balance_attrs (list): List of categorical attribute names to balance on, e.g., ['Condition', 'Gender']
     seed (int): Random seed 
     '''
@@ -675,18 +699,29 @@ def get_balanced_kfold_dataloaders(dataset, balance_attrs,
         train_dataset = dataset[train_index]
         test_dataset = dataset[test_index]
         
+        # Node attribute standardisation ---------------------------------------
         if standardise_x:
-            # Standardization logic (unchanged)
+            # Get the mean and standard deviation of the training set
             mean, std = get_train_mean_std(train_dataset)
             mean_std['mean'].append(mean)
             mean_std['std'].append(std)
-            
+
+            # Build the standardisation transform
             standardise_tfm = StandardiseNodeAttributes(mean=mean, std=std)
             train_dataset.transform = T.Compose([*train_dataset.transform.transforms, standardise_tfm])
             test_dataset.transform = T.Compose([*test_dataset.transform.transforms, standardise_tfm])
-            
+
             if val_split > 0:
                 val_dataset.transform = T.Compose([*val_dataset.transform.transforms, standardise_tfm])
+
+        # Graph attribute standardisation ---------------------------------------
+        if len(graph_attrs_to_standardise) > 0:
+            graph_attrs_stats = get_graph_attrs_stats_dict(train_dataset, graph_attrs_to_standardise)
+            standardise_graph_tfm = StandardiseGraphAttributes(stats=graph_attrs_stats)
+            train_dataset.transform = T.Compose([*train_dataset.transform.transforms, standardise_graph_tfm])
+            test_dataset.transform = T.Compose([*test_dataset.transform.transforms, standardise_graph_tfm])
+            if val_split > 0:
+                val_dataset.transform = T.Compose([*val_dataset.transform.transforms, standardise_graph_tfm])
         
         # Create dataloaders
         train_loaders.append(DataLoader(
