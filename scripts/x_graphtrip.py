@@ -3,12 +3,15 @@ This scripts trains X-graphTRIP models for many train-test splits.
 T-learners must be trained first with tlearners.py.
 
 Dependencies:
-- experiments/configs/x_graphtrip.json
-- experiments/configs/x_graphtrip/tlearner_escitalopram/
-- experiments/configs/x_graphtrip/tlearner_psilocybin/
+- experiments/configs/graphtrip.json
 
 Outputs:
-- outputs/x_graphtrip/xlearner/job_{fold_shift}/
+- outputs/x_graphtrip/vgae_weights/seed_{seed}/test_fold_indices.csv
+- outputs/x_graphtrip/estimate_propensity/seed_{seed}/
+- outputs/x_graphtrip/tlearner_escitalopram/seed_{seed}/
+- outputs/x_graphtrip/tlearner_psilocybin/seed_{seed}/
+- outputs/x_graphtrip/cate_model_escitalopram/seed_{seed}/
+- outputs/x_graphtrip/cate_model_psilocybin/seed_{seed}/
 
 Author: Hanna M. Tolle
 Date: 2025-05-31
@@ -28,7 +31,7 @@ from utils.configs import load_configs_from_json, fetch_job_config
 from experiments.run_experiment import run
 
 
-def main(config_file, output_dir, verbose, debug, seed, jobid=0, config_id=0):
+def main(config_file, output_dir, verbose, debug, seed, config_id=0):
     # Add project root to paths
     config_file = add_project_root(config_file)
     output_dir = add_project_root(output_dir)
@@ -48,73 +51,45 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=0, config_id=0):
     config['save_weights'] = True
     if debug:
         config['num_epochs'] = 2
+    num_folds_loocv = 42 # 42 patients in the dataset
 
-    # Train X-graphTRIP ---------------------------------------------------------
-    exname = 'train_xlearner'
-    weights_dir = os.path.join(output_dir, 'weights', f'job_{jobid}')
+    # Evaluate unsupervised VGAE -------------------------------------------------
+    # Must have been trained with unsupervised_vgae.py first.
+    exname = 'train_vgae'
+    vgae_weights_dir = os.path.join(output_dir, 'vgae_weights', f'seed_{seed}')
 
-    # Run the experiment if it doesn't exist
-    if not os.path.exists(weights_dir):
-        config_updates = copy.deepcopy(config)
-        config_updates['output_dir'] = weights_dir
-        config_updates['dataset']['fold_shift'] = jobid
-        run(exname, observer, config_updates)
-    else:
-        print(f"X-graphTRIP experiment already exists in {weights_dir}.")
+    # Get dataset and VGAE configs from original graphTRIP config
+    config_updates = {}
+    config_updates['dataset'] = copy.deepcopy(config['dataset'])
+    config_updates['vgae_model'] = copy.deepcopy(config['vgae_model'])
 
-    # Train drug classifier -----------------------------------------------------
-    exname = 'train_rep_classifier'
-    ex_dir = os.path.join(output_dir, 'drug_classifier', f'job_{jobid}')
+    # Remove labels from dataset config
+    config_updates['dataset']['target'] = None
+    config_updates['dataset']['graph_attrs'] = []
+    config_updates['dataset']['context_attrs'] = []
 
-    # Run the experiment if it doesn't exist
-    if not os.path.exists(ex_dir):
-        config_updates = copy.deepcopy(config)
-        config_updates['output_dir'] = ex_dir
-        config_updates['weights_dir'] = weights_dir
-        config_updates['save_weights'] = False # no need to save weights
+    # Train with LOOCV
+    config_updates['this_k'] = num_folds_loocv  # triggers evaluation run
+    config_updates['dataset']['num_folds'] = num_folds_loocv
+    config_updates['dataset']['batch_size'] = 7
+    config_updates['dataset']['val_split'] = 0.
 
-        # Remove incompatible configs
-        del config_updates['alpha']
-        del config_updates['t0_pred_file']
-        del config_updates['t1_pred_file']
+    # Remove pooling layer from VGAE config
+    config_updates['vgae_model']['pooling_cfg'] = {
+        'model_type': 'DummyPooling'
+    }
 
-        # Change MLP head and prediction target
-        config_updates['mlp_model']['model_type'] = 'LogisticRegressionMLP'
-        config_updates['dataset']['target'] = 'Condition_bin01'
+    # Training configurations
+    config_updates['lr'] = config['lr']
+    config_updates['num_epochs'] = config['num_epochs']
+    config_updates['balance_attrs'] = None 
 
-        run(exname, observer, config_updates)
-    else:
-        print(f"Drug classifier experiment already exists in {weights_dir}.")
-
-    # Attention weights ---------------------------------------------------------
-    exname = 'attention_weights'
-    ex_dir = os.path.join(output_dir, 'attention_weights', f'job_{jobid}')
-    if not os.path.exists(ex_dir):
-        config_updates = {}
-        config_updates['output_dir'] = ex_dir
-        config_updates['weights_dir'] = weights_dir
-        config_updates['seed'] = seed
-        config_updates['verbose'] = verbose
-        run(exname, observer, config_updates)
-    else:
-        print(f"Attention weights experiment already exists in {ex_dir}.")
-
-    # GRAIL --------------------------------------------------------------------
-    exname = 'grail'
-    ex_dir = os.path.join(output_dir, 'grail', f'job_{jobid}')
-    if not os.path.exists(ex_dir):
-        config_updates = {}
-        config_updates['output_dir'] = ex_dir
-        config_updates['weights_dir'] = weights_dir
-        config_updates['seed'] = seed
-        config_updates['verbose'] = verbose
-        config_updates['num_z_samples'] = 100 if not debug else 2
-        config_updates['sigma'] = 2.0
-        config_updates['all_rsn_conns'] = False
-        run(exname, observer, config_updates)
-    else:
-        print(f"GRAIL experiment already exists in {ex_dir}.")
-    
+    # Directories etc.
+    config_updates['output_dir'] = vgae_weights_dir
+    config_updates['seed'] = seed
+    config_updates['verbose'] = verbose
+    config_updates['save_weights'] = True
+    run(exname, observer, config_updates)
 
 if __name__ == "__main__":
     """
@@ -124,13 +99,12 @@ if __name__ == "__main__":
     # Parse command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--config_file', type=str, 
-                        default='experiments/configs/x_graphtrip.json', 
+                        default='experiments/configs/graphtrip.json', 
                         help='Path to the config file with X-graphTRIP model config')
     parser.add_argument('-o', '--output_dir', type=str, default='outputs/x_graphtrip/', help='Path to the output directory')
     parser.add_argument('-s', '--seed', type=int, default=291, help='Random seed')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode')
-    parser.add_argument('-j', '--jobid', type=int, default=0, help='Job ID')
     parser.add_argument('-ci', '--config_id', type=int, default=None, help='Config ID')
     args = parser.parse_args()
 
@@ -141,4 +115,4 @@ if __name__ == "__main__":
         args.config_id = 0
 
     # Run the main function
-    main(args.config_file, args.output_dir, args.verbose, args.debug, args.seed, args.jobid, args.config_id)
+    main(args.config_file, args.output_dir, args.verbose, args.debug, args.seed, args.config_id)

@@ -20,5 +20,8 @@ JOB_ID=${PBS_ARRAY_INDEX}
 BASE_JOB=$((JOB_ID / SEEDS_PER_JOB))
 SEED=$((JOB_ID % SEEDS_PER_JOB))
 
+# First quickly run the VGAE-eval run of the x-graphtrip script
+python x_graphtrip.py -s ${SEED}
+
 # Run the experiment with the specific config and seed
 python tlearners.py -ci ${BASE_JOB} -s ${SEED}
