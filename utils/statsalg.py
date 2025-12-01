@@ -7,7 +7,7 @@ License: BSD-3-Clause
 """
 
 import os
-from typing import List
+from typing import List, Dict
 from dominance_analysis import Dominance
 from sklearn.linear_model import LinearRegression
 from sklearn.cross_decomposition import PLSRegression
@@ -458,6 +458,91 @@ def grail_posthoc_analysis(mean_alignments, num_seeds, seed, filter_percentile=7
     return cluster_labels, features_filtered
 
 # Permutation tests -------------------------------------------------------------
+
+def correlation_permutation_test(y_true, y_pred, n_permutations=1000, seed=None, 
+                                 make_plot=True, save_path=None, title=None):
+    """
+    Perform a permutation test for correlation coefficient.
+    
+    Parameters:
+    -----------
+    y_true (np.ndarray): True values (shape: n_samples,)
+    y_pred (np.ndarray): Predicted values (shape: n_samples,)
+    n_permutations (int): Number of permutations to perform (default: 1000)
+    seed (int): Random seed for reproducibility (default: None)
+    make_plot (bool): Whether to create a histogram of null distribution (default: True)
+    save_path (str): Path to save the plot (default: None)
+    title (str): Title for the plot (default: None)
+    
+    Returns:
+    --------
+    dict: Dictionary containing:
+        - 'observed_r' (float): Observed correlation coefficient
+        - 'p_value' (float): Permutation-based p-value
+        - 'null_mean' (float): Mean of null distribution
+        - 'null_std' (float): Standard deviation of null distribution
+        - 'null_distribution' (np.ndarray): Array of permuted correlation values
+    """
+    # Calculate observed correlation
+    observed_r, _ = pearsonr(y_true, y_pred)
+    
+    # Set up random number generator
+    if seed is not None:
+        rng = np.random.default_rng(seed)
+    else:
+        rng = np.random.default_rng()
+    
+    # Perform permutations
+    perm_rs = np.empty(n_permutations)
+    for i in range(n_permutations):
+        # Shuffle labels to simulate random assignment
+        y_perm = rng.permutation(y_true)
+        try:
+            perm_rs[i] = pearsonr(y_perm, y_pred)[0]
+        except ValueError:
+            # pearsonr can fail if there's insufficient variance
+            perm_rs[i] = np.nan
+    
+    # Drop any failed permutations
+    perm_rs = perm_rs[~np.isnan(perm_rs)]
+    
+    # One-sided p-value: probability |r_null| >= |r_observed|
+    # Using absolute value since correlation can be positive or negative
+    p_value = (np.sum(np.abs(perm_rs) >= np.abs(observed_r)) + 1) / (len(perm_rs) + 1)
+    
+    # Calculate null distribution statistics
+    null_mean = np.mean(perm_rs)
+    null_std = np.std(perm_rs)
+    
+    # Create plot if requested
+    if make_plot:
+        plt.figure(figsize=(8, 6))
+        sns.histplot(perm_rs, bins=50, kde=True)
+        plt.axvline(observed_r, linestyle='--', linewidth=2,
+                    color='red', label=f'Observed r = {observed_r:.3f}')
+        plt.xlabel('Correlation coefficient under label permutation')
+        plt.ylabel('Frequency')
+        
+        full_title = title or ''
+        full_title += (
+            f'SD = {null_std:.3f}, '
+            f'p = {p_value:.3g}')
+        plt.title(full_title)
+        plt.legend(loc='upper right')
+        plt.tight_layout()
+        
+        if save_path is not None:
+            plt.savefig(save_path)
+        else:
+            plt.show()
+    
+    return {
+        'observed_r': observed_r,
+        'p_value': p_value,
+        'null_mean': null_mean,
+        'null_std': null_std,
+        'null_distribution': perm_rs
+    }
 
 def anova_permutation_test(data_groups, n_permutations=10000):
     """

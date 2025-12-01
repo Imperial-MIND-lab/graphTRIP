@@ -41,6 +41,7 @@ from utils.files import add_project_root
 from utils.helpers import fix_random_seed, get_logger, check_weights_exist
 from utils.plotting import true_vs_pred_scatter
 from utils.configs import load_ingredient_configs, match_ingredient_configs
+from utils.statsalg import correlation_permutation_test
 from models.utils import freeze_model
 
 
@@ -75,10 +76,12 @@ def cfg(dataset):
     prediction_head_type = 'RidgeRegression'
     n_pca_components = 0  # If > 0, apply PCA before fitting regression head
     standardize_data = True  # If True, standardize features before fitting regression head
+    n_permutations = 1000  # Number of permutations for correlation permutation test
 
     # Condition settings
     annotations_file = 'data/raw/psilodep2/annotations.csv'
     subject_id_col = 'Patient' # annotations[subject_id_col] == data[i].subject+1
+    condition_specs = {'cond0': 'E', 'cond1': 'P'}  # Maps cond0/cond1 to actual condition names
 
 # Match configs function -------------------------------------------------------
 def match_config(config: Dict) -> Dict:
@@ -118,6 +121,22 @@ def match_config(config: Dict) -> Dict:
     subject_id_col = config.get('subject_id_col', 'Patient')
     if subject_id_col not in annotations.columns:
         raise ValueError(f'Subject ID column not found in annotations file: {subject_id_col}')
+    
+    # Validate condition_specs
+    condition_specs = config.get('condition_specs', {'cond0': 'E', 'cond1': 'P'})
+    if 'cond0' not in condition_specs or 'cond1' not in condition_specs:
+        raise ValueError('condition_specs must contain both "cond0" and "cond1" keys.')
+    
+    # Assert that condition values exist in annotations
+    unique_conditions = annotations['Condition'].unique()
+    cond0_name = condition_specs['cond0']
+    cond1_name = condition_specs['cond1']
+    if cond0_name not in unique_conditions:
+        raise ValueError(f'Condition "{cond0_name}" (cond0) not found in annotations. Available conditions: {unique_conditions}')
+    if cond1_name not in unique_conditions:
+        raise ValueError(f'Condition "{cond1_name}" (cond1) not found in annotations. Available conditions: {unique_conditions}')
+    
+    config_updates['condition_specs'] = condition_specs
     
     # Other config checks
     num_pretrained_models = previous_config['dataset']['num_folds']
@@ -197,6 +216,7 @@ def run(_config):
     prediction_head_type = _config['prediction_head_type']
     n_pca_components = _config['n_pca_components']
     standardize_data = _config['standardize_data']
+    n_permutations = _config['n_permutations']
     weights_dir = add_project_root(_config['weights_dir'])
     weight_filenames = _config['weight_filenames']
 
@@ -218,13 +238,11 @@ def run(_config):
     # Note: the subject IDs in the annotations file are 1-indexed, but the subject IDs in the data are 0-indexed !
     annotations = pd.read_csv(annotations_file)
     
-    # Get unique conditions
-    unique_conditions = sorted(annotations['Condition'].unique())
-    if len(unique_conditions) != 2:
-        raise ValueError(f'Expected exactly 2 conditions, found {len(unique_conditions)}: {unique_conditions}')
-    
-    cond1, cond2 = unique_conditions[0], unique_conditions[1]
-    logger.info(f'Training t-learners for conditions: {cond1} and {cond2}')
+    # Get condition names from config
+    condition_specs = _config.get('condition_specs', {'cond0': 'E', 'cond1': 'P'})
+    cond1 = condition_specs['cond0']  # Keep naming as cond1 for backward compatibility
+    cond2 = condition_specs['cond1']  # Keep naming as cond2 for backward compatibility
+    logger.info(f'Training t-learners for conditions: {cond1} (cond0) and {cond2} (cond1)')
 
     # Create condition mapping: subject_id -> condition
     subject_to_condition = {}
@@ -448,6 +466,42 @@ def run(_config):
         for k, v in results.items():
             ex.log_scalar(f'final_prediction/{cond}_same_cond/{k}', v)
         logger.info(f"Results for {cond} (same condition): r={r:.4f}, p={p:.4e}, mae={mae:.4f} ± {mae_std:.4f}.")
+        
+        # Permutation test for correlation coefficient
+        y_true = outputs_df['label'].values
+        y_pred = outputs_df['prediction'].values
+        perm_hist_path = os.path.join(output_dir, f'perm_rs_{cond}_same_cond.csv')
+        perm_plot_path = os.path.join(output_dir, f'corr_permutation_hist_{cond}_same_cond.png')
+        perm_title = f'Permutation test for correlation ({cond}, same condition)'
+        
+        perm_results = correlation_permutation_test(
+            y_true=y_true,
+            y_pred=y_pred,
+            n_permutations=n_permutations,
+            seed=seed,
+            make_plot=True,
+            save_path=perm_plot_path,
+            title=perm_title
+        )
+        
+        # Save permutation correlations
+        pd.DataFrame({'perm_r': perm_results['null_distribution']}).to_csv(perm_hist_path, index=False)
+        
+        # Log p-value
+        logger.info(f"Permutation test ({cond}, same condition): observed r = {perm_results['observed_r']:.4f}, "
+                    f"null mean = {perm_results['null_mean']:.4f}, "
+                    f"null sd = {perm_results['null_std']:.4f}, "
+                    f"p = {perm_results['p_value']:.4g}, n_perm = {len(perm_results['null_distribution'])}")
+        
+        # Log permutation test results
+        ex.log_scalar(f'permutation_test/{cond}_same_cond/observed_r', perm_results['observed_r'])
+        ex.log_scalar(f'permutation_test/{cond}_same_cond/null_mean', perm_results['null_mean'])
+        ex.log_scalar(f'permutation_test/{cond}_same_cond/null_std', perm_results['null_std'])
+        ex.log_scalar(f'permutation_test/{cond}_same_cond/p_value', perm_results['p_value'])
+        
+        image_files.append(perm_plot_path)
+        if not verbose:
+            plt.close()
         
         # Create true vs predicted scatter plot
         title = f'{cond} (same condition): r={r:.4f}, p={p:.4e}, MAE={mae:.4f} ± {mae_std:.4f}'
