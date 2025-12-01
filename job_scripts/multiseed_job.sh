@@ -2,8 +2,8 @@
 
 #PBS -l select=1:ncpus=4:mem=4gb
 #PBS -l walltime=4:00:00
-#PBS -N standardise_mlp_inputs
-#PBS -J 0-319
+#PBS -N bdi_graphtrip
+#PBS -J 0-511
 
 module load anaconda3/personal
 source activate graphtrip
@@ -13,9 +13,9 @@ cd ~/projects/graphTRIP/experiments
 # Settings
 OBSERVER='NeptuneObserver'
 EXNAME='train_jointly'
-CONFIG_JSON='standardise_mlp_inputs.json'
-SEEDS=(0 1 2 3 4 5 6 7 8 9)
-MAX_NUM_CONFIGS=32
+CONFIG_JSON='bdi_graphtrip.json'
+SEEDS=(0 1)
+MAX_NUM_CONFIGS=256
 
 # Calculate config index (jobid) and seed index from PBS_ARRAY_INDEX
 # For example, with 288 configs and 3 seeds: PBS_ARRAY_INDEX 0-863 maps to:
