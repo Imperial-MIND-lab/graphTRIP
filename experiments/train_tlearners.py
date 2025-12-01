@@ -30,7 +30,7 @@ import pandas as pd
 import numpy as np
 import logging
 import matplotlib.pyplot as plt
-from sklearn.linear_model import Ridge, ElasticNet
+from sklearn.linear_model import Ridge, ElasticNet, Lasso
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.decomposition import PCA
@@ -39,9 +39,9 @@ from sklearn.preprocessing import StandardScaler
 
 from utils.files import add_project_root
 from utils.helpers import fix_random_seed, get_logger, check_weights_exist
-from utils.plotting import true_vs_pred_scatter
+from utils.plotting import true_vs_pred_scatter, PSILO, ESCIT
 from utils.configs import load_ingredient_configs, match_ingredient_configs
-from utils.statsalg import correlation_permutation_test
+from utils.statsalg import correlation_permutation_test, analyze_coefficient_sparsity
 from models.utils import freeze_model
 
 
@@ -73,7 +73,7 @@ def cfg(dataset):
                         'test_fold_indices': ['test_fold_indices.csv']} 
 
     # Training configurations
-    prediction_head_type = 'RidgeRegression'
+    prediction_head_type = 'Ridge'
     n_pca_components = 0  # If > 0, apply PCA before fitting regression head
     standardize_data = True  # If True, standardize features before fitting regression head
     n_permutations = 1000  # Number of permutations for correlation permutation test
@@ -186,15 +186,17 @@ def create_prediction_model(model_type: str, seed: int):
     
     Parameters:
     ----------
-    model_type: str - One of 'RidgeRegression', 'ElasticNet', 'RandomForestRegressor', 'HistGradientBoostingRegressor'
+    model_type: str
     seed: int - Random seed
     
     Returns:
     -------
     model: sklearn model instance
     '''
-    if model_type == 'RidgeRegression':
+    if model_type == 'Ridge':
         return Ridge(alpha=1.0, random_state=seed)
+    elif model_type == 'Lasso':
+        return Lasso(alpha=1.0, random_state=seed)
     elif model_type == 'ElasticNet':
         return ElasticNet(alpha=1.0, l1_ratio=0.5, random_state=seed)
     elif model_type == 'RandomForestRegressor':
@@ -293,6 +295,7 @@ def run(_config):
     pca_transformers = {cond1: [], cond2: []}
     pca_var_explained = {cond1: [], cond2: []}
     scalers = {cond1: [], cond2: []}
+    n_clinical_features = None  # Will be set during first iteration
 
     for train_cond in [cond1, cond2]:
         logger.info(f'Training t-learners for condition: {train_cond} (LOOCV)')
@@ -314,6 +317,10 @@ def run(_config):
             # Extract latent representations for training set
             z_train, y_train, clinical_train, subject_train = extract_latent_representations(
                 vgae, train_data_subset, device)
+            
+            # Store number of clinical features (should be the same for all samples)
+            if n_clinical_features is None:
+                n_clinical_features = clinical_train.shape[1]
             
             # Prepare training features
             x_train = np.concatenate([z_train, clinical_train], axis=1)
@@ -419,6 +426,85 @@ def run(_config):
     # Print training time
     end_time = time()
     logger.info(f"Training completed after {(end_time-start_time)/60:.2f} minutes.")
+
+    # Analyze coefficient sparsity (Gini coefficients) ---------------------------
+    # Only if we don't use dimensionality reduction with PCA
+    if n_pca_components == 0:
+        logger.info(f"Analyzing coefficient sparsity with n_clinical_features={n_clinical_features}")
+        sparsity_results = analyze_coefficient_sparsity(pred_models, n_clinical_features)
+        
+        # Save sparsity results to CSV
+        sparsity_csv_path = os.path.join(output_dir, 'coefficient_sparsity_results.csv')
+        sparsity_results.to_csv(sparsity_csv_path, index=False)
+        logger.info(f"Saved coefficient sparsity results to {sparsity_csv_path}")
+        
+        # Create violin plot with jittered points
+        fig, ax = plt.subplots(figsize=(8, 6))
+        
+        # Prepare data for plotting
+        cond1_gini = sparsity_results[sparsity_results['Condition'] == cond1]['Gini_Coefficient'].values
+        cond2_gini = sparsity_results[sparsity_results['Condition'] == cond2]['Gini_Coefficient'].values
+        
+        # Create violin plot positions
+        positions = [0, 1]
+        violin_data = [cond1_gini, cond2_gini]
+        condition_labels = [cond1, cond2]
+        
+        # Create violin plots
+        violin_parts = ax.violinplot(violin_data, positions=positions, vert=True,
+                                    showmeans=False, showextrema=False, widths=0.6)
+        
+        # Customize violins
+        colors = [ESCIT, PSILO]
+        for i, pc in enumerate(violin_parts['bodies']):
+            pc.set_facecolor(colors[i])
+            pc.set_alpha(0.3)
+            pc.set_edgecolor(colors[i])
+            pc.set_linewidth(1.5)
+        
+        # Add jittered points
+        np.random.seed(seed)  # For reproducibility
+        for i, (pos, data_vals) in enumerate(zip(positions, violin_data)):
+            x_jitter = np.random.normal(pos, 0.05, size=len(data_vals))
+            ax.scatter(x_jitter, data_vals, color=colors[i], alpha=0.6, s=30, zorder=3)
+        
+        # Customize plot
+        ax.set_xticks(positions)
+        ax.set_xticklabels(condition_labels)
+        ax.set_ylabel('Gini Coefficient', fontsize=12)
+        ax.set_xlabel('Condition', fontsize=12)
+        ax.set_title('Coefficient Sparsity (Gini Coefficient) by Condition', fontsize=14)
+        ax.grid(True, alpha=0.3, axis='y')
+        
+        # Add mean lines
+        for i, (pos, data_vals) in enumerate(zip(positions, violin_data)):
+            mean_val = np.mean(data_vals)
+            # Draw horizontal line segment for mean
+            ax.plot([pos-0.3, pos+0.3], [mean_val, mean_val], 
+                    color=colors[i], linestyle='--', linewidth=2, alpha=0.7, zorder=2)
+        
+        # Set x-axis limits to ensure violins are visible
+        ax.set_xlim(-0.5, 1.5)
+        
+        plt.tight_layout()
+        
+        # Save figure
+        gini_plot_path = os.path.join(output_dir, 'gini_violins.png')
+        plt.savefig(gini_plot_path)
+        logger.info(f"Saved Gini coefficient violin plot to {gini_plot_path}")
+        image_files.append(gini_plot_path)
+        
+        if not verbose:
+            plt.close()
+        
+        # Log summary statistics
+        for cond in [cond1, cond2]:
+            cond_data = sparsity_results[sparsity_results['Condition'] == cond]['Gini_Coefficient']
+            mean_gini = cond_data.mean()
+            std_gini = cond_data.std()
+            logger.info(f"Gini coefficient for {cond}: mean={mean_gini:.4f}, std={std_gini:.4f}")
+            ex.log_scalar(f'coefficient_sparsity/{cond}/mean_gini', mean_gini)
+            ex.log_scalar(f'coefficient_sparsity/{cond}/std_gini', std_gini)
 
     # Save PCA variance explained for each condition ---------------------------
     for cond in [cond1, cond2]:

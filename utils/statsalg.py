@@ -753,6 +753,76 @@ def test_column_significance(df, test_type='t-test', alpha=0.05):
     
     return stats_df
 
+# Regression model evaluation ---------------------------------------------------
+
+def analyze_coefficient_sparsity(pred_models: Dict, 
+                                 n_clinical_features: int) -> pd.DataFrame:
+    """
+    Calculates the Gini coefficient for the latent feature weights of each t-learner.
+    
+    This metric quantifies the "non-uniformness" or sparsity of the regression 
+    coefficients. A Gini coeff close to 1 indicates the model relies on a few 
+    specific latent dimensions (signal). A Gini coeff close to 0 indicates 
+    the model spreads weights equally (potential noise fitting).
+
+    Parameters:
+    -----------
+    pred_models : Dict
+        Dictionary {condition: [list of trained sklearn models]} populated during LOOCV.
+    n_clinical_features : int
+        Number of clinical features concatenated to the end of the input vector.
+        These are excluded from the Gini calculation to focus on VGAE latent space.
+
+    Returns:
+    --------
+    pd.DataFrame containing Gini coefficients and statistics for every fold.
+    """
+    results = []
+
+    for cond, models in pred_models.items():
+        for i, model in enumerate(models):
+            # 1. Extract feature weights
+            if hasattr(model, 'coef_'):
+                # Ridge, ElasticNet, etc.
+                weights = np.abs(model.coef_)
+                # Handle multi-output case if necessary (flatten), though usually 1D here
+                if weights.ndim > 1:
+                    weights = np.sum(weights, axis=0) 
+            elif hasattr(model, 'feature_importances_'):
+                # RandomForest, GradientBoosting
+                weights = model.feature_importances_
+            else:
+                continue # Skip models without accessible weights
+
+            # 2. Separate Latent from Clinical
+            # Clinical features are appended at the end
+            if n_clinical_features > 0:
+                latent_weights = weights[:-n_clinical_features]
+            else:
+                latent_weights = weights
+
+            # 3. Calculate Gini Coefficient
+            # Gini = sum(|xi - xj|) / (2 * n^2 * mean)
+            if np.mean(latent_weights) == 0:
+                gini = 0.0
+            else:
+                sorted_w = np.sort(latent_weights)
+                n = len(latent_weights)
+                index = np.arange(1, n + 1)
+                gini = ((2 * np.sum(index * sorted_w)) / (n * np.sum(sorted_w))) - ((n + 1) / n)
+
+            results.append({
+                'Condition': cond,
+                'Fold_Index': i,
+                'Gini_Coefficient': gini,
+                'Max_Weight': np.max(latent_weights),
+                'Mean_Weight': np.mean(latent_weights),
+                'Num_Latent_Dims': len(latent_weights)
+            })
+
+    df_results = pd.DataFrame(results)
+    return df_results
+
 # PLS-based robustness analysis -------------------------------------------------
 
 def get_fold_performance(results_dir):
