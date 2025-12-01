@@ -1,0 +1,50 @@
+{ 
+    "output_dir": ["outputs/x_graphtrip/tlearners_torch"],
+    "save_weights": [false],
+    "verbose": [true],
+    "mlp_lr": [0.001],
+    "num_epochs": [50, 100],
+    "num_z_samples": [0, 1],
+    "n_permutations": [1000],
+    "dataset": {
+      "study": ["psilodep2"],
+      "session": ["before"],
+      "atlas": ["schaefer100"],
+      "target": [
+        "QIDS_Final_Integration", "QIDS_Difference",
+        "BDI_Final_Integration", "BDI_Difference"],
+      "batch_size": [7],
+      "val_split": [0.0],
+      "graph_attrs": [["QIDS_Before", "BDI_Before", "Stop_SSRI"]],
+      "graph_attrs_to_standardise": [[], ["QIDS_Before", "BDI_Before"]],
+      "context_attrs": [[]],
+      "node_attrs": [["5-HT1A_Believeau-3", "5-HT2A_Believeau-3", "5-HTT_Believeau-3"]],
+      "edge_attrs": [["functional_connectivity"]],
+      "edge_tfm_type": ["DensityThresholdAdjacency"],
+      "edge_tfm_params": {
+        "edge_info": ["functional_connectivity"],
+        "density": [0.2]
+      },
+      "add_3Dcoords": [true],
+      "self_loop_fill_value": [1],
+      "max_spd_dist": [10],
+      "standardise_x": [false]
+    },
+    "mlp_model": {
+      "model_type": ["RegressionMLP"],
+      "params": {
+        "dropout": [0.25],
+        "hidden_dim": [8, 16, 32],
+        "layernorm": [false, true],
+        "mse_reduction": ["sum"],
+        "num_layers": [2],
+        "output_dim": [1],
+        "reg_strength": [0.01]
+      }
+    },
+    "vgae_model": {
+      "pooling_cfg": {
+        "model_type": ["MeanPooling", "MeanStdPooling"]
+      }
+    }
+  }

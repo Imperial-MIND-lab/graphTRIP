@@ -266,6 +266,38 @@ class RegressionMLP(StandardMLP):
         loss = torch.nn.functional.mse_loss(ypred, ytrue, reduction=self.mse_reduction)
         return loss + self.penalty()
 
+class NonNegativeRegressionMLP(StandardMLP):
+    '''
+    Non-negative regression MLP. Like RegressionMLP, but
+    with ReLU activation in the final layer.
+    '''
+    def __init__(self, input_dim: int, 
+                 hidden_dim: int,
+                 output_dim: int,
+                 num_layers: int = 4,
+                 dropout: float = 0.25,
+                 layernorm: bool = False,
+                 reg_strength: float = 0.01, 
+                 mse_reduction: str = 'sum'):
+        layer_dims = [input_dim] + [hidden_dim]*(num_layers-1) + [output_dim]
+        super().__init__(layer_dims, dropout=dropout, layernorm=layernorm)
+        self.reg_strength = reg_strength
+        self.mse_reduction = mse_reduction
+
+    def penalty(self):
+        return self.reg_strength * L2_reg(self)
+    
+    def loss(self, ypred, ytrue):
+        loss = torch.nn.functional.mse_loss(ypred, ytrue, reduction=self.mse_reduction)
+        return loss + self.penalty()
+
+    def forward(self, x):
+        if self.layernorm is not None:
+            x = self.layernorm(x)
+        for layer in self.layers:
+            x = layer(x)
+        return torch.nn.functional.relu(x)
+
 class LogisticRegressionMLP(StandardMLP):
     '''
     Logistic Regression MLP for binary classification.

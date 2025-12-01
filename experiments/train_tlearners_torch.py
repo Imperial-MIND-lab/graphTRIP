@@ -1,6 +1,6 @@
 '''
 In this experiment, we train t-learners (separate models for each condition) 
-by loading a pre-trained VGAE and training Ridge regression heads on the 
+by loading a pre-trained VGAE and training PyTorch MLP regression heads on the 
 latent representations + clinical data for each condition separately.
 
 Dependencies:
@@ -30,24 +30,20 @@ import pandas as pd
 import numpy as np
 import logging
 import matplotlib.pyplot as plt
-from sklearn.linear_model import Ridge, ElasticNet, Lasso
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.ensemble import HistGradientBoostingRegressor
-from sklearn.decomposition import PCA
 from typing import Dict
-from sklearn.preprocessing import StandardScaler
 
 from utils.files import add_project_root
 from utils.helpers import fix_random_seed, get_logger, check_weights_exist
 from utils.plotting import true_vs_pred_scatter, PSILO, ESCIT
 from utils.configs import load_ingredient_configs, match_ingredient_configs
-from utils.statsalg import correlation_permutation_test, analyze_coefficient_sparsity
+from utils.statsalg import correlation_permutation_test
 from models.utils import freeze_model
 
 
 # Create experiment and logger -------------------------------------------------
-ex = Experiment('train_tlearners', ingredients=[data_ingredient, 
-                                              vgae_ingredient])
+ex = Experiment('train_tlearners_torch', ingredients=[data_ingredient, 
+                                              vgae_ingredient,
+                                              mlp_ingredient])
 logger = get_logger()
 ex.logger = logger
 
@@ -55,9 +51,9 @@ ex.logger = logger
 @ex.config
 def cfg(dataset):
     # Experiment name and ID
-    exname = 'train_tlearners'
+    exname = 'train_tlearners_torch'
     jobid = 0
-    seed = 291
+    seed = 0
     run_name = f'{exname}_job{jobid}_seed{seed}'
     output_dir = os.path.join('outputs', 'runs', run_name)
 
@@ -73,9 +69,9 @@ def cfg(dataset):
                         'test_fold_indices': ['test_fold_indices.csv']} 
 
     # Training configurations
-    prediction_head_type = 'Ridge'
-    n_pca_components = 0  # If > 0, apply PCA before fitting regression head
-    standardize_data = True  # If True, standardize features before fitting regression head
+    num_epochs = 100       # Number of epochs for MLP training
+    mlp_lr = 0.001         # MLP learning rate
+    num_z_samples = 1      # 0 for training MLP on the means of VGAE latent variables
     n_permutations = 1000  # Number of permutations for correlation permutation test
 
     # Condition settings
@@ -147,64 +143,11 @@ def match_config(config: Dict) -> Dict:
     
     return config_updates
 
-# Helper functions ------------------------------------------------------------
-def extract_latent_representations(vgae, data, device):
-    '''
-    Extracts latent representations (z) from a VGAE for the given data.
-    
-    Parameters:
-    ----------
-    vgae: Trained VGAE model
-    data: Dataset or list of data samples
-    device: torch device
-    
-    Returns:
-    -------
-    z: numpy array of shape (n_samples, latent_dim) - latent representations
-    y: numpy array of shape (n_samples,) - target values
-    clinical_data: numpy array of shape (n_samples, n_clinical_features) - clinical data
-    subject_ids: numpy array of shape (n_samples,) - subject IDs
-    '''
-    vgae = vgae.eval().to(device)
-    with torch.no_grad():
-        batch = next(iter(DataLoader(data, batch_size=len(data), shuffle=False))).to(device)
-        context = get_context(batch)
-        out = vgae(batch)
-        z = vgae.readout(out.mu, context, batch.batch)
-        
-        # Convert to numpy
-        z = z.cpu().numpy()
-        y = batch.y.cpu().numpy().flatten()
-        clinical_data = batch.graph_attr.cpu().numpy()
-        subject_ids = batch.subject.cpu().numpy().flatten()
-    
-    return z, y, clinical_data, subject_ids
-
-def create_prediction_model(model_type: str, seed: int):
-    '''
-    Creates a prediction model based on the model type with fixed parameters.
-    
-    Parameters:
-    ----------
-    model_type: str
-    seed: int - Random seed
-    
-    Returns:
-    -------
-    model: sklearn model instance
-    '''
-    if model_type == 'Ridge':
-        return Ridge(alpha=1.0, random_state=seed)
-    elif model_type == 'Lasso':
-        return Lasso(alpha=1.0, random_state=seed)
-    elif model_type == 'ElasticNet':
-        return ElasticNet(alpha=1.0, l1_ratio=0.5, random_state=seed)
-    elif model_type == 'RandomForestRegressor':
-        return RandomForestRegressor(n_estimators=100, max_depth=2, min_samples_leaf=5, random_state=seed)
-    elif model_type == 'HistGradientBoostingRegressor':
-        return HistGradientBoostingRegressor(max_depth=2, min_samples_leaf=5, random_state=seed)
-    else:
-        raise ValueError(f'Unknown model_type: {model_type}.')
+# Captured functions -----------------------------------------------------------
+@ex.capture
+def get_optimizer(mlp, mlp_lr):
+    '''Creates the optimizer for MLP training.'''
+    return torch.optim.Adam(mlp.parameters(), lr=mlp_lr)
 
 # Main function ----------------------------------------------------------------
 @ex.automain
@@ -215,12 +158,12 @@ def run(_config):
     verbose = _config['verbose']
     save_weights = _config['save_weights']
     seed = _config['seed']
-    prediction_head_type = _config['prediction_head_type']
-    n_pca_components = _config['n_pca_components']
-    standardize_data = _config['standardize_data']
+    num_epochs = _config['num_epochs']
+    num_z_samples = _config['num_z_samples']
     n_permutations = _config['n_permutations']
     weights_dir = add_project_root(_config['weights_dir'])
     weight_filenames = _config['weight_filenames']
+    batch_size = _config['dataset']['batch_size']
 
     # Annotations config
     annotations_file = add_project_root(_config['annotations_file'])
@@ -291,11 +234,8 @@ def run(_config):
                         cond2: init_outputs_dict(data)}
     other_cond_outputs = {cond1: init_outputs_dict(data),  # trained on cond1, evaluated on cond2
                          cond2: init_outputs_dict(data)}   # trained on cond2, evaluated on cond1
-    pred_models = {cond1: [], cond2: []}
-    pca_transformers = {cond1: [], cond2: []}
-    pca_var_explained = {cond1: [], cond2: []}
-    scalers = {cond1: [], cond2: []}
-    n_clinical_features = None  # Will be set during first iteration
+    mlp_models = {cond1: [], cond2: []}
+    mlp_train_losses = {cond1: [], cond2: []}
 
     for train_cond in [cond1, cond2]:
         logger.info(f'Training t-learners for condition: {train_cond} (LOOCV)')
@@ -314,219 +254,66 @@ def run(_config):
             train_indices = train_cond_indices[train_cond_indices != held_out_idx]
             train_data_subset = data[train_indices]
             
-            # Extract latent representations for training set
-            z_train, y_train, clinical_train, subject_train = extract_latent_representations(
-                vgae, train_data_subset, device)
+            # Create DataLoader for training
+            train_loader = DataLoader(train_data_subset, batch_size=batch_size, shuffle=True)
             
-            # Store number of clinical features (should be the same for all samples)
-            if n_clinical_features is None:
-                n_clinical_features = clinical_train.shape[1]
+            # Build MLP (input_dim = latent_dim + clinical_dim)
+            mlp = build_mlp(latent_dim=vgae.readout_dim).to(device)
+            optimizer = get_optimizer(mlp)
             
-            # Prepare training features
-            x_train = np.concatenate([z_train, clinical_train], axis=1)
-            original_dim = x_train.shape[1]
+            # Train MLP
+            train_losses = []
+            for epoch in range(num_epochs):
+                train_loss = train_mlp(mlp, train_loader, optimizer, device, 
+                                       get_x=get_x_with_vgae, vgae=vgae, num_z_samples=num_z_samples)
+                train_losses.append(train_loss)
+                if verbose and epoch % 10 == 0:
+                    logger.info(f"LOOCV ({train_cond}), held_out_{held_out_idx}, epoch {epoch}: train_loss={train_loss:.4f}")
             
-            # Standardize features before PCA or model fitting
-            scaler = None
-            if standardize_data:
-                scaler = StandardScaler()
-                x_train = scaler.fit_transform(x_train)
-            scalers[train_cond].append(scaler)
-
-            # Apply PCA if requested
-            pca = None
-            if n_pca_components > 0:
-                pca = PCA(n_components=n_pca_components, random_state=seed)
-                x_train = pca.fit_transform(x_train)
-                var_expl_dict = {f'PC{i+1}': pca.explained_variance_ratio_[i] for i in range(n_pca_components)}
-                pca_var_explained[train_cond].append(var_expl_dict)
-                if verbose:
-                    logger.info(f"LOOCV ({train_cond}), held_out_{held_out_idx}: Applied PCA, reduced from {original_dim} to {n_pca_components} dimensions")
-                    logger.info(f"LOOCV ({train_cond}), held_out_{held_out_idx}: PCA variance explained: {var_expl_dict}")
-            else:
-                pca_var_explained[train_cond].append(None)
-            pca_transformers[train_cond].append(pca)
-
-            # Create and train prediction model
-            pred_model = create_prediction_model(prediction_head_type, seed)
-            pred_model.fit(x_train, y_train)
-            pred_models[train_cond].append(pred_model)
+            mlp_train_losses[train_cond].append(train_losses)
+            mlp_models[train_cond].append(mlp)
             
             # Evaluate on held-out sample (same condition)
             held_out_data = data[np.array([held_out_idx])]
-            z_test_same, y_test_same, clinical_test_same, subject_test_same = extract_latent_representations(
-                vgae, held_out_data, device)
-            x_test_same = np.concatenate([z_test_same, clinical_test_same], axis=1)
-            
-            # Apply standardization transformation if used
-            if scaler is not None:
-                x_test_same = scaler.transform(x_test_same)
-            
-            # Apply PCA transformation if used
-            if pca is not None:
-                x_test_same = pca.transform(x_test_same)
-            
-            y_pred_same = pred_model.predict(x_test_same)
-            
-            # Store outputs for same condition
-            outputs_same = {'prediction': y_pred_same, 
-                           'label': y_test_same, 
-                           'subject_id': subject_test_same,
-                           'clinical_data': []}
-            for sub in range(len(subject_test_same)):
-                outputs_same['clinical_data'].append(tuple(clinical_test_same[sub, :]))
+            held_out_loader = DataLoader(held_out_data, batch_size=len(held_out_data), shuffle=False)
+            outputs_same = get_mlp_outputs_nograd(mlp, held_out_loader, device, 
+                                                 get_x=get_x_with_vgae, vgae=vgae, num_z_samples=0)
             update_best_outputs(same_cond_outputs[train_cond], outputs_same, _config['dataset']['graph_attrs'])
             
             # Evaluate on all samples from the other condition
             if len(other_cond_indices) > 0:
                 other_cond_data = data[other_cond_indices]
-                z_test_other, y_test_other, clinical_test_other, subject_test_other = extract_latent_representations(
-                    vgae, other_cond_data, device)
-                x_test_other = np.concatenate([z_test_other, clinical_test_other], axis=1)
-                
-                # Apply standardization transformation if used
-                if scaler is not None:
-                    x_test_other = scaler.transform(x_test_other)
-                
-                # Apply PCA transformation if used
-                if pca is not None:
-                    x_test_other = pca.transform(x_test_other)
-                
-                y_pred_other = pred_model.predict(x_test_other)
-                
-                # Store outputs for other condition
-                outputs_other = {'prediction': y_pred_other, 
-                                'label': y_test_other, 
-                                'subject_id': subject_test_other,
-                                'clinical_data': []}
-                for sub in range(len(subject_test_other)):
-                    outputs_other['clinical_data'].append(tuple(clinical_test_other[sub, :]))
+                other_cond_loader = DataLoader(other_cond_data, batch_size=len(other_cond_data), shuffle=False)
+                outputs_other = get_mlp_outputs_nograd(mlp, other_cond_loader, device,
+                                                      get_x=get_x_with_vgae, vgae=vgae, num_z_samples=0)
                 update_best_outputs(other_cond_outputs[train_cond], outputs_other, _config['dataset']['graph_attrs'])
             
             # Evaluate on held-out sample
-            if len(y_test_same) > 0:
+            if len(outputs_same['label']) > 0:
+                y_pred_same = np.array(outputs_same['prediction'])
+                y_test_same = np.array(outputs_same['label'])
                 mae = np.mean(np.abs(y_pred_same - y_test_same))
                 ex.log_scalar(f'loocv/{train_cond}/held_out_{held_out_idx}/mae', mae)
             
             # Save model weights if requested
             if save_weights:
-                import pickle
-                model_path = os.path.join(output_dir, f'held_out_{held_out_idx}_pred_model_{train_cond}.pkl')
-                with open(model_path, 'wb') as f:
-                    pickle.dump(pred_model, f)
-                if scaler is not None:
-                    scaler_path = os.path.join(output_dir, f'held_out_{held_out_idx}_scaler_{train_cond}.pkl')
-                    with open(scaler_path, 'wb') as f:
-                        pickle.dump(scaler, f)
-                if pca is not None:
-                    pca_path = os.path.join(output_dir, f'held_out_{held_out_idx}_pca_{train_cond}.pkl')
-                    with open(pca_path, 'wb') as f:
-                        pickle.dump(pca, f)
+                model_path = os.path.join(output_dir, f'held_out_{held_out_idx}_mlp_{train_cond}.pth')
+                torch.save(mlp.state_dict(), model_path)
 
     # Print training time
     end_time = time()
     logger.info(f"Training completed after {(end_time-start_time)/60:.2f} minutes.")
-
-    # Analyze coefficient sparsity (Gini coefficients) ---------------------------
-    # Only if we don't use dimensionality reduction, and if we use a linear model
-    linear_models = ['Ridge', 'Lasso', 'ElasticNet']
-    if n_pca_components == 0 and prediction_head_type in linear_models:
-        logger.info(f"Analyzing coefficient sparsity with n_clinical_features={n_clinical_features}")
-        sparsity_results = analyze_coefficient_sparsity(pred_models, n_clinical_features)
-        
-        # Save sparsity results to CSV
-        sparsity_csv_path = os.path.join(output_dir, 'coefficient_sparsity_results.csv')
-        sparsity_results.to_csv(sparsity_csv_path, index=False)
-        logger.info(f"Saved coefficient sparsity results to {sparsity_csv_path}")
-        
-        # Create violin plot with jittered points
-        fig, ax = plt.subplots(figsize=(8, 6))
-        
-        # Prepare data for plotting
-        cond1_gini = sparsity_results[sparsity_results['Condition'] == cond1]['Gini_Coefficient'].values
-        cond2_gini = sparsity_results[sparsity_results['Condition'] == cond2]['Gini_Coefficient'].values
-        
-        # Create violin plot positions
-        positions = [0, 1]
-        violin_data = [cond1_gini, cond2_gini]
-        condition_labels = [cond1, cond2]
-        
-        # Create violin plots
-        violin_parts = ax.violinplot(violin_data, positions=positions, vert=True,
-                                    showmeans=False, showextrema=False, widths=0.6)
-        
-        # Customize violins
-        colors = [ESCIT, PSILO]
-        for i, pc in enumerate(violin_parts['bodies']):
-            pc.set_facecolor(colors[i])
-            pc.set_alpha(0.3)
-            pc.set_edgecolor(colors[i])
-            pc.set_linewidth(1.5)
-        
-        # Add jittered points
-        np.random.seed(seed)  # For reproducibility
-        for i, (pos, data_vals) in enumerate(zip(positions, violin_data)):
-            x_jitter = np.random.normal(pos, 0.05, size=len(data_vals))
-            ax.scatter(x_jitter, data_vals, color=colors[i], alpha=0.6, s=30, zorder=3)
-        
-        # Customize plot
-        ax.set_xticks(positions)
-        ax.set_xticklabels(condition_labels)
-        ax.set_ylabel('Gini Coefficient', fontsize=12)
-        ax.set_xlabel('Condition', fontsize=12)
-        ax.set_title('Coefficient Sparsity (Gini Coefficient) by Condition', fontsize=14)
-        ax.grid(True, alpha=0.3, axis='y')
-        
-        # Add mean lines
-        for i, (pos, data_vals) in enumerate(zip(positions, violin_data)):
-            mean_val = np.mean(data_vals)
-            # Draw horizontal line segment for mean
-            ax.plot([pos-0.3, pos+0.3], [mean_val, mean_val], 
-                    color=colors[i], linestyle='--', linewidth=2, alpha=0.7, zorder=2)
-        
-        # Set x-axis limits to ensure violins are visible
-        ax.set_xlim(-0.5, 1.5)
-        
-        plt.tight_layout()
-        
-        # Save figure
-        gini_plot_path = os.path.join(output_dir, 'gini_violins.png')
-        plt.savefig(gini_plot_path)
-        logger.info(f"Saved Gini coefficient violin plot to {gini_plot_path}")
-        image_files.append(gini_plot_path)
-        
-        if not verbose:
-            plt.close()
-        
-        # Log summary statistics
-        for cond in [cond1, cond2]:
-            cond_data = sparsity_results[sparsity_results['Condition'] == cond]['Gini_Coefficient']
-            mean_gini = cond_data.mean()
-            std_gini = cond_data.std()
-            logger.info(f"Gini coefficient for {cond}: mean={mean_gini:.4f}, std={std_gini:.4f}")
-            ex.log_scalar(f'coefficient_sparsity/{cond}/mean_gini', mean_gini)
-            ex.log_scalar(f'coefficient_sparsity/{cond}/std_gini', std_gini)
-
-    # Save PCA variance explained for each condition ---------------------------
+    
+    # Log training loss statistics
     for cond in [cond1, cond2]:
-        if len(pca_var_explained[cond]) > 0 and any(v is not None for v in pca_var_explained[cond]):
-            # Filter out None values (where PCA was not applied)
-            var_expl_list = [v for v in pca_var_explained[cond] if v is not None]
-            if len(var_expl_list) > 0:
-                pca_var_explained_df = pd.DataFrame(var_expl_list)
-                pca_var_explained_file = os.path.join(output_dir, f'pca_var_explained_{cond}.csv')
-                pca_var_explained_df.to_csv(pca_var_explained_file, index=False)
-                logger.info(f"Saved PCA variance explained for {cond} to {pca_var_explained_file}")
-                
-                # Log summary statistics for variance explained
-                if n_pca_components > 0:
-                    for pc_idx in range(n_pca_components):
-                        pc_name = f'PC{pc_idx+1}'
-                        mean_var = pca_var_explained_df[pc_name].mean()
-                        std_var = pca_var_explained_df[pc_name].std()
-                        ex.log_scalar(f'pca_var_explained/{cond}/{pc_name}/mean', mean_var)
-                        ex.log_scalar(f'pca_var_explained/{cond}/{pc_name}/std', std_var)
-                        logger.info(f"PCA {pc_name} for {cond}: mean={mean_var:.4f}, std={std_var:.4f}")
+        if len(mlp_train_losses[cond]) > 0:
+            # Get final training losses (last epoch for each model)
+            final_losses = [losses[-1] if len(losses) > 0 else 0.0 for losses in mlp_train_losses[cond]]
+            mean_final_loss = np.mean(final_losses)
+            std_final_loss = np.std(final_losses)
+            logger.info(f"Final training loss for {cond}: mean={mean_final_loss:.4f}, std={std_final_loss:.4f}")
+            ex.log_scalar(f'training/{cond}/mean_final_loss', mean_final_loss)
+            ex.log_scalar(f'training/{cond}/std_final_loss', std_final_loss)
 
     # Process and save outputs for each condition ------------------------------
     # Same-condition predictions (trained on cond, evaluated on cond)
