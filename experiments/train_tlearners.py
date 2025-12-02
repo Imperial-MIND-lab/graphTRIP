@@ -31,8 +31,12 @@ import numpy as np
 import logging
 import matplotlib.pyplot as plt
 from sklearn.linear_model import Ridge, ElasticNet, Lasso
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.kernel_ridge import KernelRidge
+from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor, GradientBoostingRegressor, HistGradientBoostingRegressor
+from sklearn.svm import SVR
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.neural_network import MLPRegressor
+from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.decomposition import PCA
 from typing import Dict
 from sklearn.preprocessing import StandardScaler
@@ -40,7 +44,7 @@ from sklearn.preprocessing import StandardScaler
 from utils.files import add_project_root
 from utils.helpers import fix_random_seed, get_logger, check_weights_exist
 from utils.plotting import true_vs_pred_scatter, PSILO, ESCIT
-from utils.configs import load_ingredient_configs, match_ingredient_configs
+from utils.configs import load_ingredient_configs, match_ingredient_configs, load_configs_from_json, fetch_job_config, make_config_grid
 from utils.statsalg import correlation_permutation_test, analyze_coefficient_sparsity
 from models.utils import freeze_model
 
@@ -57,7 +61,7 @@ def cfg(dataset):
     # Experiment name and ID
     exname = 'train_tlearners'
     jobid = 0
-    seed = 291
+    seed = 0
     run_name = f'{exname}_job{jobid}_seed{seed}'
     output_dir = os.path.join('outputs', 'runs', run_name)
 
@@ -73,7 +77,8 @@ def cfg(dataset):
                         'test_fold_indices': ['test_fold_indices.csv']} 
 
     # Training configurations
-    prediction_head_type = 'Ridge'
+    prediction_head_cfg_file = 'experiments/configs/sklearn_heads.json'
+    prediction_head_cfg_id = 0
     n_pca_components = 0  # If > 0, apply PCA before fitting regression head
     standardize_data = True  # If True, standardize features before fitting regression head
     n_permutations = 1000  # Number of permutations for correlation permutation test
@@ -180,31 +185,82 @@ def extract_latent_representations(vgae, data, device):
     
     return z, y, clinical_data, subject_ids
 
-def create_prediction_model(model_type: str, seed: int):
+def get_model_type_and_config(prediction_head_cfg_file: str, prediction_head_cfg_id: int):
     '''
-    Creates a prediction model based on the model type with fixed parameters.
+    Gets the model type and configuration from the config file based on the ID.
     
     Parameters:
     ----------
-    model_type: str
-    seed: int - Random seed
+    prediction_head_cfg_file: str - Path to JSON file with model configs
+    prediction_head_cfg_id: int - Index of config to use across all model types
     
     Returns:
     -------
-    model: sklearn model instance
+    model_type: str - The model type
+    model_config: dict - The configuration for the model
     '''
-    if model_type == 'Ridge':
-        return Ridge(alpha=1.0, random_state=seed)
-    elif model_type == 'Lasso':
-        return Lasso(alpha=1.0, random_state=seed)
-    elif model_type == 'ElasticNet':
-        return ElasticNet(alpha=1.0, l1_ratio=0.5, random_state=seed)
-    elif model_type == 'RandomForestRegressor':
-        return RandomForestRegressor(n_estimators=100, max_depth=2, min_samples_leaf=5, random_state=seed)
-    elif model_type == 'HistGradientBoostingRegressor':
-        return HistGradientBoostingRegressor(max_depth=2, min_samples_leaf=5, random_state=seed)
-    else:
-        raise ValueError(f'Unknown model_type: {model_type}.')
+    # Load configs from JSON file
+    configs = load_configs_from_json(prediction_head_cfg_file)
+    
+    # Iterate through model types in order and accumulate configs
+    current_id = 0
+    for model_type, model_config_ranges in configs.items():
+        # Generate all config combinations for this model type
+        model_configs = list(make_config_grid(model_config_ranges))
+        num_configs = len(model_configs)
+        
+        # Check if the requested ID falls within this model type's configs
+        if prediction_head_cfg_id < current_id + num_configs:
+            # Get the specific config for this model type
+            local_id = prediction_head_cfg_id - current_id
+            model_config = model_configs[local_id]
+            return model_type, model_config
+        
+        current_id += num_configs
+    
+    # If we get here, the ID exceeds all available configs
+    total_configs = sum(len(list(make_config_grid(ranges))) for ranges in configs.values())
+    raise IndexError(f'prediction_head_cfg_id {prediction_head_cfg_id} exceeds the number of available configurations ({total_configs}).')
+
+@ex.capture
+def create_prediction_model(model_type: str, model_config: dict, seed: int):
+    '''Creates a prediction model based on the model type and configuration.'''
+    # Map model type strings to sklearn classes
+    model_classes = {
+        'Ridge': Ridge,
+        'Lasso': Lasso,
+        'ElasticNet': ElasticNet,
+        'RandomForestRegressor': RandomForestRegressor,
+        'ExtraTreesRegressor': ExtraTreesRegressor,
+        'HistGradientBoostingRegressor': HistGradientBoostingRegressor,
+        'GradientBoostingRegressor': GradientBoostingRegressor,
+        'SVR': SVR,
+        'KernelRidge': KernelRidge,
+        'KNeighborsRegressor': KNeighborsRegressor,
+        'MLPRegressor': MLPRegressor,
+        'GaussianProcessRegressor': GaussianProcessRegressor,
+    }
+    
+    if model_type not in model_classes:
+        raise ValueError(f'Unknown model_type: {model_type}. Available types: {list(model_classes.keys())}')
+    
+    model_class = model_classes[model_type]
+    
+    # Replace "<seed>" placeholder with actual seed value
+    def replace_seed_placeholder(obj):
+        if isinstance(obj, dict):
+            return {k: replace_seed_placeholder(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [replace_seed_placeholder(item) for item in obj]
+        elif obj == "<seed>":
+            return seed
+        else:
+            return obj
+    
+    model_config = replace_seed_placeholder(model_config)
+    
+    # Instantiate model with config
+    return model_class(**model_config)
 
 # Main function ----------------------------------------------------------------
 @ex.automain
@@ -215,12 +271,24 @@ def run(_config):
     verbose = _config['verbose']
     save_weights = _config['save_weights']
     seed = _config['seed']
-    prediction_head_type = _config['prediction_head_type']
     n_pca_components = _config['n_pca_components']
     standardize_data = _config['standardize_data']
     n_permutations = _config['n_permutations']
     weights_dir = add_project_root(_config['weights_dir'])
     weight_filenames = _config['weight_filenames']
+
+    # Require prediction_head_cfg_file and infer model type
+    prediction_head_cfg_file = _config['prediction_head_cfg_file']
+    prediction_head_cfg_id = _config['prediction_head_cfg_id']
+    if prediction_head_cfg_file is None:
+        raise ValueError('prediction_head_cfg_file must be specified in config.')
+    prediction_head_cfg_file = add_project_root(prediction_head_cfg_file)
+    if not os.path.exists(prediction_head_cfg_file):
+        raise FileNotFoundError(f'Config file not found: {prediction_head_cfg_file}')
+    
+    # Infer prediction_head_type from config file and ID
+    prediction_head_type, prediction_head_config = get_model_type_and_config(prediction_head_cfg_file, prediction_head_cfg_id)
+    logger.info(f'Using prediction head type: {prediction_head_type} with config: {prediction_head_config}')
 
     # Annotations config
     annotations_file = add_project_root(_config['annotations_file'])
@@ -348,7 +416,7 @@ def run(_config):
             pca_transformers[train_cond].append(pca)
 
             # Create and train prediction model
-            pred_model = create_prediction_model(prediction_head_type, seed)
+            pred_model = create_prediction_model(prediction_head_type, prediction_head_config, seed=seed)
             pred_model.fit(x_train, y_train)
             pred_models[train_cond].append(pred_model)
             
