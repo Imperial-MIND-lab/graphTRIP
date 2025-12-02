@@ -290,6 +290,65 @@ def get_cfrnet_outputs_nograd(mlp, loader, device, get_x, *args, **kwargs):
 
     return outputs
 
+@mlp_ingredient.capture
+def get_cfrnet_counterfactual_outputs(mlp, loader, device, get_x, k_fold, *args, **kwargs):
+    '''
+    Returns counterfactual predictions from both MLP heads (mlp0 and mlp1).
+    No gradients are computed.
+    
+    Parameters:
+    ----------
+    mlp (torch.nn.Module): trained CFRHead model with mlp0 and mlp1.
+    loader (Dataloader): pytorch geometric test data loader.
+    device (torch.device): Device to use for testing.
+    get_x (function): function to get the input data for the MLP.
+    k_fold (int): The k-fold number for this model.
+    *args, **kwargs: Additional arguments for get_x.
+                      
+    Returns:
+    -------
+    outputs_df (pd.DataFrame): DataFrame with columns:
+                               - subject_id: subject IDs
+                               - k_fold: k-fold number
+                               - prediction_mlp0: predictions from mlp0 (escitalopram)
+                               - prediction_mlp1: predictions from mlp1 (psilocybin)
+                               - label: true labels
+    '''
+    mlp.eval()
+    outputs = {
+        'subject_id': [],
+        'k_fold': [],
+        'prediction_mlp0': [],
+        'prediction_mlp1': [],
+        'label': []
+    }
+    
+    with torch.no_grad():
+        for batch in loader:
+            # Get inputs and labels
+            batch = batch.to(device)
+            ytrue = get_labels(batch, num_z_samples=0)
+            subject_id = batch.subject
+            
+            # Get MLP input (latent means)
+            if 'num_z_samples' in kwargs:
+                kwargs['num_z_samples'] = 0
+            x = get_x(batch, device, *args, **kwargs)
+            
+            # Get predictions from both heads
+            pred_mlp0 = mlp.mlp0(x)  # escitalopram predictions
+            pred_mlp1 = mlp.mlp1(x)  # psilocybin predictions
+            
+            # Save outputs
+            batch_size = subject_id.shape[0]
+            outputs['subject_id'].extend(subject_id.tolist())
+            outputs['k_fold'].extend([k_fold] * batch_size)
+            outputs['prediction_mlp0'].extend(pred_mlp0.squeeze(-1).tolist())
+            outputs['prediction_mlp1'].extend(pred_mlp1.squeeze(-1).tolist())
+            outputs['label'].extend(ytrue.squeeze(-1).tolist())
+    
+    return pd.DataFrame(outputs)
+
 @ex.capture
 def get_dataloaders(data, balance_treatment, seed):
     '''
@@ -343,6 +402,8 @@ def run(_config):
     mlp_train_loss, mlp_test_loss, mlp_val_loss = {}, {}, {}
     mmd_train_loss, mmd_test_loss, mmd_val_loss = {}, {}, {}
     best_vgae_states, best_mlp_states = [], []
+    counterfactual_preds_list = []  
+    counterfactual_preds_df = None 
 
     for k in tqdm(range(num_folds), desc='Folds', disable=not verbose):
 
@@ -427,6 +488,14 @@ def run(_config):
                                          get_x=get_x_with_vgae, 
                                          vgae=vgae, num_z_samples=0)
         update_best_outputs(best_outputs, outputs)
+        
+        # Get counterfactual predictions from both MLP heads
+        counterfactual_preds_df = get_cfrnet_counterfactual_outputs(
+            mlp, test_loaders[k], device, 
+            get_x=get_x_with_vgae, 
+            k_fold=k,
+            vgae=vgae, num_z_samples=0)
+        counterfactual_preds_list.append(counterfactual_preds_df)
 
     # Print training time
     end_time = time()
@@ -437,6 +506,14 @@ def run(_config):
     best_outputs = add_drug_condition_to_outputs(best_outputs, _config['dataset']['study'])
     data_file = os.path.join(output_dir, 'prediction_results.csv')
     best_outputs.to_csv(data_file, index=False)
+    
+    # Combine counterfactual predictions from all folds
+    if counterfactual_preds_list:
+        counterfactual_preds_df = pd.concat(counterfactual_preds_list, ignore_index=True)
+        counterfactual_preds_df = add_drug_condition_to_outputs(counterfactual_preds_df, _config['dataset']['study'])
+        counterfactual_file = os.path.join(output_dir, 'counterfactual_predictions.csv')
+        counterfactual_preds_df.to_csv(counterfactual_file, index=False)
+        logger.info(f"Saved counterfactual predictions to {counterfactual_file}")
 
     # Save test fold assignments
     test_indices_file = save_test_indices(test_indices, output_dir)
@@ -502,6 +579,28 @@ def run(_config):
     title = f'r={r:.4f}, p={p:.4e}, MAE={mae:.4f} ± {mae_std:.4f}'
     true_vs_pred_scatter(best_outputs, title=title, save_path=os.path.join(output_dir, 'true_vs_predicted.png'))
     image_files.append(os.path.join(output_dir, 'true_vs_predicted.png'))
+    
+    # Counterfactual predictions scatter plots
+    if counterfactual_preds_df is not None:
+        # Scatter plot for mlp0 (escitalopram) predictions
+        true_vs_pred_scatter(counterfactual_preds_df,
+                            xcol='prediction_mlp0', ycol='prediction_mlp1',
+                            save_path=os.path.join(output_dir, 'mlp0_vs_mlp1.png'))
+        image_files.append(os.path.join(output_dir, 'mlp0_vs_mlp1.png'))
+
+        # Plot observed vs counterfactual predictions for psilocybin and escitalopram
+        psilo_df = counterfactual_preds_df[counterfactual_preds_df['Condition'] == 1]
+        escit_df = counterfactual_preds_df[counterfactual_preds_df['Condition'] == -1]
+        psilo_df = psilo_df.rename(columns={'prediction_mlp0': 'Predicted escitalopram outcome', 
+                                            'label': 'Observed psilocybin outcome'})
+        escit_df = escit_df.rename(columns={'prediction_mlp1': 'Predicted psilocybin outcome', 
+                                            'label': 'Observed escitalopram outcome'})
+        true_vs_pred_scatter(psilo_df, xcol='Predicted escitalopram outcome', ycol='Observed psilocybin outcome',
+                             save_path=os.path.join(output_dir, 'psilo_cf_vs_true.png'))
+        true_vs_pred_scatter(escit_df, xcol='Predicted psilocybin outcome', ycol='Observed escitalopram outcome',
+                             save_path=os.path.join(output_dir, 'escit_cf_vs_true.png'))
+        image_files.append(os.path.join(output_dir, 'psilo_cf_vs_true.png'))
+        image_files.append(os.path.join(output_dir, 'escit_cf_vs_true.png'))
 
     # Log images
     for img in image_files:
