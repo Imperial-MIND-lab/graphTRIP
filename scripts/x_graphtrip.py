@@ -57,39 +57,44 @@ def main(config_file, output_dir, verbose, debug, seed, config_id=0):
     # Must have been trained with unsupervised_vgae.py first.
     exname = 'train_vgae'
     vgae_weights_dir = os.path.join(output_dir, 'vgae_weights', f'seed_{seed}')
+    test_fold_indices_file = os.path.join(vgae_weights_dir, 'test_fold_indices.csv')
 
-    # Get dataset and VGAE configs from original graphTRIP config
-    config_updates = {}
-    config_updates['dataset'] = copy.deepcopy(config['dataset'])
-    config_updates['vgae_model'] = copy.deepcopy(config['vgae_model'])
+    # If test_fold_indices.csv exists, then it has already been evaluated
+    if not os.path.exists(test_fold_indices_file):
+        # Get dataset and VGAE configs from original graphTRIP config
+        config_updates = {}
+        config_updates['dataset'] = copy.deepcopy(config['dataset'])
+        config_updates['vgae_model'] = copy.deepcopy(config['vgae_model'])
 
-    # Remove labels from dataset config
-    config_updates['dataset']['target'] = None
-    config_updates['dataset']['graph_attrs'] = []
-    config_updates['dataset']['context_attrs'] = []
+        # Remove labels from dataset config
+        config_updates['dataset']['target'] = None
+        config_updates['dataset']['graph_attrs'] = []
+        config_updates['dataset']['context_attrs'] = []
 
-    # Train with LOOCV
-    config_updates['this_k'] = num_folds_loocv  # triggers evaluation run
-    config_updates['dataset']['num_folds'] = num_folds_loocv
-    config_updates['dataset']['batch_size'] = 7
-    config_updates['dataset']['val_split'] = 0.
+        # Train with LOOCV
+        config_updates['this_k'] = num_folds_loocv  # triggers evaluation run
+        config_updates['dataset']['num_folds'] = num_folds_loocv
+        config_updates['dataset']['batch_size'] = 7
+        config_updates['dataset']['val_split'] = 0.
 
-    # Remove pooling layer from VGAE config
-    config_updates['vgae_model']['pooling_cfg'] = {
-        'model_type': 'DummyPooling'
-    }
+        # Remove pooling layer from VGAE config
+        config_updates['vgae_model']['pooling_cfg'] = {
+            'model_type': 'DummyPooling'
+        }
 
-    # Training configurations
-    config_updates['lr'] = config['lr']
-    config_updates['num_epochs'] = config['num_epochs']
-    config_updates['balance_attrs'] = None 
+        # Training configurations
+        config_updates['lr'] = config['lr']
+        config_updates['num_epochs'] = config['num_epochs']
+        config_updates['balance_attrs'] = None 
 
-    # Directories etc.
-    config_updates['output_dir'] = vgae_weights_dir
-    config_updates['seed'] = seed
-    config_updates['verbose'] = verbose
-    config_updates['save_weights'] = True
-    run(exname, observer, config_updates)
+        # Directories etc.
+        config_updates['output_dir'] = vgae_weights_dir
+        config_updates['seed'] = seed
+        config_updates['verbose'] = verbose
+        config_updates['save_weights'] = True
+        run(exname, observer, config_updates)
+    else:
+        print(f"VGAE weights already exist in {vgae_weights_dir}.")
 
 if __name__ == "__main__":
     """
@@ -102,7 +107,7 @@ if __name__ == "__main__":
                         default='experiments/configs/graphtrip.json', 
                         help='Path to the config file with X-graphTRIP model config')
     parser.add_argument('-o', '--output_dir', type=str, default='outputs/x_graphtrip/', help='Path to the output directory')
-    parser.add_argument('-s', '--seed', type=int, default=291, help='Random seed')
+    parser.add_argument('-s', '--seed', type=int, default=0, help='Random seed')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('-ci', '--config_id', type=int, default=None, help='Config ID')
