@@ -2,7 +2,7 @@ from models.models import (
     # Main models
     GraphLevelVGAE, NodeLevelVGAE,
     # MLP models
-    StandardMLP, RegressionMLP, LogisticRegressionMLP, NonNegativeRegressionMLP,
+    StandardMLP, RegressionMLP, LogisticRegressionMLP, NonNegativeRegressionMLP, CFRHead,
     # Node embedding models
     NodeEmbeddingMLP, NodeEmbeddingGATv2Conv, NodeEmbeddingGATv2Conv_withSkip,
     NodeEmbeddingGraphormer,
@@ -18,7 +18,7 @@ from models.models import (
 )
 
 __all__ = ['GraphLevelVGAE', 'NodeLevelVGAE', 
-           'StandardMLP', 'RegressionMLP', 'LogisticRegressionMLP', 'NonNegativeRegressionMLP',
+           'StandardMLP', 'RegressionMLP', 'LogisticRegressionMLP', 'NonNegativeRegressionMLP', 'CFRHead',
            'NodeEmbeddingMLP', 'NodeEmbeddingGATv2Conv', 'NodeEmbeddingGATv2Conv_withSkip',
            'NodeEmbeddingGraphormer',
            'DenseEncoder', 'DenseOneLayerEncoder',

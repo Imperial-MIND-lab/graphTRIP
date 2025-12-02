@@ -298,6 +298,48 @@ class NonNegativeRegressionMLP(StandardMLP):
             x = layer(x)
         return torch.nn.functional.relu(x)
 
+class CFRHead(torch.nn.Module):
+    def __init__(self, input_dim: int, 
+                 hidden_dim: int, 
+                 output_dim: int, 
+                 num_layers: int = 3,
+                 dropout: float = 0.25,
+                 layernorm: bool = False,
+                 reg_strength: float = 0.01, 
+                 mse_reduction: str = 'sum'):
+        super().__init__()
+        # Escitalopram head
+        self.mlp0 = RegressionMLP(input_dim, hidden_dim, output_dim, 
+                                  num_layers=num_layers,
+                                  dropout=dropout, 
+                                  layernorm=layernorm, 
+                                  reg_strength=reg_strength, 
+                                  mse_reduction=mse_reduction)
+        # Psilocybin head
+        self.mlp1 = RegressionMLP(input_dim, hidden_dim, output_dim, 
+                                  num_layers=num_layers,
+                                  dropout=dropout, 
+                                  layernorm=layernorm, 
+                                  reg_strength=reg_strength, 
+                                  mse_reduction=mse_reduction)
+        
+        # Parameters
+        self.reg_strength = reg_strength
+        self.mse_reduction = mse_reduction
+
+    def forward(self, x, t):
+        out0 = self.mlp0(x) # escitalopram predictions
+        out1 = self.mlp1(x) # psilocybin predictions
+        t = t.view(-1, 1)   # treatment group
+        return torch.where(t == 1, out1, out0)
+
+    def penalty(self):
+        return self.reg_strength * (self.mlp0.penalty() + self.mlp1.penalty())
+
+    def loss(self, ypred, ytrue):
+        loss = torch.nn.functional.mse_loss(ypred, ytrue, reduction=self.mse_reduction)
+        return loss + self.penalty()
+
 class LogisticRegressionMLP(StandardMLP):
     '''
     Logistic Regression MLP for binary classification.

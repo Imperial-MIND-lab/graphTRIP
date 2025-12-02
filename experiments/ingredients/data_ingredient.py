@@ -12,6 +12,7 @@ from sacred import Ingredient
 from torch_geometric.loader import DataLoader
 from sklearn.model_selection import KFold, train_test_split, StratifiedKFold
 from torch_geometric.seed import seed_everything
+import torch_geometric.transforms as T
 import pandas as pd
 import numpy as np
 import torch
@@ -207,6 +208,26 @@ def get_context(batch):
     # Expand to node dimension
     context = batch.context_attr[batch.batch]
     return context
+
+@data_ingredient.capture
+def get_treatment(batch, num_z_samples):
+    '''
+    Access pre-stored treatment information.
+    If batch has 3 patients with treatments [1, -1, 1] and num_z_samples=2, 
+    then the treatment will be [1, -1, 1, 1, -1, 1].
+    '''
+    assert hasattr(batch, 'treatment'), "Batch does not have treatment attribute."
+    # Get device from batch tensors
+    device = batch.x.device
+    treatment = batch.treatment
+    if num_z_samples <= 1:
+        return treatment
+    else:
+        n_samples = len(batch)
+        treatment_aug = torch.empty((n_samples * num_z_samples,), dtype=torch.float, device=device)
+        for i in range(num_z_samples):
+            treatment_aug[i * n_samples: (i + 1) * n_samples] = treatment
+        return treatment_aug
                 
 @data_ingredient.capture
 def get_context_idx(context_attrs, graph_attrs):    
@@ -692,6 +713,128 @@ def get_balanced_kfold_dataloaders(dataset, balance_attrs,
                 train_index,
                 test_size=val_split,
                 stratify=[train_labels[i] for i in range(len(train_index))],
+                random_state=seed
+            )
+            val_dataset = dataset[val_index]
+        
+        train_dataset = dataset[train_index]
+        test_dataset = dataset[test_index]
+        
+        # Node attribute standardisation ---------------------------------------
+        if standardise_x:
+            # Get the mean and standard deviation of the training set
+            mean, std = get_train_mean_std(train_dataset)
+            mean_std['mean'].append(mean)
+            mean_std['std'].append(std)
+
+            # Build the standardisation transform
+            standardise_tfm = StandardiseNodeAttributes(mean=mean, std=std)
+            train_dataset.transform = T.Compose([*train_dataset.transform.transforms, standardise_tfm])
+            test_dataset.transform = T.Compose([*test_dataset.transform.transforms, standardise_tfm])
+
+            if val_split > 0:
+                val_dataset.transform = T.Compose([*val_dataset.transform.transforms, standardise_tfm])
+
+        # Graph attribute standardisation ---------------------------------------
+        if len(graph_attrs_to_standardise) > 0:
+            graph_attrs_stats = get_graph_attrs_stats_dict(train_dataset, graph_attrs_to_standardise)
+            standardise_graph_tfm = StandardiseGraphAttributes(stats=graph_attrs_stats)
+            train_dataset.transform = T.Compose([*train_dataset.transform.transforms, standardise_graph_tfm])
+            test_dataset.transform = T.Compose([*test_dataset.transform.transforms, standardise_graph_tfm])
+            if val_split > 0:
+                val_dataset.transform = T.Compose([*val_dataset.transform.transforms, standardise_graph_tfm])
+        
+        # Create dataloaders
+        train_loaders.append(DataLoader(
+            train_dataset,
+            batch_size=len(train_dataset) if use_full_batch else batch_size,
+            shuffle=True))
+        test_loaders.append(DataLoader(
+            test_dataset,
+            batch_size=len(test_dataset) if use_full_batch else batch_size,
+            shuffle=False))
+        test_indices.append(test_index)
+        
+        if val_split > 0:
+            val_loaders.append(DataLoader(
+                val_dataset,
+                batch_size=len(val_dataset) if use_full_batch else batch_size,
+                shuffle=False))
+    
+    return train_loaders, val_loaders, test_loaders, test_indices, mean_std
+
+@data_ingredient.capture
+def add_treatment_transform(data, study):
+    '''Add treatment data transform to the dataset.'''
+    annotations = load_annotations(study=study)
+    # Filter annotations to only include patients in the dataset
+    # Note: the Patient IDs in the annotations file are 1-indexed, but the subject IDs in the data are 0-indexed !
+    subject_ids = [sub+1 for sub in data.subject.tolist()]
+    annotations = annotations[annotations['Patient'].isin(subject_ids)]
+    df = annotations[['Condition_bin01', 'Patient']]
+    treatment_dict = pd.Series(df['Condition_bin01'].values, index=df['Patient']).to_dict()
+    # Add the data transform
+    if data.transform is None:
+        data.transform = AddTreatment(treatment=treatment_dict)
+    else:
+        data.transform = T.Compose([*data.transform.transforms, AddTreatment(treatment=treatment_dict)])
+
+@data_ingredient.capture
+def get_treatment_balanced_kfold_dataloaders(dataset, num_folds, batch_size, val_split, 
+                                             standardise_x, graph_attrs_to_standardise, seed=None):
+    '''
+    Returns balanced K-fold train, validation, and test dataloaders based on treatment.
+    This is similar to get_balanced_kfold_dataloaders but works with treatment attribute
+    instead of graph attributes.
+    
+    Parameters:
+    -----------
+    dataset (BrainGraphDataset): Dataset to split into K-folds
+    num_folds (int): Number of folds
+    batch_size (int): Batch size for the dataloaders
+    val_split (float): Fraction of the training set to use as validation set
+    standardise_x (bool): Whether to standardise the node features
+    graph_attrs_to_standardise (list): List of graph attribute names to standardise
+    seed (int): Random seed 
+    '''
+    if seed is not None:
+        seed_everything(seed)
+    
+    # Extract treatment values from the dataset
+    # Treatment is added via AddTreatment transform, so we need to access it from data objects
+    treatment_values = []
+    for i in range(len(dataset)):
+        data = dataset[i]
+        if hasattr(data, 'treatment'):
+            treatment_values.append(data.treatment.item())
+        else:
+            # If treatment not yet added, we need to apply the transform
+            # This should not happen if add_treatment_transform was called first
+            raise ValueError(f"Treatment not found for data sample {i}. Make sure add_treatment_transform() is called before creating dataloaders.")
+    
+    # Use StratifiedKFold for balanced splitting based on treatment
+    skf = StratifiedKFold(n_splits=num_folds, shuffle=True, random_state=seed)
+    
+    # Initialize containers
+    train_loaders = []
+    val_loaders = []
+    test_loaders = []
+    test_indices = []
+    mean_std = {'mean': [], 'std': []} if standardise_x else None
+    
+    # If batch_size is -1, use full batch training (no mini-batching)
+    use_full_batch = (batch_size == -1)
+    
+    for train_index, test_index in skf.split(np.zeros(len(dataset)), treatment_values):
+        if val_split > 0:
+            # For validation split, maintain balance in treatment
+            train_treatments = [treatment_values[i] for i in train_index]
+            
+            # Perform stratified split for validation
+            train_index, val_index = train_test_split(
+                train_index,
+                test_size=val_split,
+                stratify=train_treatments,
                 random_state=seed
             )
             val_dataset = dataset[val_index]

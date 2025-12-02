@@ -227,6 +227,20 @@ class StandardiseNodeAttributes(BaseTransform):
             return data
         data.x = (data.x - self.mean) / self.std
         return data
+
+class AddTreatment(BaseTransform):
+    '''
+    Adds treatment information to each data object.
+    Parameter:
+    ---------
+    treatment (dict): Dictionary that hashes the subject id (0-indexing!) to the treatment. 
+    '''
+    def __init__(self, treatment: Dict):
+        self.treatment = treatment
+
+    def forward(self, data: Data) -> Data:
+        data.treatment = torch.tensor(self.treatment[data.subject.item()+1])
+        return data
     
 class AddLabel(BaseTransform):
     '''
