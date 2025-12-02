@@ -34,7 +34,7 @@ from typing import Dict
 
 from utils.files import add_project_root
 from utils.helpers import fix_random_seed, get_logger, check_weights_exist
-from utils.plotting import true_vs_pred_scatter, PSILO, ESCIT
+from utils.plotting import true_vs_pred_scatter, PSILO, ESCIT, plot_loss_curves
 from utils.configs import load_ingredient_configs, match_ingredient_configs
 from utils.statsalg import correlation_permutation_test
 from models.utils import freeze_model
@@ -92,7 +92,7 @@ def match_config(config: Dict) -> Dict:
 
     # Various dataset related configs may mismatch, but other configs must match
     config_updates = copy.deepcopy(config)
-    exceptions = ['graph_attrs', 'target', 'context_attrs']
+    exceptions = ['graph_attrs', 'target', 'context_attrs', 'batch_size', 'num_folds']
     # Exclude pooling since we're reinitializing it
     exceptions.append('pooling_cfg')
     config_updates = match_ingredient_configs(config=config,
@@ -234,7 +234,6 @@ def run(_config):
                         cond2: init_outputs_dict(data)}
     other_cond_outputs = {cond1: init_outputs_dict(data),  # trained on cond1, evaluated on cond2
                          cond2: init_outputs_dict(data)}   # trained on cond2, evaluated on cond1
-    mlp_models = {cond1: [], cond2: []}
     mlp_train_losses = {cond1: [], cond2: []}
 
     for train_cond in [cond1, cond2]:
@@ -249,13 +248,16 @@ def run(_config):
             # Get the VGAE that had this held-out sample in its test set during pretraining
             vgae_idx = test_indices[held_out_idx]
             vgae = pretrained_vgaes[vgae_idx]
+            vgae = vgae.eval().to(device)
+            vgae = freeze_model(vgae)
             
             # Training samples: all other samples from this condition
             train_indices = train_cond_indices[train_cond_indices != held_out_idx]
             train_data_subset = data[train_indices]
             
             # Create DataLoader for training
-            train_loader = DataLoader(train_data_subset, batch_size=batch_size, shuffle=True)
+            actual_batch_size = len(train_data_subset) if batch_size == -1 else batch_size
+            train_loader = DataLoader(train_data_subset, batch_size=actual_batch_size, shuffle=True)
             
             # Build MLP (input_dim = latent_dim + clinical_dim)
             mlp = build_mlp(latent_dim=vgae.readout_dim).to(device)
@@ -269,16 +271,14 @@ def run(_config):
                 train_losses.append(train_loss)
                 if verbose and epoch % 10 == 0:
                     logger.info(f"LOOCV ({train_cond}), held_out_{held_out_idx}, epoch {epoch}: train_loss={train_loss:.4f}")
-            
             mlp_train_losses[train_cond].append(train_losses)
-            mlp_models[train_cond].append(mlp)
             
             # Evaluate on held-out sample (same condition)
             held_out_data = data[np.array([held_out_idx])]
             held_out_loader = DataLoader(held_out_data, batch_size=len(held_out_data), shuffle=False)
             outputs_same = get_mlp_outputs_nograd(mlp, held_out_loader, device, 
                                                  get_x=get_x_with_vgae, vgae=vgae, num_z_samples=0)
-            update_best_outputs(same_cond_outputs[train_cond], outputs_same, _config['dataset']['graph_attrs'])
+            update_best_outputs(same_cond_outputs[train_cond], outputs_same)
             
             # Evaluate on all samples from the other condition
             if len(other_cond_indices) > 0:
@@ -286,14 +286,7 @@ def run(_config):
                 other_cond_loader = DataLoader(other_cond_data, batch_size=len(other_cond_data), shuffle=False)
                 outputs_other = get_mlp_outputs_nograd(mlp, other_cond_loader, device,
                                                       get_x=get_x_with_vgae, vgae=vgae, num_z_samples=0)
-                update_best_outputs(other_cond_outputs[train_cond], outputs_other, _config['dataset']['graph_attrs'])
-            
-            # Evaluate on held-out sample
-            if len(outputs_same['label']) > 0:
-                y_pred_same = np.array(outputs_same['prediction'])
-                y_test_same = np.array(outputs_same['label'])
-                mae = np.mean(np.abs(y_pred_same - y_test_same))
-                ex.log_scalar(f'loocv/{train_cond}/held_out_{held_out_idx}/mae', mae)
+                update_best_outputs(other_cond_outputs[train_cond], outputs_other)
             
             # Save model weights if requested
             if save_weights:
@@ -303,17 +296,23 @@ def run(_config):
     # Print training time
     end_time = time()
     logger.info(f"Training completed after {(end_time-start_time)/60:.2f} minutes.")
-    
-    # Log training loss statistics
+
+    # Plot loss curves for each condition --------------------------------------
     for cond in [cond1, cond2]:
         if len(mlp_train_losses[cond]) > 0:
-            # Get final training losses (last epoch for each model)
-            final_losses = [losses[-1] if len(losses) > 0 else 0.0 for losses in mlp_train_losses[cond]]
-            mean_final_loss = np.mean(final_losses)
-            std_final_loss = np.std(final_losses)
-            logger.info(f"Final training loss for {cond}: mean={mean_final_loss:.4f}, std={std_final_loss:.4f}")
-            ex.log_scalar(f'training/{cond}/mean_final_loss', mean_final_loss)
-            ex.log_scalar(f'training/{cond}/std_final_loss', std_final_loss)
+            # Convert loss data structure: from list of lists to dict with fold indices
+            # mlp_train_losses[cond] is a list of lists (one per LOOCV fold)
+            # plot_loss_curves expects a dict with keys 0, 1, 2, ... and values as lists of losses per epoch
+            train_loss_dict = {i: losses for i, losses in enumerate(mlp_train_losses[cond])}
+            # Create empty test_loss and val_loss dicts (same structure, but empty lists)
+            test_loss_dict = {i: [] for i in range(len(mlp_train_losses[cond]))}
+            val_loss_dict = {i: [] for i in range(len(mlp_train_losses[cond]))}
+            
+            # Plot and save loss curves
+            loss_curve_path = os.path.join(output_dir, f'mlp_loss_curves_{cond}.png')
+            plot_loss_curves(train_loss_dict, test_loss_dict, val_loss_dict, save_path=loss_curve_path)
+            image_files.append(loss_curve_path)
+            logger.info(f"Saved loss curves for {cond} to {loss_curve_path}")
 
     # Process and save outputs for each condition ------------------------------
     # Same-condition predictions (trained on cond, evaluated on cond)

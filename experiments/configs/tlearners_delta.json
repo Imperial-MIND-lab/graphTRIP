@@ -1,5 +1,5 @@
 { 
-    "output_dir": ["outputs/x_graphtrip/tlearners_torch_screening/tlearners"],
+    "output_dir": ["outputs/x_graphtrip/tlearners_torch_screening/tlearners_delta"],
     "weights_dir": ["outputs/x_graphtrip/vgae_weights/seed_0"],
     "save_weights": [false],
     "verbose": [true],
@@ -11,7 +11,7 @@
       "study": ["psilodep2"],
       "session": ["before"],
       "atlas": ["schaefer100"],
-      "target": ["QIDS_Final_Integration", "BDI_Final_Integration"],
+      "target": ["QIDS_Difference", "BDI_Difference"],
       "batch_size": [7, -1],
       "val_split": [0.0],
       "graph_attrs": [["QIDS_Before", "BDI_Before", "Stop_SSRI"]],
@@ -30,7 +30,7 @@
       "standardise_x": [false]
     },
     "mlp_model": {
-      "model_type": ["NonNegativeRegressionMLP"],
+      "model_type": ["RegressionMLP"],
       "params": {
         "dropout": [0.1],
         "hidden_dim": [8, 16, 32],
