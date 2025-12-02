@@ -1432,7 +1432,7 @@ class GraphLevelVGAE(torch.nn.Module):
     def forward(self, batch: Data):
         '''
         Parameters:
-        ----------
+        ----------treated_pooling_type
         batch (Data): Batch of data objects from PyTorch Geometric.
         '''
         # Save a copy of the original inputs for the decoder

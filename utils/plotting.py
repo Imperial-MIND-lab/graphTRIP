@@ -648,6 +648,115 @@ def true_vs_pred_scatter_with_patch(ypreds, marker_col=None, style=None, title=N
     
     plt.show()
 
+def true_vs_pred_scatter_multi(ypreds_list, marker_col=None, style=None, titles=None, 
+                               save_path=None, xcol='label', ycol='prediction', max_cols=3):
+    """
+    Create a grid of scatter plots (one per DataFrame) of true vs predicted values.
+    Parameters:
+    ypreds_list (list of pd.DataFrame): Each DataFrame must have columns for x and y values, and optionally 'Condition' column.
+    marker_col (str): Optional column name in ypreds to determine marker symbols.
+    style (str): Optional style for markers if 'Condition' column is not present. Can be 'psilo' or 'escit'
+    titles (list of str): Optional list of titles for subplots. If not provided, subplots have default or metrics in title.
+    save_path (str): Optional path to save the figure.
+    xcol (str): Name of column to use for x-axis values (default: 'label')
+    ycol (str): Name of column to use for y-axis values (default: 'prediction')
+    """
+    import math
+    n = len(ypreds_list)
+    ncols = min(max_cols, n)
+    nrows = math.ceil(n / max_cols)
+
+    figsize = (6 * ncols, 5 * nrows)
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
+    if titles is None:
+        titles = [''] * n
+
+    for i, ypreds in enumerate(ypreds_list):
+        ax = axes[i // ncols][i % ncols]
+
+        # Define marker mapping if marker_col is provided
+        if marker_col is not None:
+            unique_markers = ypreds[marker_col].unique()
+            marker_map = {val: marker for val, marker in 
+                         zip(unique_markers, ['o', 'x', 'd', '^', 'v', '>', '<', 'p', 'h', '8'])}
+        else:
+            marker_map = {}
+
+        if 'Condition' in ypreds.columns:
+            condition_psilo = ypreds[ypreds['Condition'] == 1.0]
+            condition_escit = ypreds[ypreds['Condition'] == -1.0]
+
+            if marker_col is not None:
+                for marker_val in ypreds[marker_col].unique():
+                    # psilo
+                    mask_psilo = condition_psilo[marker_col] == marker_val
+                    if mask_psilo.any():
+                        ax.scatter(condition_psilo[mask_psilo][xcol], 
+                                   condition_psilo[mask_psilo][ycol],
+                                   marker=marker_map[marker_val], 
+                                   color=PSILO, edgecolor=PSILO, 
+                                   alpha=ALPHA_SCATTER)
+                    # escit
+                    mask_escit = condition_escit[marker_col] == marker_val
+                    if mask_escit.any():
+                        ax.scatter(condition_escit[mask_escit][xcol], 
+                                   condition_escit[mask_escit][ycol],
+                                   marker=marker_map[marker_val], 
+                                   color=ESCIT, edgecolor=ESCIT, 
+                                   alpha=ALPHA_SCATTER)
+            else:
+                ax.scatter(condition_psilo[xcol], condition_psilo[ycol], 
+                           marker='d', color=PSILO, edgecolor=PSILO, alpha=ALPHA_SCATTER)
+                ax.scatter(condition_escit[xcol], condition_escit[ycol], 
+                           marker='o', color=ESCIT, edgecolor=ESCIT, alpha=ALPHA_SCATTER)
+        else:
+            if marker_col is not None:
+                for marker_val in ypreds[marker_col].unique():
+                    mask = ypreds[marker_col] == marker_val
+                    color = PSILO if style == 'psilo' else ESCIT if style == 'escit' else NEUTRAL2
+                    ax.scatter(ypreds[mask][xcol], ypreds[mask][ycol],
+                               marker=marker_map[marker_val], 
+                               color=color, edgecolor=color, 
+                               alpha=ALPHA_SCATTER)
+            else:
+                color = PSILO if style == 'psilo' else ESCIT if style == 'escit' else NEUTRAL2
+                marker = 'd' if style == 'psilo' else 'o'
+                ax.scatter(ypreds[xcol], ypreds[ycol],
+                           marker=marker, color=color, edgecolor=color, alpha=ALPHA_SCATTER)
+
+        ax.set_xlabel(xcol)
+        ax.set_ylabel(ycol)
+        ax.grid(True)
+        min_val = min(ypreds[xcol].min(), ypreds[ycol].min()) - 2
+        max_val = max(ypreds[xcol].max(), ypreds[ycol].max()) + 2
+        ax.plot([min_val, max_val], [min_val, max_val], '--', color=NEUTRAL2, alpha=0.7)
+        ax.set_xlim(min_val, max_val)
+        ax.set_ylim(min_val, max_val)
+        ax.set_aspect('equal', adjustable='box')
+
+        # Title and stats
+        t = titles[i] if (titles is not None and len(titles) > i) else ''
+        try:
+            r, p = pearsonr(ypreds[xcol], ypreds[ycol])
+        except Exception:
+            r, p = np.nan, np.nan
+        mae = np.mean(np.abs(ypreds[xcol] - ypreds[ycol]))
+        mae_std = np.std(np.abs(ypreds[xcol] - ypreds[ycol]))
+        full_title = f'r={r:.4f}, p={p:.4e}, MAE={mae:.4f} ± {mae_std:.4f}'
+        if p < 0.05:
+            ax.set_title(t + '\n' + full_title, color='red')
+        else:
+            ax.set_title(t + '\n' + full_title)
+
+    # Hide unused subplots
+    for j in range(n, nrows * ncols):
+        axes[j // ncols][j % ncols].axis('off')
+
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, format=save_path.split('.')[-1])
+    plt.show()
+
 def regression_scatter(ypreds, marker_col=None, style=None, title=None, 
                       save_path=None, xcol='label', ycol='prediction',
                       show_ci=True, regline_alpha=0.6, equal_aspect=False, 

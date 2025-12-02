@@ -78,7 +78,7 @@ def cfg(dataset):
                         'test_fold_indices': ['test_fold_indices.csv']} 
 
     # Training configurations
-    prediction_head_type = 'RidgeRegression'
+    prediction_head_type = 'Ridge'
     n_pca_components = 0  # If > 0, apply PCA before fitting regression head
     standardize_data = True  # If True, standardize features before fitting regression head
     n_permutations = 1000  # Number of permutations for correlation permutation test
@@ -106,6 +106,7 @@ def match_config(config: Dict) -> Dict:
     # Various dataset related configs may mismatch, but other configs must match
     config_updates = copy.deepcopy(config)
     exceptions = ['graph_attrs', 'target', 'context_attrs', 
+                  'batch_size', 'num_folds', 'val_split', # training LOOCV, so this has no effect
                   'graph_attrs_to_standardise', 'pooling_cfg']
     config_updates = match_ingredient_configs(config=config,
                                               previous_config=previous_config,
@@ -219,14 +220,14 @@ def create_prediction_model(model_type: str, seed: int):
     
     Parameters:
     ----------
-    model_type: str - One of 'RidgeRegression', 'ElasticNet', 'RandomForestRegressor', 'HistGradientBoostingRegressor'
+    model_type: str - One of 'Ridge', 'ElasticNet', 'RandomForestRegressor', 'HistGradientBoostingRegressor'
     seed: int - Random seed
     
     Returns:
     -------
     model: sklearn model instance
     '''
-    if model_type == 'RidgeRegression':
+    if model_type == 'Ridge':
         return Ridge(alpha=1.0, random_state=seed)
     elif model_type == 'ElasticNet':
         return ElasticNet(alpha=1.0, l1_ratio=0.5, random_state=seed)

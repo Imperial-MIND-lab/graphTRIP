@@ -78,10 +78,12 @@ def cfg(dataset):
 
     # Training configurations
     prediction_head_cfg_file = 'experiments/configs/sklearn_heads.json'
-    prediction_head_cfg_id = 0
+    prediction_head_cfg_id_0 = 0  # Config ID for models trained on cond0
+    prediction_head_cfg_id_1 = None  # Config ID for models trained on cond1; if None use the same as cond0
     n_pca_components = 0  # If > 0, apply PCA before fitting regression head
     standardize_data = True  # If True, standardize features before fitting regression head
     n_permutations = 1000  # Number of permutations for correlation permutation test
+    treated_pooling_type = None # If None, use the same pooling for both conditions
 
     # Condition settings
     annotations_file = 'data/raw/psilodep2/annotations.csv'
@@ -101,7 +103,9 @@ def match_config(config: Dict) -> Dict:
 
     # Various dataset related configs may mismatch, but other configs must match
     config_updates = copy.deepcopy(config)
-    exceptions = ['graph_attrs', 'target', 'context_attrs']
+    exceptions = ['graph_attrs', 'target', 'context_attrs', 
+                  'batch_size', 'num_folds', 'val_split' # training LOOCV, so this has no effect
+                  ]
     # Exclude pooling since we're reinitializing it
     exceptions.append('pooling_cfg')
     config_updates = match_ingredient_configs(config=config,
@@ -149,6 +153,14 @@ def match_config(config: Dict) -> Dict:
     weight_filenames = config.get('weight_filenames', default_weight_filenames)
     check_weights_exist(weights_dir, weight_filenames)
     config_updates['weight_filenames'] = weight_filenames
+
+    # Pooling config
+    treated_pooling_type = config.get('treated_pooling_type', None)
+    if treated_pooling_type is not None:
+        valid_pooling_types = ['MeanPooling', 'MeanStdPooling', 'DeepSetsMomentPooling']
+        if treated_pooling_type not in valid_pooling_types:
+            raise ValueError(f'treated_pooling_type must be one of {valid_pooling_types}, got {treated_pooling_type}')
+    config_updates['treated_pooling_type'] = treated_pooling_type
     
     return config_updates
 
@@ -277,18 +289,20 @@ def run(_config):
     weights_dir = add_project_root(_config['weights_dir'])
     weight_filenames = _config['weight_filenames']
 
-    # Require prediction_head_cfg_file and infer model type
+    # Pooling config
+    treated_pooling_type = _config['treated_pooling_type']
+    control_pooling_type = _config['vgae_model']['pooling_cfg']['model_type']
+    change_pooling = (treated_pooling_type is not None) and (treated_pooling_type != control_pooling_type)
+
+    # Require prediction_head_cfg_file
     prediction_head_cfg_file = _config['prediction_head_cfg_file']
-    prediction_head_cfg_id = _config['prediction_head_cfg_id']
+    prediction_head_cfg_id_0 = _config['prediction_head_cfg_id_0']
+    prediction_head_cfg_id_1 = _config['prediction_head_cfg_id_1'] or prediction_head_cfg_id_0
     if prediction_head_cfg_file is None:
         raise ValueError('prediction_head_cfg_file must be specified in config.')
     prediction_head_cfg_file = add_project_root(prediction_head_cfg_file)
     if not os.path.exists(prediction_head_cfg_file):
         raise FileNotFoundError(f'Config file not found: {prediction_head_cfg_file}')
-    
-    # Infer prediction_head_type from config file and ID
-    prediction_head_type, prediction_head_config = get_model_type_and_config(prediction_head_cfg_file, prediction_head_cfg_id)
-    logger.info(f'Using prediction head type: {prediction_head_type} with config: {prediction_head_config}')
 
     # Annotations config
     annotations_file = add_project_root(_config['annotations_file'])
@@ -363,6 +377,7 @@ def run(_config):
     pca_transformers = {cond1: [], cond2: []}
     pca_var_explained = {cond1: [], cond2: []}
     scalers = {cond1: [], cond2: []}
+    prediction_head_types = {cond1: None, cond2: None}  # Store model types for each condition
     n_clinical_features = None  # Will be set during first iteration
 
     for train_cond in [cond1, cond2]:
@@ -373,10 +388,34 @@ def run(_config):
         other_cond_indices = cond2_indices if train_cond == cond1 else cond1_indices
         other_cond = cond2 if train_cond == cond1 else cond1
         
+        # Determine prediction head config ID for this condition
+        # cond1 corresponds to cond0, cond2 corresponds to cond1
+        if train_cond == cond1:
+            prediction_head_cfg_id = prediction_head_cfg_id_0
+        else:  # train_cond == cond2
+            prediction_head_cfg_id = prediction_head_cfg_id_1
+        
+        # Infer prediction_head_type from config file and ID
+        prediction_head_type, prediction_head_config = get_model_type_and_config(prediction_head_cfg_file, prediction_head_cfg_id)
+        prediction_head_types[train_cond] = prediction_head_type
+        logger.info(f'Using prediction head type for {train_cond}: {prediction_head_type} with config: {prediction_head_config}')
+        
         for held_out_idx in tqdm(train_cond_indices, desc=f'LOOCV ({train_cond})', disable=not verbose):
             # Get the VGAE that had this held-out sample in its test set during pretraining
             vgae_idx = test_indices[held_out_idx]
             vgae = pretrained_vgaes[vgae_idx]
+            
+            # Reinitialize pooling for cond1 if treated_pooling_cfg is specified
+            if train_cond == cond1 and change_pooling:
+                latent_dim = _config['vgae_model']['params']['latent_dim']
+                treated_pooling_cfg = {
+                    'model_type': treated_pooling_type,
+                    'params': {'pooling_dim': latent_dim} 
+                }
+                vgae.reinit_pooling(treated_pooling_cfg)
+                if verbose:
+                    logger.info(f"Reinitialized pooling to {treated_pooling_type} for {train_cond} (held_out_{held_out_idx})")
+                    print(vgae.pooling)
             
             # Training samples: all other samples from this condition
             train_indices = train_cond_indices[train_cond_indices != held_out_idx]
@@ -498,7 +537,11 @@ def run(_config):
     # Analyze coefficient sparsity (Gini coefficients) ---------------------------
     # Only if we don't use dimensionality reduction, and if we use a linear model
     linear_models = ['Ridge', 'Lasso', 'ElasticNet']
-    if n_pca_components == 0 and prediction_head_type in linear_models:
+    # Check if both conditions use linear models
+    both_linear = (n_pca_components == 0 and 
+                   prediction_head_types[cond1] in linear_models and 
+                   prediction_head_types[cond2] in linear_models)
+    if both_linear:
         logger.info(f"Analyzing coefficient sparsity with n_clinical_features={n_clinical_features}")
         sparsity_results = analyze_coefficient_sparsity(pred_models, n_clinical_features)
         
