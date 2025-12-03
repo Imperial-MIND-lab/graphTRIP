@@ -216,7 +216,8 @@ def get_treatment(batch, num_z_samples):
     If batch has 3 patients with treatments [1, -1, 1] and num_z_samples=2, 
     then the treatment will be [1, -1, 1, 1, -1, 1].
     '''
-    assert hasattr(batch, 'treatment'), "Batch does not have treatment attribute."
+    if not hasattr(batch, 'treatment'):
+        return None
     # Get device from batch tensors
     device = batch.x.device
     treatment = batch.treatment
@@ -764,15 +765,23 @@ def get_balanced_kfold_dataloaders(dataset, balance_attrs,
     return train_loaders, val_loaders, test_loaders, test_indices, mean_std
 
 @data_ingredient.capture
-def add_treatment_transform(data, study):
+def add_treatment_transform(data, study, drug_condition):
     '''Add treatment data transform to the dataset.'''
-    annotations = load_annotations(study=study)
-    # Filter annotations to only include patients in the dataset
-    # Note: the Patient IDs in the annotations file are 1-indexed, but the subject IDs in the data are 0-indexed !
-    subject_ids = [sub+1 for sub in data.subject.tolist()]
-    annotations = annotations[annotations['Patient'].isin(subject_ids)]
-    df = annotations[['Condition_bin01', 'Patient']]
-    treatment_dict = pd.Series(df['Condition_bin01'].values, index=df['Patient']).to_dict()
+
+    # Infer treatment dictionary from annotations
+    if drug_condition is None:
+        annotations = load_annotations(study=study)
+        # Filter annotations to only include patients in the dataset
+        # Note: the Patient IDs in the annotations file are 1-indexed, but the subject IDs in the data are 0-indexed !
+        subject_ids = [sub+1 for sub in data.subject.tolist()]
+        annotations = annotations[annotations['Patient'].isin(subject_ids)]
+        df = annotations[['Condition_bin01', 'Patient']]
+        treatment_dict = pd.Series(df['Condition_bin01'].values, index=df['Patient']).to_dict()
+
+    # Fix "pseudo-treatment" based on drug_condition
+    else:
+        treatment_dict = {sub+1: drug_condition for sub in data.subject.tolist()}
+
     # Add the data transform
     if data.transform is None:
         data.transform = AddTreatment(treatment=treatment_dict)

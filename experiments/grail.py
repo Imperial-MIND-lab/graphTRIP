@@ -11,6 +11,9 @@ Date: 2025-05-03
 License: BSD 3-Clause
 '''
 
+import matplotlib
+matplotlib.use('Agg')
+
 import sys
 sys.path.append('graphTRIP/')
 
@@ -234,9 +237,15 @@ def get_alignments_and_features(triu_edges, ypred_grad, z,
 def get_ypred_from_z(z, vgae, mlp, batch):
     '''Returns the MLP prediction for a given latent sample.'''
     context = get_context(batch)
+    treatment = get_treatment(batch, num_z_samples=0)
     clinical_data = batch.graph_attr
     x = torch.cat([vgae.readout(z, context, batch.batch), clinical_data], dim=1)
-    return mlp(x)
+    if treatment is None:
+        # Standard MLP: no treatment information
+        return mlp(x)
+    else:
+        # CFRNet: use treatment information
+        return mlp(x, treatment)
 
 def compute_gradient(output_scalar, z):
     """
@@ -272,6 +281,7 @@ def run(_config):
     save_outputs = _config['save_outputs']
     node_attrs = _config['dataset']['node_attrs']
     node_attrs = [attr.split('_')[0] for attr in node_attrs]
+    is_cfrnet = _config['mlp_model']['model_type'] == 'CFRHead'
 
     # Create output directory, fix seed, get device
     os.makedirs(output_dir, exist_ok=True)             # Create output directory
@@ -289,6 +299,9 @@ def run(_config):
 
     # Load data
     data = load_data()
+    if is_cfrnet:
+        # Add treatment transform to the dataset (required for CFRHead)
+        add_treatment_transform(data)
 
     # Compute fold-wise performance of each model --------------------------
     if len(vgaes) > 1:

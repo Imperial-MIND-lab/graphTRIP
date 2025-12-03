@@ -70,7 +70,7 @@ def match_config(config: Dict) -> Dict:
 
     # Match configs of relevant ingredients
     ingredients = ['dataset', 'vgae_model', 'mlp_model']
-    exceptions = ['num_nodes']
+    exceptions = ['num_nodes', 'drug_condition']
     config_updates = match_ingredient_configs(config=config,
                                               previous_config=previous_config,
                                               ingredients=ingredients,
@@ -107,6 +107,7 @@ def get_inputs_and_labels(data, vgaes, testfold_indices, device):
     batch = next(iter(DataLoader(data, batch_size=num_samples, shuffle=False))).to(device)
     ytrue = batch.y.cpu().numpy()
     clinical_data = batch.graph_attr.cpu().numpy()
+    treatment = get_treatment(batch, num_z_samples=0)
     
     # Initialize array for VGAE outputs
     z_readout = np.zeros((num_samples, vgaes[0].readout_dim))
@@ -133,12 +134,13 @@ def get_inputs_and_labels(data, vgaes, testfold_indices, device):
             # Store the results
             z_readout[fold_indices] = fold_z_readout
 
-    return z_readout, clinical_data, ytrue
+    return z_readout, clinical_data, ytrue, treatment
 
 def compute_score_with_fold_permutation(kfold_models, 
                                         testfold_indices, 
                                         mlp_inputs, 
                                         ytrue, 
+                                        treatment,
                                         device, 
                                         feature_idx=None):
     """
@@ -173,7 +175,11 @@ def compute_score_with_fold_permutation(kfold_models,
         
         mlp.eval()
         with torch.no_grad():
-            ypreds[test_indices] = mlp(x).cpu().numpy().flatten()
+            if treatment is None:
+                ypreds[test_indices] = mlp(x).cpu().numpy().flatten()
+            else:
+                testfold_treatment = treatment[test_indices]
+                ypreds[test_indices] = mlp(x, testfold_treatment).cpu().numpy().flatten()
 
     return -np.mean(np.abs(ypreds - ytrue))
 
@@ -188,6 +194,7 @@ def run(_config):
     output_dir = add_project_root(_config['output_dir'])
     weights_dir = add_project_root(_config['weights_dir'])
     weight_filenames = _config['weight_filenames']
+    is_cfrnet = _config['mlp_model']['model_type'] == 'CFRHead'
 
     # Make output directory, get device and fix random seed
     os.makedirs(output_dir, exist_ok=True)
@@ -196,6 +203,9 @@ def run(_config):
 
     # Load data and trained models
     data = load_data()
+    if is_cfrnet:
+        # Add treatment transform to the dataset (required for CFRHead)
+        add_treatment_transform(data)
     vgaes = load_trained_vgaes(weights_dir, weight_filenames['vgae'], device)
     mlps = load_trained_mlps(weights_dir, weight_filenames['mlp'], device, 
                              latent_dims=[vgae.readout_dim for vgae in vgaes])
@@ -210,7 +220,7 @@ def run(_config):
         data.transform = T.Compose([*data.transform.transforms, addlabel_tfm])
 
     # Get MLP inputs and labels
-    z_readout, clinical_data, ytrue = get_inputs_and_labels(data, vgaes, testfold_indices, device)
+    z_readout, clinical_data, ytrue, treatment = get_inputs_and_labels(data, vgaes, testfold_indices, device)
     mlp_inputs = np.concatenate([z_readout, clinical_data], axis=1)
     
     # Initialize lists to store results
@@ -219,13 +229,13 @@ def run(_config):
     
     # Compute baseline score without permutation
     baseline_score = compute_score_with_fold_permutation(
-        mlps, testfold_indices, mlp_inputs, ytrue, device)
+        mlps, testfold_indices, mlp_inputs, ytrue, treatment, device)
     
     # a) Compute Z_whole (permuting all latent features together)
     z_whole_scores = np.zeros(n_repeats)
     for i in range(n_repeats):
         score = compute_score_with_fold_permutation(
-            mlps, testfold_indices, mlp_inputs, ytrue, device, 
+            mlps, testfold_indices, mlp_inputs, ytrue, treatment, device, 
             feature_idx=slice(0, z_readout.shape[1]))
         z_whole_scores[i] = baseline_score - score
     scores_agg.append(z_whole_scores)
@@ -236,7 +246,7 @@ def run(_config):
         feature_scores = np.zeros(n_repeats)
         for i in range(n_repeats):
             score = compute_score_with_fold_permutation(
-                mlps, testfold_indices, mlp_inputs, ytrue, device, 
+                mlps, testfold_indices, mlp_inputs, ytrue, treatment, device, 
                 feature_idx=z_readout.shape[1] + j)
             feature_scores[i] = baseline_score - score
         scores_agg.append(feature_scores)

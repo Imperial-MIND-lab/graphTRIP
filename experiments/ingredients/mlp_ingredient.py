@@ -9,7 +9,7 @@ import sys
 sys.path.append('../../')
 
 from sacred import Ingredient
-from .data_ingredient import data_ingredient, get_context
+from .data_ingredient import data_ingredient, get_context, get_treatment
 
 import torch
 import pandas as pd
@@ -128,11 +128,15 @@ def train_mlp(mlp, loader, optimizer, device, get_x, *args, **kwargs):
         # Fetch data and labels
         batch = batch.to(device)             
         ytrue = get_labels(batch, num_z_samples, device)
+        treatment = get_treatment(batch, num_z_samples)
 
         # Forward pass
         optimizer.zero_grad()
         x = get_x(batch, device, *args, **kwargs)
-        ypred = mlp(x)                     
+        if treatment is None:
+            ypred = mlp(x)
+        else:
+            ypred = mlp(x, treatment)
         loss = mlp.loss(ypred, ytrue)
 
         # Backpropagation
@@ -168,12 +172,16 @@ def test_mlp(mlp, loader, device, get_x, *args, **kwargs):
             # Get inputs and labels
             batch = batch.to(device)
             y_true = get_labels(batch, num_z_samples, device)
+            treatment = get_treatment(batch, num_z_samples)
 
             # Get MLP inputs
             x = get_x(batch, device, *args, **kwargs)
 
             # Get MLP loss
-            y_pred = mlp(x)                                   
+            if treatment is None:
+                y_pred = mlp(x)
+            else:
+                y_pred = mlp(x, treatment)
             loss = mlp.loss(y_pred, y_true)                   
             test_loss += loss.item()
 
@@ -290,11 +298,15 @@ def train_joint_vgae_mlp(vgae, mlp, loader, optimizer, device, num_z_samples=0, 
         # Fetch data and labels
         batch = batch.to(device)             
         ytrue = get_labels(batch, num_z_samples)
+        treatment = get_treatment(batch, num_z_samples)
 
         # Forward pass
         optimizer.zero_grad()
         x, vgae_loss = get_x_with_vgae_loss(batch, device, vgae, num_z_samples)
-        ypred = mlp(x)                     
+        if treatment is None:
+            ypred = mlp(x)
+        else:
+            ypred = mlp(x, treatment)
         mlp_loss = mlp.loss(ypred, ytrue)
         loss = alpha*vgae_loss + (1-alpha)*mlp_loss
 
@@ -330,13 +342,17 @@ def test_joint_vgae_mlp(vgae, mlp, loader, device, num_z_samples=0):
             # Get inputs and labels
             batch = batch.to(device)
             y_true = get_labels(batch, num_z_samples)
+            treatment = get_treatment(batch, num_z_samples)
 
             # Get VGAE loss
             x, vgae_loss = get_x_with_vgae_loss(batch, device, vgae, num_z_samples)
             vgae_test_loss += vgae_loss.item()
 
             # Get MLP loss
-            y_pred = mlp(x)                                   
+            if treatment is None:
+                y_pred = mlp(x)
+            else:
+                y_pred = mlp(x, treatment)
             mlp_loss = mlp.loss(y_pred, y_true)                   
             mlp_test_loss += mlp_loss.item()
 
@@ -375,12 +391,16 @@ def get_mlp_outputs_nograd(mlp, loader, device, get_x, *args, **kwargs):
             ytrue = get_labels(batch, num_z_samples=0)
             clinical_data = batch.graph_attr
             subject_id = batch.subject
+            treatment = get_treatment(batch, num_z_samples=0)
             
             # Get MLP predictions on latent means
             if 'num_z_samples' in kwargs:
                 kwargs['num_z_samples'] = 0
             x = get_x(batch, device, *args, **kwargs) 
-            ypred = mlp(x)                                   
+            if treatment is None:
+                ypred = mlp(x)
+            else:
+                ypred = mlp(x, treatment)
 
             # Save outputs
             batch_size = clinical_data.shape[0]

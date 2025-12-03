@@ -117,6 +117,7 @@ def run(_config):
     num_epochs = _config['num_epochs']
     weight_filenames = _config['weight_filenames']
     weights_dir = add_project_root(_config['weights_dir'])
+    is_cfrnet = _config['mlp_model']['model_type'] == 'CFRHead'
 
     # Create output directories, fix seed
     check_weights_exist(weights_dir, weight_filenames)
@@ -126,6 +127,9 @@ def run(_config):
 
     # Load data
     data = load_data()
+    if is_cfrnet:
+        # Add treatment transform to the dataset (required for CFRHead)
+        add_treatment_transform(data)
     device = torch.device(_config['device'])
     logger.info(f'Using device: {device}')
 
@@ -156,6 +160,7 @@ def run(_config):
 
     # Save & log initial prediction results
     initial_outputs = pd.DataFrame(initial_outputs)
+    initial_outputs = add_drug_condition_to_outputs(initial_outputs, _config['dataset']['study'])
     data_file = os.path.join(output_dir, 'initial_prediction_results.csv')
     initial_outputs.to_csv(data_file, index=False)
 
@@ -290,6 +295,7 @@ def run(_config):
 
         # Save ouputs as csv file
         best_outputs = pd.DataFrame(best_outputs)
+        best_outputs = add_drug_condition_to_outputs(best_outputs, _config['dataset']['study'])
         data_file = os.path.join(output_dir, 'prediction_results.csv')
         best_outputs.to_csv(data_file, index=False)
 
