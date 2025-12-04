@@ -10,6 +10,7 @@ sys.path.append('../')
 import os
 from typing import Dict
 import argparse
+from time import time
 
 import neptune
 from neptune.integrations.sacred import NeptuneObserver
@@ -29,6 +30,7 @@ def run(exname: str, observer: str, config_updates: Dict = {}):
     observer (str): The observer to use for logging the experiment outputs.
     config_updates (Dict): Configuration updates to pass to the experiment.
     '''
+    start_time = time()
     # Check if config inputs are valid
     match_config = load_match_config(exname)
     if match_config is not None:
@@ -84,7 +86,11 @@ def run(exname: str, observer: str, config_updates: Dict = {}):
         
     else:
         raise ValueError("Invalid observer. Choose 'NeptuneObserver' or 'FileStorageObserver'.")    
-    print(f"Experiment completed. Outputs saved in {output_dir}.")
+    elapsed = int(time() - start_time)
+    hours = elapsed // 3600
+    minutes = (elapsed % 3600) // 60
+    seconds = elapsed % 60
+    print(f"Experiment completed in {hours:02d}h {minutes:02d}min {seconds:02d}sec. \nOutputs saved in {output_dir}.")
     
 def main():
     '''
