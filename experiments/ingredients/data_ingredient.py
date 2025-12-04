@@ -277,7 +277,12 @@ def init_outputs_dict(dataset):
 def get_conditions(dataset, graph_attrs):
     '''Returns the conditions for the dataset.'''
     if 'Condition' not in graph_attrs:
-        return None
+        annotations = load_annotations(study=dataset.study)
+        # Filter annotations to only include patients in the dataset
+        # Note: Patient IDs in annotations are 1-indexed, subject IDs in data are 0-indexed
+        subject_ids = [sub+1 for sub in dataset.subject.tolist()]
+        annotations = annotations[annotations['Patient'].isin(subject_ids)]
+        return annotations['Condition_numeric'].values
     condition_idx = graph_attrs.index('Condition')
     conditions = [dataset[sub].graph_attr[0, condition_idx].item() for sub in range(len(dataset))]
     return conditions

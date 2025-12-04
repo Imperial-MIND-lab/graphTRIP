@@ -48,12 +48,12 @@ def main(config_file, output_dir, verbose, debug, seed, jobid, config_id=0):
         config['num_epochs'] = 2
 
     # Job ID determines the fold to train (must be 0 <= jobid < num_folds)
-    num_folds_loocv = 42 # 42 patients in the dataset
+    num_folds = config['dataset']['num_folds']
     if jobid is None:
         this_k = None # train all folds sequentially
     else:
-        if jobid < 0 or jobid >= num_folds_loocv:
-            raise ValueError(f"Job ID must be 0 <= jobid < {num_folds_loocv}")
+        if jobid < 0 or jobid >= num_folds:
+            raise ValueError(f"Job ID must be 0 <= jobid < {num_folds}")
         this_k = jobid
 
     # Train VGAE (unsupervised training) ---------------------------------------
@@ -67,14 +67,11 @@ def main(config_file, output_dir, verbose, debug, seed, jobid, config_id=0):
 
     # Remove labels from dataset config
     config_updates['dataset']['target'] = None
-    config_updates['dataset']['graph_attrs'] = []
-    config_updates['dataset']['context_attrs'] = []
+    config_updates['dataset']['graph_attrs'] = ['Condition'] # keep this for balancing kfolds
+    config_updates['dataset']['context_attrs'] = []          
 
-    # Train with LOOCV
+    # Train with for this fold
     config_updates['this_k'] = this_k
-    config_updates['dataset']['num_folds'] = num_folds_loocv
-    config_updates['dataset']['batch_size'] = 7
-    config_updates['dataset']['val_split'] = 0.
 
     # Remove pooling layer from VGAE config
     config_updates['vgae_model']['pooling_cfg'] = {
@@ -84,7 +81,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid, config_id=0):
     # Training configurations
     config_updates['lr'] = config['lr']
     config_updates['num_epochs'] = config['num_epochs']
-    config_updates['balance_attrs'] = None # no balancing, unsupervised training
+    config_updates['balance_attrs'] = ['Condition']
 
     # Directories etc.
     config_updates['output_dir'] = vgae_weights_dir
@@ -104,7 +101,7 @@ if __name__ == "__main__":
                         default='experiments/configs/graphtrip.json', 
                         help='Path to the config file with X-graphTRIP model config')
     parser.add_argument('-o', '--output_dir', type=str, default='outputs/x_graphtrip/', help='Path to the output directory')
-    parser.add_argument('-s', '--seed', type=int, default=291, help='Random seed')
+    parser.add_argument('-s', '--seed', type=int, default=0, help='Random seed')
     parser.add_argument('-j', '--jobid', type=int, default=None, help='Job ID')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode')
