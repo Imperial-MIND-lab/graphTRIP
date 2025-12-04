@@ -56,6 +56,7 @@ def cfg():
     ex.logger.setLevel(logging.INFO if verbose else logging.ERROR)
     save_weights = True
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    test_fold_indices_file = None # If provided, determines the testfold indices
 
     # Training configurations
     lr = 0.001            # Learning rate.
@@ -103,6 +104,28 @@ def match_config(config: Dict) -> Dict:
         config['dataset'] = {'drug_condition': None, 
                              'context_attrs': [],
                              'graph_attrs': []}
+
+    # Test fold indices file
+    test_fold_indices_file = config.get('test_fold_indices_file', None)
+    if test_fold_indices_file is not None:
+        test_fold_indices_file = add_project_root(test_fold_indices_file)
+        if not os.path.exists(test_fold_indices_file):
+            raise FileNotFoundError(f"{test_fold_indices_file} not found")
+        config['test_fold_indices_file'] = test_fold_indices_file
+
+        # Check that the test_fold_indices_file comes from a balanced (on 'Condition') run if balance_treatment is True (or unset/default True)
+        balance_treatment = config.get('balance_treatment', True)
+        if balance_treatment:
+            import json
+            testfold_dir = os.path.dirname(test_fold_indices_file)
+            config_json_file = os.path.join(testfold_dir, 'config.json')
+            if not os.path.exists(config_json_file):
+                raise FileNotFoundError(f"Config file {config_json_file} not found in test_fold_indices_file directory.")
+            with open(config_json_file, 'r') as f:
+                testfold_config = json.load(f)
+            balance_attrs = testfold_config.get('balance_attrs', None)
+            if not (isinstance(balance_attrs, list) and 'Condition' in balance_attrs):
+                raise RuntimeError("Cannot balance treatment if test_fold_indices_file from an unbalanced run is provided.")
 
     return config
 
@@ -350,16 +373,29 @@ def get_cfrnet_counterfactual_outputs(mlp, loader, device, get_x, k_fold, *args,
     return pd.DataFrame(outputs)
 
 @ex.capture
-def get_dataloaders(data, balance_treatment, seed):
+def get_dataloaders(data, balance_treatment, test_fold_indices_file, seed):
     '''
     Returns dataloaders. If balance_attrs is not None, balances k-fold splits based on treatment.
     Note: For CFRNet, balance_attrs should typically be None or we always balance on treatment.
     '''
-    if balance_treatment:
+    # Option 1: Use test fold indices file
+    if test_fold_indices_file is not None:
+        test_indices_array = np.loadtxt(test_fold_indices_file, dtype=int)
+        train_loaders, val_loaders, test_loaders, mean_std \
+            = get_dataloaders_from_test_indices(data, test_indices_array, seed=seed)
+
+        # For consistency with how the other options return test_indices
+        num_folds = max(test_indices_array) + 1
+        test_indices = [np.where(test_indices_array == fold)[0] for fold in range(num_folds)]
+
+    # Option 2: Balance treatment
+    elif balance_treatment:
         # For CFRNet, we balance based on treatment (not graph attributes)
         # So we use the treatment-based balancing function
         train_loaders, val_loaders, test_loaders, test_indices, mean_std \
             = get_treatment_balanced_kfold_dataloaders(data, seed=seed)
+
+    # Option 3: Unbalanced
     else:
         train_loaders, val_loaders, test_loaders, test_indices, mean_std \
             = get_kfold_dataloaders(data, seed=seed)
@@ -385,10 +421,7 @@ def run(_config):
 
     # Get dataloaders
     data = load_data()
-    
-    # Add treatment transform to the dataset (required for CFRNet)
     add_treatment_transform(data)
-    
     train_loaders, val_loaders, test_loaders, test_indices, mean_std \
         = get_dataloaders(data, seed=seed)
     device = torch.device(_config['device'])
