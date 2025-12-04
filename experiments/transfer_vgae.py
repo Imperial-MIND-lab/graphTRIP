@@ -8,6 +8,9 @@ Date: 2025-10-31
 License: BSD-3-Clause
 """
 
+import matplotlib
+matplotlib.use('Agg')  # Set non-interactive backend
+
 import sys
 sys.path.append('graphTRIP/')
 
@@ -36,9 +39,9 @@ from models.utils import freeze_model
 
 
 # Create experiment and logger -------------------------------------------------
-ex = Experiment('transfer_vgae_retrain_mlp', ingredients=[data_ingredient, 
-                                                          vgae_ingredient, 
-                                                          mlp_ingredient])
+ex = Experiment('transfer_vgae', ingredients=[data_ingredient, 
+                                              vgae_ingredient, 
+                                              mlp_ingredient])
 logger = get_logger()
 ex.logger = logger
 
@@ -46,7 +49,7 @@ ex.logger = logger
 @ex.config
 def cfg():
     # Experiment name and ID
-    exname = 'transfer_vgae_retrain_mlp'
+    exname = 'transfer_vgae'
     jobid = 0
     seed = 0
     run_name = f'{exname}_job{jobid}_seed{seed}'
@@ -71,6 +74,7 @@ def cfg():
     mlp_lr = 0.001        # MLP learning rate.
     num_z_samples = 1     # 0 for training MLP on the means of VGAE latent variables.
     alpha = 0             # Loss = alpha*vgae_loss + (1-alpha)*mlp_loss; if alpha=0, VGAE is frozen.
+    reinit_pooling = True # Whether to reinitialise the VGAE pooling module
 
 # Match configs function -------------------------------------------------------
 def match_config(config: Dict) -> Dict:
@@ -85,11 +89,14 @@ def match_config(config: Dict) -> Dict:
 
     # Various dataset related configs may mismatch, but other configs must match
     config_updates = copy.deepcopy(config)
-    exceptions = ['num_nodes', 'atlas', 'graph_attrs',
+    exceptions = ['num_nodes', 'atlas', 'graph_attrs', 'graph_attrs_to_standardise',
                   'num_folds', 'batch_size', 'val_split', 
                   'study', 'session', 'target',
                   'dropout', 'reg_strength', 'layernorm', 'mse_reduction',
                   'mlp_model']
+    reinit_pooling = config.get('reinit_pooling', True)
+    if reinit_pooling:
+        exceptions.append('pooling_cfg')
     config_updates = match_ingredient_configs(config=config,
                                               previous_config=previous_config,
                                               ingredients=ingredients,
@@ -176,6 +183,7 @@ def run(_config):
     num_folds = _config['dataset']['num_folds']
     weights_dir = add_project_root(_config['weights_dir'])
     weight_filenames = _config['weight_filenames']
+    reinit_pooling = _config['reinit_pooling']
 
     # Create output directories, fix seed
     os.makedirs(output_dir, exist_ok=True)
@@ -190,7 +198,11 @@ def run(_config):
         get_kfold_dataloaders(data, seed=seed)
     
     # Load pretrained VGAEs
-    pretrained_vgaes = load_trained_vgaes(weights_dir, weight_filenames['vgae'], device=device)
+    if reinit_pooling:
+        pretrained_vgaes = load_trained_vgaes(weights_dir, weight_filenames['vgae'], 
+                                              device=device, exclude_module='pooling')
+    else:
+        pretrained_vgaes = load_trained_vgaes(weights_dir, weight_filenames['vgae'], device=device)
     
     # Make an output directory for each pretrained model
     output_dirs = []
