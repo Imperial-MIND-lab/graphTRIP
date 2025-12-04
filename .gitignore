@@ -22,5 +22,4 @@ experiments/configs/dbg.json
 data/
 
 # Helper bash scripts
-scp.sh
-
+local/
