@@ -3,7 +3,7 @@
 #PBS -l select=1:ncpus=4:mem=4gb
 #PBS -l walltime=8:00:00
 #PBS -N primary_jobs
-#PBS -J 0-79
+#PBS -J 0-69
 
 # Primary scripts do not depend on other scripts.
 # Each base job is run with 10 different seeds (0-9).
@@ -14,18 +14,18 @@ source activate graphtrip
 cd ~/projects/graphTRIP/scripts
 
 # Define job ranges for each script (each base job has 10 seeds)
-# Ablation: 3 base jobs (0-2) -> 30 jobs (0-29)
-# Benchmarks: 3 base jobs (3-5) -> 30 jobs (30-59)
-# graphTRIP BDI: 1 base job (6) -> 10 jobs (60-69)
-# graphTRIP main: 1 base job (7) -> 10 jobs (70-79)
+# Ablation: 4 base jobs (0-3) -> 40 jobs (0-39)
+# graphTRIP BDI: 1 base job (8) -> 10 jobs (40-49)
+# graphTRIP main: 1 base job (9) -> 10 jobs (50-59)
+# x-graphTRIP: 1 base job (10) -> 10 jobs (60-69)
 ABLATION_START=0
-ABLATION_END=29
-BENCHMARKS_START=30
-BENCHMARKS_END=59
-GRAPHTRIP_BDI_START=60
-GRAPHTRIP_BDI_END=69
-GRAPHTRIP_MAIN_START=70
-GRAPHTRIP_MAIN_END=79
+ABLATION_END=39
+GRAPHTRIP_BDI_START=40
+GRAPHTRIP_BDI_END=49
+GRAPHTRIP_MAIN_START=50
+GRAPHTRIP_MAIN_END=59
+XGRAPHTRIP_START=60
+XGRAPHTRIP_END=69
 
 # Number of seeds per base job
 SEEDS_PER_JOB=10
@@ -39,21 +39,20 @@ SEED=$((JOB_ID % SEEDS_PER_JOB))
 
 # Run the appropriate script based on the job index
 if [ $JOB_ID -ge $ABLATION_START ] && [ $JOB_ID -le $ABLATION_END ]; then
-    # Ablation models (3 base jobs × 10 seeds = 30 jobs; 0-29)
-    python ablation_models.py --jobid=$BASE_JOB -s $SEED
-
-elif [ $JOB_ID -ge $BENCHMARKS_START ] && [ $JOB_ID -le $BENCHMARKS_END ]; then
-    # Benchmarks (3 base jobs × 10 seeds = 30 jobs; 30-59)
-    BASE_JOB_RELATIVE=$((BASE_JOB - 3))
-    python benchmarks.py --jobid=$BASE_JOB_RELATIVE -s $SEED
+    # Ablation models (4 base jobs × 10 seeds = 40 jobs; 0-39)
+    python ablation.py -j $BASE_JOB -s $SEED
 
 elif [ $JOB_ID -ge $GRAPHTRIP_BDI_START ] && [ $JOB_ID -le $GRAPHTRIP_BDI_END ]; then
-    # graphTRIP for BDI prediction (1 base job × 10 seeds = 10 jobs; 60-69)
+    # graphTRIP for BDI prediction (1 base job × 10 seeds = 10 jobs; 40-49)
     python graphtrip_bdi.py -s $SEED
 
 elif [ $JOB_ID -ge $GRAPHTRIP_MAIN_START ] && [ $JOB_ID -le $GRAPHTRIP_MAIN_END ]; then
-    # graphTRIP, main model (1 base job × 10 seeds = 10 jobs; 70-79)
+    # graphTRIP, main model (1 base job × 10 seeds = 10 jobs; 50-59)
     python graphtrip.py -s $SEED
+
+elif [ $JOB_ID -ge $XGRAPHTRIP_START ] && [ $JOB_ID -le $XGRAPHTRIP_END ]; then
+    # x-graphTRIP (1 base job × 10 seeds = 10 jobs; 60-69)
+    python x_graphtrip.py -s $SEED
 
 else
     echo "Invalid job index: $JOB_ID"

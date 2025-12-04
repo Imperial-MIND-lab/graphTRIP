@@ -4,16 +4,19 @@
 #PBS -l walltime=0:30:00
 #PBS -N posthoc_analysis
 
-# Script for running the PLS analysis after primary and secondary scripts have been run.
+# Script for running the post-hoc analysis after primary scripts have been run.
 
 # Load environment
 module load anaconda3/personal
 source activate graphtrip
 cd ~/projects/graphTRIP/scripts
 
-# Define the input directories
-GRAIL_DIR='outputs/x_graphtrip/grail/'
-ATTENTION_DIR='outputs/x_graphtrip/attention_weights/'
+# Run post-hoc analysis for graphTRIP
+WEIGHTS_BASE_DIR='outputs/graphtrip/weights/'
+OUTPUT_DIR='outputs/graphtrip/'
+python graphtrip_posthoc.py -w $WEIGHTS_BASE_DIR -o $OUTPUT_DIR
 
-# Run PLS analysis
-python pls_analysis.py --grail_dir=$GRAIL_DIR --attention_dir=$ATTENTION_DIR
+# Run post-hoc analysis for x-graphTRIP
+WEIGHTS_BASE_DIR='outputs/x_graphtrip/weights/'
+OUTPUT_DIR='outputs/x_graphtrip/'
+python graphtrip_posthoc.py -w $WEIGHTS_BASE_DIR -o $OUTPUT_DIR -grail_only

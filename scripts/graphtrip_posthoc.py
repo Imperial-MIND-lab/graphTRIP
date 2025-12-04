@@ -36,7 +36,7 @@ from experiments.run_experiment import run
 from experiments.attention_weights import dominance_analysis_pipeline
 
 
-def main(weights_base_dir, output_dir, verbose, seed):
+def main(weights_base_dir, output_dir, verbose, seed, grail_only=False):
 
     # Add project root to paths
     weights_base_dir = add_project_root(weights_base_dir)
@@ -113,7 +113,7 @@ def main(weights_base_dir, output_dir, verbose, seed):
     # Test biomarkers ----------------------------------------------------------
     exname = 'test_biomarkers'
     ex_dir = os.path.join(output_dir, 'test_biomarkers')
-    if not os.path.exists(ex_dir):
+    if not os.path.exists(ex_dir) and not grail_only:
         config_updates = {}
         config_updates['output_dir'] = ex_dir
         config_updates['weights_dir'] = weights_dirs[0]
@@ -137,7 +137,7 @@ def main(weights_base_dir, output_dir, verbose, seed):
     attention_dir = os.path.join(output_dir, 'attention_weights')
     ex_dir = os.path.join(attention_dir, 'posthoc_analysis')
 
-    if not os.path.exists(ex_dir):
+    if not os.path.exists(ex_dir) and not grail_only:
         os.makedirs(ex_dir, exist_ok=True)
         assert os.path.exists(attention_dir), f"Attention weights directory {attention_dir} not found"
 
@@ -214,10 +214,10 @@ if __name__ == "__main__":
     parser.add_argument('-o', '--output_dir', type=str, 
                         default='outputs/graphtrip/', 
                         help='Path to the output directory')
-    parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode') # for consistency
+    parser.add_argument('-grail_only', '--grail_only', action='store_true', help='Only run GRAIL posthoc analysis')
     parser.add_argument('-s', '--seed', type=int, default=0, help='Random seed')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     args = parser.parse_args()
 
     # Run the main function
-    main(args.weights_base_dir, args.output_dir, args.verbose, args.seed)
+    main(args.weights_base_dir, args.output_dir, args.verbose, args.seed, args.grail_only)
