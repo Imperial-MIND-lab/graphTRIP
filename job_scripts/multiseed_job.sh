@@ -2,8 +2,8 @@
 
 #PBS -l select=1:ncpus=4:mem=4gb
 #PBS -l walltime=4:00:00
-#PBS -N bdi_graphtrip
-#PBS -J 0-511
+#PBS -N attention_pooling_graphtrip
+#PBS -J 0-39
 
 module load anaconda3/personal
 source activate graphtrip
@@ -11,11 +11,11 @@ source activate graphtrip
 cd ~/projects/graphTRIP/experiments
 
 # Settings
-OBSERVER='NeptuneObserver'
+OBSERVER='FileStorageObserver'
 EXNAME='train_jointly'
-CONFIG_JSON='bdi_graphtrip.json'
-SEEDS=(0 1)
-MAX_NUM_CONFIGS=256
+CONFIG_JSON='attention_pooling.json'
+SEEDS=(0 1 2 3 4 5 6 7 8 9)
+MAX_NUM_CONFIGS=4
 
 # Calculate config index (jobid) and seed index from PBS_ARRAY_INDEX
 # For example, with 288 configs and 3 seeds: PBS_ARRAY_INDEX 0-863 maps to:
