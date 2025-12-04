@@ -14,7 +14,6 @@ from sklearn.cross_decomposition import PLSRegression
 from sklearn.preprocessing import StandardScaler
 import pandas as pd
 import numpy as np
-from mne.stats import permutation_cluster_test
 import glob
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -753,52 +752,6 @@ def test_column_significance(df, test_type='t-test', alpha=0.05):
         stats_df = stats_df.rename(columns={'statistic': 'w_statistic'})
     
     return stats_df
-
-# Permutation cluster test ------------------------------------------------
-
-def regional_permutation_cluster_test(regional_values_df: pd.DataFrame, 
-                                      distances: np.ndarray, 
-                                      seed: int = 0, 
-                                      n_permutations: int = 10000) -> pd.DataFrame:
-    """
-    Perform a one-sample permutation cluster test on the brain regional values.
-    
-    Parameters:
-    -----------
-    regional_values_df: pd.DataFrame
-    distances: np.ndarray
-    seed: int
-
-    Note: Compute distances like this:
-        distances = compute_dist_adjacency(atlas)
-        distances = sp.csr_matrix(distances)
-    """
-    regional_values = regional_values_df.values
-    t_obs, clusters, cluster_p_values, _ = permutation_cluster_test([regional_values], 
-                                                                   adjacency=distances, 
-                                                                   n_permutations=n_permutations, 
-                                                                   tail=0, 
-                                                                   seed=seed)
-    
-    # Get the p-values for each cluster
-    num_nodes = distances.shape[0]
-    cluster_array = np.zeros(num_nodes)
-    for i, cluster in enumerate(clusters):
-        indices = cluster[0]
-        cluster_array[indices] = i+1
-
-    # Save t-statistics, cluster assignments and null distribution
-    results_df = pd.DataFrame({
-        'region_name': regional_values_df.columns,
-        't_stat': t_obs,
-        'cluster_index': cluster_array})
-    
-    # Save cluster p-values
-    cluster_stats_df = pd.DataFrame({
-        'cluster_index': range(1, len(cluster_p_values) + 1),
-        'p_value': cluster_p_values})
-        
-    return results_df, cluster_stats_df
 
 # Regression model evaluation ---------------------------------------------------
 
