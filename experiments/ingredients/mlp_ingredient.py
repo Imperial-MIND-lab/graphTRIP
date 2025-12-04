@@ -60,6 +60,20 @@ def load_trained_mlps(weights_dir, weight_filenames, device=None, latent_dims=No
     return mlps
 
 @mlp_ingredient.capture
+def load_sklearn_wrapper(weights_dir, weight_filenames, device=None):
+    '''Loads a pre-trained sklearn linear model wrapper.'''
+    if device is None:
+        device = torch.device('cpu')
+    mlps = []
+    for weight_file in weight_filenames:
+        model_params = {
+            'weights_path': os.path.join(weights_dir, weight_file), 
+            'device': device}
+        mlp = init_model('SklearnLinearModelWrapper', model_params)
+        mlps.append(mlp)
+    return mlps
+
+@mlp_ingredient.capture
 def get_labels(batch, num_z_samples, device=None):
     '''Returns the labels for the MLP.'''
     # Move labels to device

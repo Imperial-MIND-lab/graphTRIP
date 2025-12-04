@@ -410,6 +410,32 @@ class LogisticRegressionMLP(StandardMLP):
                 ypred, ytrue, reduction=self.mse_reduction)
         return loss + self.penalty()
 
+class SklearnLinearModelWrapper(torch.nn.Module):
+    '''
+    Wrapper for sklearn linear models.
+    Loads the model weights and biases from a file and wraps them in a PyTorch module.
+    '''
+    def __init__(self, weights_path, device='cpu'):
+        super().__init__()
+        
+        # Load parameters
+        params = torch.load(weights_path, map_location=device)
+        
+        # Convert to tensors
+        w = torch.tensor(params['weight'], dtype=torch.float32, device=device)
+        b = torch.tensor(params['bias'], dtype=torch.float32, device=device)
+        
+        # Handle shape mismatch for single-target regression
+        if w.ndim == 1:
+            w = w.unsqueeze(0) # (1, n_features)
+            
+        # Register as parameters
+        self.weight = torch.nn.Parameter(w, requires_grad=False)
+        self.bias = torch.nn.Parameter(b, requires_grad=False)
+
+    def forward(self, x, *args, **kwargs):
+        return torch.nn.functional.linear(x, self.weight, self.bias)
+
 # Node embedding models --------------------------------------------------------
 # Receive data batches and return node embeddings [nodes_in_batch, node_emb_dim].
 

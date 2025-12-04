@@ -144,6 +144,72 @@ def main(config_file, tlearner_config_file, output_dir, verbose, debug, seed, co
         print(f"Medusa T-learner experiment already exists in {ex_dir}.")
     tlearner_dir = ex_dir
 
+    # Train S-CATE model -------------------------------------------------------
+    exname = 'train_scate'
+    ex_dir = os.path.join(output_dir, 'cate_model', f'seed_{seed}')
+    if not os.path.exists(ex_dir):
+        config_updates = {}
+        config_updates['dataset'] = copy.deepcopy(config['dataset'])
+
+        # S-CATE model settings
+        config_updates['prediction_head_type'] = 'Ridge'
+        config_updates['standardize_data'] = True
+        config_updates['n_permutations'] = 1000        
+
+        # ITE label settings
+        config_updates['dataset']['target'] = None
+        config_updates['t0_pred_file'] = os.path.join(tlearner_dir, 'counterfactual_predictions.csv')
+        config_updates['t1_pred_file'] = os.path.join(tlearner_dir, 'counterfactual_predictions.csv')
+        config_updates['dataset']['graph_attrs_to_standardise'] = []
+
+        # Condition settings
+        config_updates['annotations_file'] = 'data/raw/psilodep2/annotations.csv'
+        config_updates['subject_id_col'] = 'Patient'
+        config_updates['condition_specs'] = {'cond0': 'E', 'cond1': 'P'}
+
+        # VGAE pooling config
+        config_updates['vgae_model'] = {}
+        config_updates['vgae_model']['pooling_cfg'] = {
+            'model_type': 'MeanStdPooling'}
+
+        # Output and VGAE weights directories
+        config_updates['output_dir'] = ex_dir
+        config_updates['weights_dir'] = vgae_weights_dir
+        config_updates['save_weights'] = True
+        config_updates['verbose'] = verbose
+        config_updates['seed'] = seed
+        run(exname, observer, config_updates)
+    else:
+        print(f"CATE model already exists in {ex_dir}.")
+    cate_dir = ex_dir
+
+    # GRAIL -------------------------------------------------------------------
+    exname = 'grail'
+    ex_dir = os.path.join(output_dir, 'grail', f'seed_{seed}')
+    if not os.path.exists(ex_dir):
+        config_updates = {}
+        config_updates['output_dir'] = ex_dir
+        config_updates['vgae_weights_dir'] = vgae_weights_dir
+        config_updates['mlp_weights_dir'] = cate_dir
+        config_updates['seed'] = seed
+        config_updates['verbose'] = verbose
+
+        # Sklearn Linear Model Wrapper config and weight filenames
+        config_updates['mlp_model'] = {
+            'model_type': 'SklearnLinearModelWrapper'}
+        config_updates['weight_filenames'] = {
+            'vgae': [f'k{k}_vgae_weights.pth' for k in range(config['dataset']['num_folds'])],
+            'mlp': [f'k{k}_linear_model.pth' for k in range(config['dataset']['num_folds'])],
+            'test_fold_indices': ['test_fold_indices.csv']}
+
+        # GRAIL settings
+        config_updates['num_z_samples'] = 100 if not debug else 2
+        config_updates['sigma'] = 2.0
+        config_updates['all_rsn_conns'] = False
+        run(exname, observer, config_updates)
+    else:
+        print(f"GRAIL experiment already exists in {ex_dir}.")
+
 if __name__ == "__main__":
     """
     How to run:

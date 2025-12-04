@@ -57,7 +57,7 @@ def cfg(dataset):
     # Experiment name and ID
     exname = 'grail'
     jobid = 0
-    seed = 291
+    seed = 0
     run_name = f'{exname}_job{jobid}_seed{seed}'
     output_dir = os.path.join('outputs', 'runs', run_name)
 
@@ -68,7 +68,8 @@ def cfg(dataset):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # Directory with pre-trained model weights
-    weights_dir = os.path.join('outputs', 'weights', f'job{jobid}_seed{seed}')
+    vgae_weights_dir = os.path.join('outputs', 'weights', f'job{jobid}_seed{seed}')
+    mlp_weights_dir = None      # If None, VGAE and MLP weights dirs are the same
     weight_filenames = {'vgae': [f'k{k}_vgae_weights.pth' for k in range(dataset['num_folds'])],
                         'mlp': [f'k{k}_mlp_weights.pth' for k in range(dataset['num_folds'])],
                         'test_fold_indices': ['test_fold_indices.csv']}
@@ -82,15 +83,22 @@ def cfg(dataset):
 def match_config(config: Dict) -> Dict:
     '''Matches the configs specific to this experiment.'''
     # Get weights_dir (must be in the config)
-    assert 'weights_dir' in config, "weights_dir must be specified in config."
-    weights_dir = add_project_root(config['weights_dir'])
+    assert 'vgae_weights_dir' in config, "vgae_weights_dir must be specified in config."
+    vgae_weights_dir = add_project_root(config['vgae_weights_dir'])
+    mlp_weights_dir = config.get('mlp_weights_dir', None)
+    if mlp_weights_dir is None:
+        mlp_weights_dir = vgae_weights_dir
 
-    # Load the VGAE, MLP and dataset configs from weights_dir
-    previous_config = load_ingredient_configs(weights_dir, ['vgae_model', 'mlp_model', 'dataset'])
+    # Load all ingredientconfigs from the mlp weights directory
+    previous_config = load_ingredient_configs(mlp_weights_dir, ['vgae_model', 'dataset', 'mlp_model'])
 
-    # Match configs of relevant ingredients
+    # Check different configs depending on the prediction head type
     ingredients = ['dataset', 'vgae_model', 'mlp_model']
     exceptions = ['num_nodes', 'drug_condition']
+    if 'mlp_model' in config:
+        mlp_model_type = config['mlp_model']['model_type']
+        if mlp_model_type == 'SklearnLinearModelWrapper':
+            ingredients = ['dataset', 'vgae_model'] # Sklearn wrapper has no config
     config_updates = match_ingredient_configs(config=config,
                                               previous_config=previous_config,
                                               ingredients=ingredients,
@@ -267,12 +275,66 @@ def compute_gradient_alignment(grad1, grad2):
     grad2_norm = torch.nn.functional.normalize(grad2.view(1, -1), p=2, dim=1)
     return torch.dot(grad1_norm[0], grad2_norm[0]).item()
 
+def validate_weight_files_and_indices(vgae_weights_dir, mlp_weights_dir, weight_filenames):
+    """
+    Validates that all weight files exist in their respective directories and that
+    test_fold_indices files from both directories match.
+    
+    Parameters:
+    ----------
+    vgae_weights_dir : str
+        Directory containing VGAE weight files
+    mlp_weights_dir : str
+        Directory containing MLP weight files
+    weight_filenames : dict
+        Dictionary with keys 'vgae', 'mlp', and 'test_fold_indices', each containing
+        a list of filenames
+        
+    Raises:
+    ------
+    FileNotFoundError
+        If any weight file or test_fold_indices file is missing
+    ValueError
+        If test_fold_indices files from both directories do not match
+    """
+    # Check if all VGAE weight files exist
+    for weight_file in weight_filenames['vgae']:
+        weight_path = os.path.join(vgae_weights_dir, weight_file)
+        if not os.path.exists(weight_path):
+            raise FileNotFoundError(f'Weight file {weight_file} not found in {vgae_weights_dir}.')
+    
+    # Check if all MLP weight files exist
+    for weight_file in weight_filenames['mlp']:
+        weight_path = os.path.join(mlp_weights_dir, weight_file)
+        if not os.path.exists(weight_path):
+            raise FileNotFoundError(f'Weight file {weight_file} not found in {mlp_weights_dir}.')
+    
+    # Check if test_fold_indices files exist in both directories
+    test_fold_indices_filename = weight_filenames['test_fold_indices'][0]
+    vgae_indices_path = os.path.join(vgae_weights_dir, test_fold_indices_filename)
+    mlp_indices_path = os.path.join(mlp_weights_dir, test_fold_indices_filename)
+    
+    if not os.path.exists(vgae_indices_path):
+        raise FileNotFoundError(f'Test fold indices file {test_fold_indices_filename} not found in {vgae_weights_dir}.')
+    if not os.path.exists(mlp_indices_path):
+        raise FileNotFoundError(f'Test fold indices file {test_fold_indices_filename} not found in {mlp_weights_dir}.')
+    
+    # Load and compare test_fold_indices from both directories
+    vgae_indices = pd.read_csv(vgae_indices_path, header=None).values.flatten()
+    mlp_indices = pd.read_csv(mlp_indices_path, header=None).values.flatten()
+    
+    if not np.array_equal(vgae_indices, mlp_indices):
+        raise ValueError(f'Test fold indices in {vgae_weights_dir} and {mlp_weights_dir} do not match.')
+
 # Main function ----------------------------------------------------------------
 @ex.automain
 def run(_config):
-    weights_dir = add_project_root(_config['weights_dir'])
+    vgae_weights_dir = add_project_root(_config['vgae_weights_dir'])
+    mlp_weights_dir = add_project_root(_config['mlp_weights_dir'])
     weight_filenames = _config['weight_filenames']
-    check_weights_exist(weights_dir, weight_filenames)
+    
+    # Validate weight files and test_fold_indices
+    validate_weight_files_and_indices(vgae_weights_dir, mlp_weights_dir, weight_filenames)
 
     # Set up environment ------------------------------------------------------
     seed = _config['seed']
@@ -281,31 +343,36 @@ def run(_config):
     save_outputs = _config['save_outputs']
     node_attrs = _config['dataset']['node_attrs']
     node_attrs = [attr.split('_')[0] for attr in node_attrs]
-    is_cfrnet = _config['mlp_model']['model_type'] == 'CFRHead'
+
+    # Determine the type of prediction head
+    prediction_head_type = _config['mlp_model']['model_type']
 
     # Create output directory, fix seed, get device
     os.makedirs(output_dir, exist_ok=True)             # Create output directory
-    fix_random_seed(seed)                              # Fix random seed
-    image_files = []                                   # List of image files to save
+    fix_random_seed(seed)                              # Fix random seeds
     device = torch.device(_config['device'])           # Get device
     logger.info(f'Using device: {device}')
 
     # Load trained models and freeze them
-    vgaes = load_trained_vgaes(weights_dir, weight_filenames['vgae'], device)
-    mlps = load_trained_mlps(weights_dir, weight_filenames['mlp'], device, 
-                            latent_dims=[vgae.readout_dim for vgae in vgaes])
+    vgaes = load_trained_vgaes(vgae_weights_dir, weight_filenames['vgae'], device)
     vgaes = [freeze_model(vgae) for vgae in vgaes]
-    mlps = [freeze_model(mlp) for mlp in mlps]
+    if prediction_head_type == 'SklearnLinearModelWrapper':
+        # Sklearn Wrapper model is automatically frozen
+        mlps = load_sklearn_wrapper(mlp_weights_dir, weight_filenames['mlp'], device)
+    else:
+        mlps = load_trained_mlps(mlp_weights_dir, weight_filenames['mlp'], device, 
+                            latent_dims=[vgae.readout_dim for vgae in vgaes])
+        mlps = [freeze_model(mlp) for mlp in mlps]
 
     # Load data
     data = load_data()
-    if is_cfrnet:
+    if prediction_head_type == 'CFRHead':
         # Add treatment transform to the dataset (required for CFRHead)
         add_treatment_transform(data)
 
     # Compute fold-wise performance of each model --------------------------
     if len(vgaes) > 1:
-        fold_performance = get_fold_performance(weights_dir)
+        fold_performance = get_fold_performance(mlp_weights_dir)
         fold_performance.to_csv(os.path.join(output_dir, 'fold_performance.csv'), index=False)
         ex.add_artifact(os.path.join(output_dir, 'fold_performance.csv'))
 

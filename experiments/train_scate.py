@@ -3,7 +3,8 @@ In this experiment, we train a single CATE model on combined data from both cond
 by loading a pre-trained VGAE and training a sklearn regression head on the 
 latent representations + clinical data from all samples.
 The labels are ITEs computed from t-learner predictions.
-We use LOOCV, ensuring each held-out test sample uses the VGAE that had it in its test fold.
+We use k-fold cross-validation based on test_fold_indices, ensuring each test fold 
+uses the VGAE that was trained with that fold as its test set.
 
 Dependencies:
 - data/raw/{study}/annotations.csv
@@ -26,8 +27,6 @@ from experiments.ingredients.mlp_ingredient import *
 import os
 import torch
 from torch_geometric.loader import DataLoader
-from torch_geometric.transforms import BaseTransform
-import torch_geometric.transforms as T
 from tqdm import tqdm
 from time import time
 import copy
@@ -38,17 +37,15 @@ import matplotlib.pyplot as plt
 from sklearn.linear_model import Ridge, ElasticNet
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.ensemble import HistGradientBoostingRegressor
-from sklearn.decomposition import PCA
 from typing import Dict
 from sklearn.preprocessing import StandardScaler
 
 from utils.files import add_project_root
-from utils.helpers import fix_random_seed, get_logger, check_weights_exist
-from utils.plotting import true_vs_pred_scatter, ESCIT, PSILO
+from utils.helpers import fix_random_seed, get_logger, check_weights_exist, save_test_indices
+from utils.plotting import true_vs_pred_scatter
 from utils.configs import load_ingredient_configs, match_ingredient_configs
 from utils.statsalg import correlation_permutation_test
 from models.utils import freeze_model
-from datasets import AddLabel
 
 
 # Create experiment and logger -------------------------------------------------
@@ -80,7 +77,6 @@ def cfg(dataset):
 
     # Training configurations
     prediction_head_type = 'Ridge'
-    n_pca_components = 0  # If > 0, apply PCA before fitting regression head
     standardize_data = True  # If True, standardize features before fitting regression head
     n_permutations = 1000  # Number of permutations for correlation permutation test
 
@@ -107,7 +103,6 @@ def match_config(config: Dict) -> Dict:
     # Various dataset related configs may mismatch, but other configs must match
     config_updates = copy.deepcopy(config)
     exceptions = ['graph_attrs', 'target', 'context_attrs', 
-                  'batch_size', 'num_folds', 'val_split', # training LOOCV, so this has no effect
                   'graph_attrs_to_standardise', 'pooling_cfg']
     config_updates = match_ingredient_configs(config=config,
                                               previous_config=previous_config,
@@ -239,6 +234,85 @@ def create_prediction_model(model_type: str, seed: int):
     else:
         raise ValueError(f'Unknown model_type: {model_type}.')
 
+def save_linear_params(model, save_path):
+    """
+    Saves sklearn linear model coefficients and intercept to a file 
+    (for later GRAIL analysis with torch).
+    
+    Parameters:
+    ----------
+        model: e.g. trained sklearn.linear_model.Ridge object.
+        save_path: String path ending in .pth or .pt
+    """
+    # Extract parameters
+    coef = model.coef_
+    intercept = model.intercept_
+    
+    # Ensure standard numpy types
+    if isinstance(coef, list): coef = np.array(coef)
+    if isinstance(intercept, (float, int)): intercept = np.array([intercept])
+    
+    params = {'weight': coef,
+              'bias': intercept}
+    
+    # Save using torch serialization
+    torch.save(params, save_path)
+    logger.info(f"Sklearn head parameters saved to {save_path}")
+
+def save_scaled_linear_params(model, scaler, save_path):
+    """
+    Folds StandardScaler parameters into Linear Regression/Ridge/Lasso/ElasticNet 
+    weights and saves them for PyTorch.
+
+    Parameters:
+    ----------
+        model: Fitted sklearn linear model (Ridge, Lasso, etc.)
+        scaler: Fitted sklearn StandardScaler
+        save_path: Path to save the .pth file
+    """
+    # 1. Get Model Weights
+    # Sklearn shape: (n_features,) or (n_targets, n_features)
+    w = model.coef_
+    b = model.intercept_
+
+    # Ensure w is 2D for consistent math: (n_targets, n_features)
+    if w.ndim == 1:
+        w = w.reshape(1, -1)
+    
+    # Ensure b is 1D array
+    if np.isscalar(b):
+        b = np.array([b])
+
+    # 2. Get Scaler Parameters
+    # sigma (scale_) and mu (mean_)
+    scale = scaler.scale_  # shape (n_features,)
+    mean = scaler.mean_    # shape (n_features,)
+
+    # 3. Mathematically Fold the Scaler into the Weights
+    # Formula: y = w * ((x - mu) / sigma) + b
+    # Rewritten: y = (w / sigma) * x + (b - (w * mu) / sigma)
+    
+    # New Weights: w' = w / sigma
+    w_adjusted = w / scale
+
+    # New Bias: b' = b - sum(w_adjusted * mu)
+    # We use dot product here to handle the summation over features
+    bias_adjustment = np.sum(w_adjusted * mean, axis=1)
+    b_adjusted = b - bias_adjustment
+
+    # 4. Save
+    params = {
+        'weight': w_adjusted,   # Save as (n_targets, n_features)
+        'bias': b_adjusted      # Save as (n_targets,)
+    }
+    
+    # If the original model was 1D, squeeze the weight back to 1D 
+    if w_adjusted.shape[0] == 1:
+        params['weight'] = params['weight'].flatten()
+
+    torch.save(params, save_path)
+    logger.info(f"StandardScaler folded into {type(model).__name__} and saved to {save_path}")
+
 # Main function ----------------------------------------------------------------
 @ex.automain
 def run(_config):
@@ -249,7 +323,6 @@ def run(_config):
     save_weights = _config['save_weights']
     seed = _config['seed']
     prediction_head_type = _config['prediction_head_type']
-    n_pca_components = _config['n_pca_components']
     standardize_data = _config['standardize_data']
     n_permutations = _config['n_permutations']
     weights_dir = add_project_root(_config['weights_dir'])
@@ -344,11 +417,14 @@ def run(_config):
 
     # Get test fold indices
     test_indices = np.loadtxt(os.path.join(weights_dir, weight_filenames['test_fold_indices'][0]), dtype=int)
-
-    # Assert LOOCV: each sample should have a corresponding VGAE that had it in its test set
-    assert len(data) == max(test_indices) + 1, \
-        f"Expected LOOCV: len(data)={len(data)}, max(test_indices)={max(test_indices)}. " \
-        f"Should have len(data) == max(test_indices) + 1"
+    all_indices = np.arange(len(data))
+    
+    # Validate test_indices
+    assert len(test_indices) == len(data), \
+        f"test_indices length ({len(test_indices)}) must match data length ({len(data)})"
+    num_folds = len(np.unique(test_indices))
+    assert num_folds == len(pretrained_vgaes), \
+        f"Number of unique folds ({num_folds}) must match number of VGAEs ({len(pretrained_vgaes)})"
 
     # Create mapping from data index to condition
     data_idx_to_condition = {}
@@ -362,82 +438,59 @@ def run(_config):
     cond1_indices = np.array([i for i in range(len(data)) if data_idx_to_condition.get(i) == cond1])
     
     logger.info(f'Found {len(cond0_indices)} samples for {cond0}, {len(cond1_indices)} samples for {cond1} (total: {len(data)})')
+    logger.info(f'Using {num_folds}-fold cross-validation based on test_fold_indices')
 
     # Load and freeze all VGAEs
     for i, vgae in enumerate(pretrained_vgaes):
         pretrained_vgaes[i] = freeze_model(vgae.to(device))
 
-    # Train single CATE model on combined data with LOOCV -----------------------
+    # Train single CATE model on combined data with k-fold CV --------------------
     start_time = time()
 
     # Store results for all samples
     outputs = init_outputs_dict(data)
     pred_models = []
-    pca_transformers = []
-    pca_var_explained = []
     scalers = []
     
-    # Get all sample indices (for LOOCV over all samples)
-    all_indices = np.arange(len(data))
-
-    logger.info(f'Training single CATE model on combined data (LOOCV over {len(all_indices)} samples)')
+    logger.info(f'Training single CATE model on combined data ({num_folds}-fold CV)')
     
-    for held_out_idx in tqdm(all_indices, desc='LOOCV (combined)', disable=not verbose):
-        # Get the VGAE that had this held-out sample in its test set during pretraining
-        vgae_idx = test_indices[held_out_idx]
-        vgae = pretrained_vgaes[vgae_idx]
+    for fold in tqdm(range(num_folds), desc='K-fold CV', disable=not verbose):
+        # Get the VGAE that was trained with this fold as its test set
+        vgae = pretrained_vgaes[fold]        
         
-        # Training samples: all other samples (from both conditions)
-        train_indices = all_indices[all_indices != held_out_idx]
-        train_data_subset = data[train_indices]
+        # Get train and test datasets for this fold
+        test_idx = all_indices[test_indices == fold]
+        train_idx = all_indices[test_indices != fold]
+        train_dataset = data[train_idx]
+        test_dataset = data[test_idx]
         
         # Extract latent representations for training set with ITE labels
         z_train, y_train, clinical_train, subject_train = extract_latent_representations(
-            vgae, train_data_subset, device, ite_labels=ite_labels)
+            vgae, train_dataset, device, ite_labels=ite_labels)
         
         # Prepare training features
         x_train = np.concatenate([z_train, clinical_train], axis=1)
-        original_dim = x_train.shape[1]
         
-        # Standardize features before PCA or model fitting
+        # Standardize features before model fitting
         scaler = None
         if standardize_data:
             scaler = StandardScaler()
             x_train = scaler.fit_transform(x_train)
         scalers.append(scaler)
 
-        # Apply PCA if requested
-        pca = None
-        if n_pca_components > 0:
-            pca = PCA(n_components=n_pca_components, random_state=seed)
-            x_train = pca.fit_transform(x_train)
-            var_expl_dict = {f'PC{i+1}': pca.explained_variance_ratio_[i] for i in range(n_pca_components)}
-            pca_var_explained.append(var_expl_dict)
-            if verbose:
-                logger.info(f"LOOCV, held_out_{held_out_idx}: Applied PCA, reduced from {original_dim} to {n_pca_components} dimensions")
-                logger.info(f"LOOCV, held_out_{held_out_idx}: PCA variance explained: {var_expl_dict}")
-        else:
-            pca_var_explained.append(None)
-        pca_transformers.append(pca)
-
         # Create and train prediction model
         pred_model = create_prediction_model(prediction_head_type, seed)
         pred_model.fit(x_train, y_train)
         pred_models.append(pred_model)
         
-        # Evaluate on held-out sample
-        held_out_data = data[np.array([held_out_idx])]
+        # Evaluate on test set
         z_test, y_test, clinical_test, subject_test = extract_latent_representations(
-            vgae, held_out_data, device, ite_labels=ite_labels)
+            vgae, test_dataset, device, ite_labels=ite_labels)
         x_test = np.concatenate([z_test, clinical_test], axis=1)
         
         # Apply standardization transformation if used
         if scaler is not None:
             x_test = scaler.transform(x_test)
-        
-        # Apply PCA transformation if used
-        if pca is not None:
-            x_test = pca.transform(x_test)
         
         y_pred = pred_model.predict(x_test)
         
@@ -448,52 +501,19 @@ def run(_config):
                        'clinical_data': []}
         for sub in range(len(subject_test)):
             outputs_dict['clinical_data'].append(tuple(clinical_test[sub, :]))
-        
         update_best_outputs(outputs, outputs_dict, _config['dataset']['graph_attrs'])
-        
-        # Evaluate on held-out sample
-        if len(y_test) > 0:
-            mae = np.mean(np.abs(y_pred - y_test))
-            ex.log_scalar(f'loocv/held_out_{held_out_idx}/mae', mae)
         
         # Save model weights if requested
         if save_weights:
-            import pickle
-            model_path = os.path.join(output_dir, f'held_out_{held_out_idx}_pred_model.pkl')
-            with open(model_path, 'wb') as f:
-                pickle.dump(pred_model, f)
-            if scaler is not None:
-                scaler_path = os.path.join(output_dir, f'held_out_{held_out_idx}_scaler.pkl')
-                with open(scaler_path, 'wb') as f:
-                    pickle.dump(scaler, f)
-            if pca is not None:
-                pca_path = os.path.join(output_dir, f'held_out_{held_out_idx}_pca.pkl')
-                with open(pca_path, 'wb') as f:
-                    pickle.dump(pca, f)
+            model_path = os.path.join(output_dir, f'k{fold}_linear_model.pth')
+            if scaler is None:
+                save_linear_params(pred_model, model_path)
+            else:
+                save_scaled_linear_params(pred_model, scaler, model_path)
 
     # Print training time
     end_time = time()
     logger.info(f"Training completed after {(end_time-start_time)/60:.2f} minutes.")
-
-    # Save PCA variance explained -----------------------------------------------
-    if len(pca_var_explained) > 0 and any(v is not None for v in pca_var_explained):
-        # Filter out None values (where PCA was not applied)
-        var_expl_list = [v for v in pca_var_explained if v is not None]
-        if len(var_expl_list) > 0:
-            pca_var_explained_df = pd.DataFrame(var_expl_list)
-            pca_var_explained_file = os.path.join(output_dir, 'pca_var_explained.csv')
-            pca_var_explained_df.to_csv(pca_var_explained_file, index=False)
-            logger.info(f"Saved PCA variance explained to {pca_var_explained_file}")
-            
-            # Log summary statistics for variance explained
-            if n_pca_components > 0:
-                for pc_idx in range(n_pca_components):
-                    pc_name = f'PC{pc_idx+1}'
-                    mean_var = pca_var_explained_df[pc_name].mean()
-                    std_var = pca_var_explained_df[pc_name].std()
-                    ex.log_scalar(f'pca_var_explained/{pc_name}/mean', mean_var)
-                    ex.log_scalar(f'pca_var_explained/{pc_name}/std', std_var)
-                    logger.info(f"PCA {pc_name}: mean={mean_var:.4f}, std={std_var:.4f}")
 
     # Process and save outputs --------------------------------------------------
     outputs_df = pd.DataFrame(outputs)
@@ -502,7 +522,11 @@ def run(_config):
     # Save prediction results
     data_file = os.path.join(output_dir, 'prediction_results.csv')
     outputs_df.to_csv(data_file, index=False)
-    
+
+    # Save test fold assignments
+    test_fold_assignments = [np.where(test_indices == fold)[0] for fold in range(num_folds)]
+    _ = save_test_indices(test_fold_assignments, output_dir)
+
     # Calculate and save metrics
     r, p, mae, mae_std = evaluate_regression(outputs_df)
     results = {'seed': seed, 'r': r, 'p': p, 'mae': mae, 'mae_std': mae_std}
@@ -527,8 +551,7 @@ def run(_config):
         seed=seed,
         make_plot=True,
         save_path=perm_plot_path,
-        title=perm_title
-    )
+        title=perm_title)
     
     # Save permutation correlations
     pd.DataFrame({'perm_r': perm_results['null_distribution']}).to_csv(perm_hist_path, index=False)

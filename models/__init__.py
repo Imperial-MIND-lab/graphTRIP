@@ -3,6 +3,7 @@ from models.models import (
     GraphLevelVGAE, NodeLevelVGAE,
     # MLP models
     StandardMLP, RegressionMLP, LogisticRegressionMLP, NonNegativeRegressionMLP, CFRHead,
+    SklearnLinearModelWrapper,
     # Node embedding models
     NodeEmbeddingMLP, NodeEmbeddingGATv2Conv, NodeEmbeddingGATv2Conv_withSkip,
     NodeEmbeddingGraphormer,
@@ -19,6 +20,7 @@ from models.models import (
 
 __all__ = ['GraphLevelVGAE', 'NodeLevelVGAE', 
            'StandardMLP', 'RegressionMLP', 'LogisticRegressionMLP', 'NonNegativeRegressionMLP', 'CFRHead',
+           'SklearnLinearModelWrapper',
            'NodeEmbeddingMLP', 'NodeEmbeddingGATv2Conv', 'NodeEmbeddingGATv2Conv_withSkip',
            'NodeEmbeddingGraphormer',
            'DenseEncoder', 'DenseOneLayerEncoder',
