@@ -92,6 +92,24 @@ def main(config_file, output_dir, verbose, debug, seed, config_id=None):
         else:
             print(f"Permutation importance experiment already exists in {ex_dir}.")
 
+    # Latent node importance ---------------------------------------------------
+    exname = 'latent_node_importance'
+    drug_conditions = ["E", "P"]
+    for drug_condition in drug_conditions:
+        drug_name = 'escitalopram' if drug_condition == "E" else 'psilocybin'
+        ex_dir = os.path.join(output_dir, 'latent_node_importance', drug_name, f'seed_{seed}')
+        if not os.path.exists(ex_dir):
+            config_updates = {}
+            config_updates['dataset'] = {}
+            config_updates['condition'] = drug_condition
+            config_updates['output_dir'] = ex_dir
+            config_updates['weights_dir'] = weights_dir
+            config_updates['seed'] = seed
+            config_updates['verbose'] = verbose
+            run(exname, observer, config_updates)
+        else:
+            print(f"Latent node importance experiment already exists in {ex_dir}.")
+
     # Transfer to Schaefer200 and AAL -----------------------------------------
     exname = 'test_and_finetune'
     atlases = ['schaefer200', 'aal']
@@ -139,6 +157,41 @@ def main(config_file, output_dir, verbose, debug, seed, config_id=None):
             run(exname, observer, config_updates)
         else:
             print(f"GRAIL experiment already exists in {ex_dir}.")
+
+    # SCATE -------------------------------------------------------------------
+    exname = 'train_scate'
+    ex_dir = os.path.join(output_dir, 'single_cate', f'seed_{seed}')
+    if not os.path.exists(ex_dir):
+        config_updates = {}
+        config_updates['dataset'] = copy.deepcopy(config['dataset'])
+
+        # S-CATE model settings
+        config_updates['prediction_head_type'] = 'Ridge'
+        config_updates['n_pca_components'] = 0
+        config_updates['standardize_data'] = True
+        config_updates['n_permutations'] = 1000        
+
+        # ITE label settings
+        config_updates['dataset']['target'] = None
+        config_updates['t0_pred_file'] = os.path.join(weights_dir, 'counterfactual_predictions.csv')
+        config_updates['t1_pred_file'] = os.path.join(weights_dir, 'counterfactual_predictions.csv')
+        config_updates['dataset']['graph_attrs_to_standardise'] = []
+
+        # VGAE pooling config
+        config_updates['vgae_model'] = {}
+        config_updates['vgae_model']['pooling_cfg'] = {
+            'model_type': 'MeanStdPooling'
+        }
+
+        # Output and VGAE weights directories
+        config_updates['output_dir'] = ex_dir
+        config_updates['weights_dir'] = os.path.join('outputs', 'x_graphtrip', 'vgae_weights', f'seed_{seed}')
+        config_updates['save_weights'] = False
+        config_updates['verbose'] = verbose
+        config_updates['seed'] = seed
+        run(exname, observer, config_updates)
+    else:
+        print(f"CATE model already exists in {ex_dir}.")
 
 if __name__ == "__main__":
     """

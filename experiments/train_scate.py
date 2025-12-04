@@ -107,6 +107,7 @@ def match_config(config: Dict) -> Dict:
     # Various dataset related configs may mismatch, but other configs must match
     config_updates = copy.deepcopy(config)
     exceptions = ['graph_attrs', 'target', 'context_attrs', 
+                  'batch_size', 'num_folds', 'val_split', # training LOOCV, so this has no effect
                   'graph_attrs_to_standardise', 'pooling_cfg']
     config_updates = match_ingredient_configs(config=config,
                                               previous_config=previous_config,
@@ -258,34 +259,62 @@ def run(_config):
     annotations_file = add_project_root(_config['annotations_file'])
     subject_id_col = _config['subject_id_col']
 
+    # Create output directories, fix seed
+    os.makedirs(output_dir, exist_ok=True)
+    fix_random_seed(seed)
+    image_files = [] 
+
     # T-learner files
     t0_pred_file = add_project_root(_config['t0_pred_file'])
     t1_pred_file = add_project_root(_config['t1_pred_file'])
 
-    # Create output directories, fix seed
-    os.makedirs(output_dir, exist_ok=True)
-    fix_random_seed(seed)
-    image_files = []  
+    # Compute pseudo ITE labels from t-learner prediction results
+    cfrnet_tlearner = t0_pred_file == t1_pred_file
+    if cfrnet_tlearner:
+        # CFRNet t-learner pseudo-ITEs are computed differently
+        # CFRNet dataframe has columns: subject_id, prediction_mlp0, prediction_mlp1, label, Condition
+        # Condition: -1 == 'E' (cond0), 1 == 'P' (cond1)
+        cfrnet_results = pd.read_csv(t0_pred_file)
+        
+        # Verify required columns exist
+        required_cols = ['subject_id', 'prediction_mlp0', 'prediction_mlp1', 'label', 'Condition']
+        missing_cols = [col for col in required_cols if col not in cfrnet_results.columns]
+        if missing_cols:
+            raise ValueError(f"CFRNet dataframe missing required columns: {missing_cols}")
+        
+        # Compute ITEs based on Condition
+        # For cond0 (Condition == -1, usually 'E'): ite = prediction_mlp1 - label
+        # For cond1 (Condition == 1, usually 'P'): ite = label - prediction_mlp0
+        cfrnet_results['ITE'] = np.where(
+            cfrnet_results['Condition'] == -1,  # cond0
+            cfrnet_results['prediction_mlp1'] - cfrnet_results['label'],
+            cfrnet_results['label'] - cfrnet_results['prediction_mlp0']  # cond1
+        )
+        
+        # Create ITE label dictionary (subject_id is 0-indexed in the data)
+        ite_labels = dict(zip(cfrnet_results['subject_id'], cfrnet_results['ITE']))
 
-    # Load T-learner prediction results
-    t0_pred_results = pd.read_csv(t0_pred_file)  # results from model trained on condition 0 (usually escitalopram)
-    t1_pred_results = pd.read_csv(t1_pred_file)  # results from model trained on condition 1 (usually psilocybin)
+    else:
+        # Load T-learner prediction results
+        t0_pred_results = pd.read_csv(t0_pred_file)  # results from model trained on condition 0 (usually escitalopram)
+        t1_pred_results = pd.read_csv(t1_pred_file)  # results from model trained on condition 1 (usually psilocybin)
 
-    # Compute the ITEs
-    t0_pred_results['ITE'] = t0_pred_results['label'] - t0_pred_results['prediction']  # true_cond1 - pred_cond0
-    t1_pred_results['ITE'] = t1_pred_results['prediction'] - t1_pred_results['label']  # pred_cond1 - true_cond0
+        # Compute the ITEs
+        t0_pred_results['ITE'] = t0_pred_results['label'] - t0_pred_results['prediction']  # true_cond1 - pred_cond0
+        t1_pred_results['ITE'] = t1_pred_results['prediction'] - t1_pred_results['label']  # pred_cond1 - true_cond0
 
-    # Verify subject IDs are unique across t0 and t1 results
-    assert len(set(t0_pred_results['subject_id']).intersection(set(t1_pred_results['subject_id']))) == 0, \
-        "Subject IDs must be unique across t0 and t1 results."
-    
-    # Create combined ITE label dictionary (subject_id is 0-indexed in the data)
-    # For cond0: use ITEs from t1_pred_results (trained on cond1, predicting for cond0 patients)
-    # For cond1: use ITEs from t0_pred_results (trained on cond0, predicting for cond1 patients)
-    ite_labels_cond0 = dict(zip(t1_pred_results['subject_id'], t1_pred_results['ITE']))
-    ite_labels_cond1 = dict(zip(t0_pred_results['subject_id'], t0_pred_results['ITE']))
-    # Combine into single dictionary for all subjects
-    ite_labels = {**ite_labels_cond0, **ite_labels_cond1}
+        # Verify subject IDs are unique across t0 and t1 results
+        assert len(set(t0_pred_results['subject_id']).intersection(set(t1_pred_results['subject_id']))) == 0, \
+            "Subject IDs must be unique across t0 and t1 results."
+        
+        # Create combined ITE label dictionary (subject_id is 0-indexed in the data)
+        # For cond0: use ITEs from t1_pred_results (trained on cond1, predicting for cond0 patients)
+        # For cond1: use ITEs from t0_pred_results (trained on cond0, predicting for cond1 patients)
+        ite_labels_cond0 = dict(zip(t1_pred_results['subject_id'], t1_pred_results['ITE']))
+        ite_labels_cond1 = dict(zip(t0_pred_results['subject_id'], t0_pred_results['ITE']))
+        
+        # Combine into single dictionary for all subjects
+        ite_labels = {**ite_labels_cond0, **ite_labels_cond1}
 
     # Load data
     data = load_data()

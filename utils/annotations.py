@@ -211,6 +211,18 @@ def load_receptor_nullmaps(atlas: str, receptors: List[str],
 def load_rotated_rois(atlas, n_permutations):
     """
     Load rotated ROIs for a given atlas and number of permutations.
+
+    Parameters:
+    ----------
+    atlas (str): The atlas to load the rotated ROIs for.
+    n_permutations (int): The number of permutations to load.
+
+    Returns:
+    -------
+    rotated_roi_indices (numpy array): The rotated ROIs. (num_regions, num_rotations)
+
+    Note: The rotated ROIs are stored in the data/raw/spatial_coordinates/rotated_nullmaps directory.
+    The file name is rotated_rois_<atlas>.csv.
     """
     assert n_permutations <= 10000, 'Maximum number of permutations is 10000.'
     spatial_coords_dir = os.path.join(project_root(), 'data', 'raw', 'spatial_coordinates', 'rotated_nullmaps')

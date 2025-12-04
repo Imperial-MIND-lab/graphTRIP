@@ -8,6 +8,9 @@ Date: 2024-12-30
 License: BSD 3-Clause
 """
 
+import matplotlib
+matplotlib.use('Agg') # Uncomment when running in debug mode
+
 import sys
 sys.path.append('graphTRIP/')
 
@@ -30,6 +33,7 @@ from utils.files import add_project_root
 from utils.configs import *
 from utils.helpers import fix_random_seed, get_logger, check_weights_exist
 from utils.annotations import load_annotations
+from utils.statsalg import get_fold_performance
 from preprocessing.metrics import get_atlas
 from utils.plotting import plot_brain_surface
 
@@ -258,6 +262,12 @@ def run(_config):
         labels = dict(zip(pre_results['subject_id']+1, pre_results['label']))
         addlabel_tfm = AddLabel(labels)
         data.transform = T.Compose([*data.transform.transforms, addlabel_tfm])
+
+    # Compute fold-wise performance of each model --------------------------
+    if len(vgaes) > 1:
+        fold_performance = get_fold_performance(weights_dir)
+        fold_performance.to_csv(os.path.join(output_dir, 'fold_performance.csv'), index=False)
+        ex.add_artifact(os.path.join(output_dir, 'fold_performance.csv'))
 
     # Get number of nodes per graph
     num_nodes = data[0].num_nodes
