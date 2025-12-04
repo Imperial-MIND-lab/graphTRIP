@@ -78,6 +78,7 @@ def cfg(dataset):
     num_z_samples = 100         # Number of samples to draw from the VGAE latent distribution.
     sigma = 2.0                 # Std of the Gaussian noise added to the latent means.
     all_rsn_conns = False       # Whether to compute RSN connectivity for all RSN pairs.
+    medusa = False              # Only works with CFRHead MLP. Grails mlp1-mlp0 instead of ypred.
 
 # Match configs function -------------------------------------------------------
 def match_config(config: Dict) -> Dict:
@@ -103,10 +104,14 @@ def match_config(config: Dict) -> Dict:
                                               previous_config=previous_config,
                                               ingredients=ingredients,
                                               exceptions=exceptions)
+    config_updates['mlp_weights_dir'] = mlp_weights_dir
 
     # Other compatibiltiy checks
     num_z_samples = config_updates.get('num_z_samples', 100)
     assert num_z_samples > 1, 'num_z_samples must be > 1.'
+    if config_updates.get('medusa', False):
+        assert config_updates['mlp_model']['model_type'] == 'CFRHead', \
+            'GRAIL with medusa only works with CFRHead MLP.'
             
     return config_updates
 
@@ -242,13 +247,17 @@ def get_alignments_and_features(triu_edges, ypred_grad, z,
     
     return alignments
 
-def get_ypred_from_z(z, vgae, mlp, batch):
+@ex.capture
+def get_ypred_from_z(z, vgae, mlp, batch, medusa=False):
     '''Returns the MLP prediction for a given latent sample.'''
     context = get_context(batch)
     treatment = get_treatment(batch, num_z_samples=0)
     clinical_data = batch.graph_attr
     x = torch.cat([vgae.readout(z, context, batch.batch), clinical_data], dim=1)
-    if treatment is None:
+    if medusa:
+        # CFRNet, but we want to grail treatment effect
+        return mlp.mlp1(x) - mlp.mlp0(x)
+    elif treatment is None:
         # Standard MLP: no treatment information
         return mlp(x)
     else:

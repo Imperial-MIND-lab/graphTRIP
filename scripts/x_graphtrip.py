@@ -8,10 +8,10 @@ Dependencies:
 Outputs:
 - outputs/x_graphtrip/vgae_weights/seed_{seed}/test_fold_indices.csv
 - outputs/x_graphtrip/estimate_propensity/seed_{seed}/
-- outputs/x_graphtrip/tlearner_escitalopram/seed_{seed}/
-- outputs/x_graphtrip/tlearner_psilocybin/seed_{seed}/
-- outputs/x_graphtrip/cate_model_escitalopram/seed_{seed}/
-- outputs/x_graphtrip/cate_model_psilocybin/seed_{seed}/
+- outputs/x_graphtrip/tlearner/seed_{seed}/
+- outputs/x_graphtrip/cate_model/seed_{seed}/
+- outputs/x_graphtrip/grail/seed_{seed}/
+- outputs/x_graphtrip/medusa_grail/seed_{seed}/
 
 Author: Hanna M. Tolle
 Date: 2025-05-31
@@ -209,6 +209,26 @@ def main(config_file, tlearner_config_file, output_dir, verbose, debug, seed, co
         run(exname, observer, config_updates)
     else:
         print(f"GRAIL experiment already exists in {ex_dir}.")
+
+    # Medusa GRAIL for T-learner -----------------------------------------------
+    exname = 'grail'
+    ex_dir = os.path.join(output_dir, 'medusa_grail', f'seed_{seed}')
+    if not os.path.exists(ex_dir):
+        config_updates = {}
+        config_updates['output_dir'] = ex_dir
+        config_updates['vgae_weights_dir'] = tlearner_dir
+        config_updates['mlp_weights_dir'] = None # vgae and mlp weights dirs are the same
+        config_updates['seed'] = seed
+        config_updates['verbose'] = verbose
+
+        # GRAIL settings
+        config_updates['num_z_samples'] = 100 if not debug else 2
+        config_updates['sigma'] = 2.0
+        config_updates['all_rsn_conns'] = False
+        config_updates['medusa'] = True
+        run(exname, observer, config_updates)
+    else:
+        print(f"Medusa GRAIL experiment already exists in {ex_dir}.")
 
 if __name__ == "__main__":
     """
