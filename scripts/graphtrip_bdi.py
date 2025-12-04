@@ -86,7 +86,7 @@ def main(config_file, output_dir, verbose, debug, seed, config_id=0):
 if __name__ == "__main__":
     """
     How to run:
-    python graphtrip_bdi.py -c experiments/configs/graphtrip.json -o outputs/graphtrip_bdi/ -s 291 -v -dbg -ci 0
+    python graphtrip_bdi.py -c experiments/configs/graphtrip.json -o outputs/graphtrip_bdi/ -s 0 -v -dbg -ci 0
     """
     # Parse command line arguments
     parser = argparse.ArgumentParser()
