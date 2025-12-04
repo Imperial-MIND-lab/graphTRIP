@@ -1,5 +1,5 @@
 { 
-    "output_dir": ["outputs/psilodep1/transfer_vgae_and_pooling_loocv/"],
+    "output_dir": ["outputs/psilodep1/transfer_vgae_more_graphattrs/"],
     "weights_dir": ["outputs/graphtrip/weights/seed_1",
                     "outputs/graphtrip/weights/seed_3",
                     "outputs/graphtrip/weights/seed_4",
@@ -21,8 +21,8 @@
       "batch_size": [8],
       "num_folds": [16],
       "val_split": [0.0],
-      "graph_attrs": [["QIDS_Before", "BDI_Before"]],
-      "graph_attrs_to_standardise": [["QIDS_Before", "BDI_Before"]],
+      "graph_attrs": [["QIDS_Before", "BDI_Before", "HAMD_Before", "LOTR_Before"]],
+      "graph_attrs_to_standardise": [["QIDS_Before", "BDI_Before", "HAMD_Before", "LOTR_Before"]],
       "context_attrs": [[]],
       "node_attrs": [["5-HT1A_Believeau-3", "5-HT2A_Believeau-3", "5-HTT_Believeau-3"]],
       "edge_attrs": [["functional_connectivity"]],

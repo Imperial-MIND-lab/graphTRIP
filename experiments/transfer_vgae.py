@@ -304,10 +304,11 @@ def run(_config):
                     mlp_test_loss[k].append(mlp_test_loss_epoch)
 
                     # Log training and test losses
-                    ex.log_scalar(f'training/pretrained_model{pretrained_idx}/fold{k}/epoch/vgae_loss', vgae_train_loss_epoch)
-                    ex.log_scalar(f'training/pretrained_model{pretrained_idx}/fold{k}/epoch/mlp_loss', mlp_train_loss_epoch)
-                    ex.log_scalar(f'test/pretrained_model{pretrained_idx}/fold{k}/epoch/vgae_loss', vgae_test_loss_epoch)
                     ex.log_scalar(f'test/pretrained_model{pretrained_idx}/fold{k}/epoch/mlp_loss', mlp_test_loss_epoch)
+                    ex.log_scalar(f'training/pretrained_model{pretrained_idx}/fold{k}/epoch/mlp_loss', mlp_train_loss_epoch)
+                    if alpha > 0:
+                        ex.log_scalar(f'training/pretrained_model{pretrained_idx}/fold{k}/epoch/vgae_loss', vgae_train_loss_epoch)
+                        ex.log_scalar(f'test/pretrained_model{pretrained_idx}/fold{k}/epoch/vgae_loss', vgae_test_loss_epoch)                    
 
                     # Validate models, if applicable
                     if len(val_loaders) > 0:
@@ -403,12 +404,15 @@ def run(_config):
                                                         vrange=vrange, 
                                                         save_path=save_path,
                                                         only_boxplots=True)
-            # Loss curves
-            save_path_vgae = os.path.join(output_dirs[pretrained_idx], f'vgae_loss_curves_model{pretrained_idx}.png')
-            plot_loss_curves(vgae_train_loss, vgae_test_loss, vgae_val_loss, save_path=save_path_vgae)
+
+            # Loss curves (only plot VGAE loss, if finetuned)
+            if alpha > 0:
+                save_path_vgae = os.path.join(output_dirs[pretrained_idx], f'vgae_loss_curves_model{pretrained_idx}.png')
+                plot_loss_curves(vgae_train_loss, vgae_test_loss, vgae_val_loss, save_path=save_path_vgae)
+                image_files.append(save_path_vgae)
             save_path_mlp = os.path.join(output_dirs[pretrained_idx], f'mlp_loss_curves_model{pretrained_idx}.png')
             plot_loss_curves(mlp_train_loss, mlp_test_loss, mlp_val_loss, save_path=save_path_mlp)
-            image_files += [save_path_vgae, save_path_mlp]
+            image_files.append(save_path_mlp)
 
             # True vs predicted scatter
             title = f'r={r:.4f}, p={p:.4e}, MAE={mae:.4f} ± {mae_std:.4f}'
