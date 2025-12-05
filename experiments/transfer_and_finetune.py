@@ -8,6 +8,8 @@ Author: Hanna Tolle
 Date: 2025-01-12 
 License: BSD-3-Clause
 """
+import matplotlib
+matplotlib.use('Agg')  # Set non-interactive backend
 
 import sys
 sys.path.append('graphTRIP/')
@@ -72,8 +74,8 @@ def cfg():
     mlp_lr = 0.001        # MLP learning rate.
     num_z_samples = 3     # 0 for training MLP on the means of VGAE latent variables.
     alpha = 0             # Loss = alpha*vgae_loss + (1-alpha)*mlp_loss; if alpha=0, VGAE is frozen.
-    rho = 0.5             # mlp_loss = rho*corr_loss + (1-rho)*mse_loss
-    leak_rate = 0.9       # Running average leak rate
+    rho = 0.0             # mlp_loss = rho*corr_loss + (1-rho)*mse_loss
+    leak_rate = 0.0       # Running average leak rate; if 0, no normalising is performed.
 
 # Match configs function -------------------------------------------------------
 def match_config(config: Dict) -> Dict:
@@ -83,7 +85,7 @@ def match_config(config: Dict) -> Dict:
     weights_dir = add_project_root(config['weights_dir'])
 
     # Load the VGAE and dataset configs from weights_dir
-    ingredients = ['vgae_model', 'dataset']     
+    ingredients = ['vgae_model', 'dataset', 'mlp_model']     
     previous_config = load_ingredient_configs(weights_dir, ingredients)
 
     # Various dataset related configs may mismatch, but other configs must match
@@ -161,6 +163,10 @@ class LossNormaliser:
         return results
     
     def get_losses(self, vgae_loss, mse_loss, corr_loss):
+        if self.leak_rate == 0:
+            return {'vgae': vgae_loss, 
+                    'mlp_mse': mse_loss, 
+                    'mlp_corr': corr_loss}
         if self.training:
             self.update(vgae_loss, mse_loss, corr_loss)
         return self.normalise(vgae_loss, mse_loss, corr_loss)
@@ -191,7 +197,7 @@ def weight_losses(norm_losses, alpha, rho):
     return total_loss
 
 @ex.capture
-def compute_correlation_loss(ypred, ytrue, num_z_samples):
+def compute_correlation_loss(ypred, ytrue, num_z_samples, rho):
     '''
     Computes the average correlation loss between ypred and ytrue across multiple predictions per subject.
     
@@ -203,6 +209,10 @@ def compute_correlation_loss(ypred, ytrue, num_z_samples):
     Returns:
         average correlation loss across z-samples
     '''
+    # No need to compute this, if the correlation loss weight is 0.
+    if rho == 0:
+        return torch.tensor(0.0, device=ypred.device)
+
     # No need to handle multiple samples if num_z_samples=0 or 1
     if num_z_samples <= 1:
         x = ypred - ypred.mean()
