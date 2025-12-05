@@ -92,7 +92,7 @@ def match_config(config: Dict) -> Dict:
     config_updates = copy.deepcopy(config)
     exceptions = ['num_nodes', 'atlas', 
                   'num_folds', 'batch_size', 'val_split', 
-                  'study', 'session', 'target',
+                  'study', 'session', 'target', 'graph_attrs_to_standardise',
                   'dropout', 'reg_strength', 'layernorm', 'mse_reduction']
     config_updates = match_ingredient_configs(config=config,
                                               previous_config=previous_config,
