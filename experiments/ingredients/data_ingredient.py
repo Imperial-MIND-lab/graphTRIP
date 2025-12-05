@@ -434,7 +434,8 @@ def get_kfold_dataloaders(dataset, num_folds, batch_size, val_split,
     return train_loaders, val_loaders, test_loaders, test_indices, mean_std
 
 @data_ingredient.capture
-def get_dataloaders_from_test_indices(dataset, test_indices, batch_size, val_split, standardise_x, seed=None):
+def get_dataloaders_from_test_indices(dataset, test_indices, batch_size, val_split, 
+                                      standardise_x, graph_attrs_to_standardise, seed=None):
     '''
     Returns train, validation, and test dataloaders based on test fold assignments.
     If val_split > 0, splits training data into train and validation sets.
@@ -446,6 +447,7 @@ def get_dataloaders_from_test_indices(dataset, test_indices, batch_size, val_spl
     batch_size (int): Batch size for the dataloaders.
     val_split (float): Fraction of the training set to use as validation set.
     standardise_x (bool): Whether to standardise the node features.
+    graph_attrs_to_standardise (list): List of graph attribute names to standardise.
     seed (int): Random seed for reproducibility.
     '''
     if seed is not None:
@@ -491,6 +493,15 @@ def get_dataloaders_from_test_indices(dataset, test_indices, batch_size, val_spl
 
             if val_split > 0:
                 val_dataset.transform = T.Compose([*val_dataset.transform.transforms, standardise_tfm])
+
+        # Graph attribute standardisation 
+        if len(graph_attrs_to_standardise) > 0:
+            graph_attrs_stats = get_graph_attrs_stats_dict(train_dataset, graph_attrs_to_standardise)
+            standardise_graph_tfm = StandardiseGraphAttributes(stats=graph_attrs_stats)
+            train_dataset.transform = T.Compose([*train_dataset.transform.transforms, standardise_graph_tfm])
+            test_dataset.transform = T.Compose([*test_dataset.transform.transforms, standardise_graph_tfm])
+            if val_split > 0:
+                val_dataset.transform = T.Compose([*val_dataset.transform.transforms, standardise_graph_tfm])
 
         # Make the train, validation, and test dataloaders
         train_loaders.append(DataLoader(train_dataset, batch_size=batch_size, shuffle=True))

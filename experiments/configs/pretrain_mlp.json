@@ -1,8 +1,8 @@
 { 
-    "output_dir": ["outputs/psilodep1/pretrain_mlp_on_psilodep2/"],
+    "output_dir": ["outputs/psilodep1/pretrain_mlp_with_standardisation/"],
     "weights_dir": ["outputs/graphtrip/weights/seed_1"],
     "save_weights": [true],
-    "num_epochs": [200],
+    "num_epochs": [200, 300],
     "alpha": [0.0],
     "vgae_lr": [0.0],
     "mlp_lr": [0.001],
@@ -17,7 +17,7 @@
       "num_folds": [7],
       "val_split": [0.0],
       "graph_attrs": [["QIDS_Before", "BDI_Before"]],
-      "graph_attrs_to_standardise": [[], ["QIDS_Before", "BDI_Before"]],
+      "graph_attrs_to_standardise": [["QIDS_Before", "BDI_Before"]],
       "context_attrs": [[]],
       "node_attrs": [["5-HT1A_Believeau-3", "5-HT2A_Believeau-3", "5-HTT_Believeau-3"]],
       "edge_attrs": [["functional_connectivity"]],
@@ -35,7 +35,7 @@
       "model_type": ["RegressionMLP"],
       "params": {
         "dropout": [0.25],
-        "hidden_dim": [32, 64],
+        "hidden_dim": [64],
         "layernorm": [false],
         "mse_reduction": ["sum"],
         "num_layers": [3],
