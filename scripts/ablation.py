@@ -28,6 +28,7 @@ import os
 import copy
 import argparse
 from utils.files import add_project_root
+from utils.annotations import load_annotations
 from utils.configs import load_configs_from_json, fetch_job_config
 from experiments.run_experiment import run
 
@@ -179,6 +180,28 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
         else:
             print(f"Train VGAE with regression head experiment already exists in {ex_dir}.")
 
+    # 5. Linear regression on clinical data benchmark ---------------------------
+    # Train a linear regression model on clinical data only
+    if jobid == 4 or jobid == -1:
+        exname = 'train_linreg_on_clinical'
+        ex_dir = os.path.join(output_dir, 'linreg_on_clinical_data', f'seed_{seed}')
+        if not os.path.exists(add_project_root(ex_dir)):
+            config_updates = {}
+
+            # Dataset configs
+            config_updates['dataset'] = copy.deepcopy(config['dataset'])
+            config_updates['dataset']['batch_size'] = -1 # linear regression uses full batch
+            config_updates['dataset']['graph_attrs_to_standardise'] = ['QIDS_Before', 'BDI_Before']
+
+            # Other configs
+            config_updates['ridge_alpha'] = 1.0
+            config_updates['output_dir'] = ex_dir
+            config_updates['seed'] = seed
+            config_updates['verbose'] = verbose
+            config_updates['save_weights'] = False 
+            run(exname, observer, config_updates)
+        else:
+            print(f"Train linear regression on clinical data experiment already exists in {ex_dir}.")
     else:
         print(f"Invalid job ID: {jobid}")
         exit(1)
