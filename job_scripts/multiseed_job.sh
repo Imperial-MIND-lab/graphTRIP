@@ -2,7 +2,7 @@
 
 #PBS -l select=1:ncpus=4:mem=4gb
 #PBS -l walltime=2:30:00
-#PBS -N retrain_mlp_constrained
+#PBS -N transfer_vgae_option_2
 #PBS -J 0-179
 
 module load anaconda3/personal
@@ -13,7 +13,7 @@ cd ~/projects/graphTRIP/experiments
 # Settings
 OBSERVER='FileStorageObserver'
 EXNAME='transfer_vgae'
-CONFIG_JSON='retrain_mlp.json'
+CONFIG_JSON='transfer_vgae_option_2.json'
 SEEDS=(0 1 2)
 MAX_NUM_CONFIGS=60
 
