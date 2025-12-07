@@ -1,5 +1,5 @@
 { 
-    "output_dir": ["outputs/psilodep1/option_2/constrained_output"],
+    "output_dir": ["outputs/psilodep1/option_2/constrained_output_neptune"],
     "weights_dir": ["outputs/graphtrip/weights/seed_0",
                     "outputs/graphtrip/weights/seed_1", 
                     "outputs/graphtrip/weights/seed_2",
