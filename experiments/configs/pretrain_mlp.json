@@ -1,15 +1,6 @@
 { 
-    "output_dir": ["outputs/psilodep1/option_3/pretrain_mlp"],
-    "weights_dir": ["outputs/graphtrip/weights/seed_0", 
-                    "outputs/graphtrip/weights/seed_1", 
-                    "outputs/graphtrip/weights/seed_2",
-                    "outputs/graphtrip/weights/seed_3",
-                    "outputs/graphtrip/weights/seed_4",
-                    "outputs/graphtrip/weights/seed_5",
-                    "outputs/graphtrip/weights/seed_6",
-                    "outputs/graphtrip/weights/seed_7",
-                    "outputs/graphtrip/weights/seed_8",
-                    "outputs/graphtrip/weights/seed_9"],
+    "output_dir": ["outputs/psilodep1/option_3/constrained_output/pretrain_mlp"],
+    "weights_dir": ["outputs/graphtrip/weights/seed_1"],
     "save_weights": [true],
     "verbose": [true],
     "num_epochs": [100, 200, 300],
@@ -50,7 +41,8 @@
         "mse_reduction": ["sum"],
         "num_layers": [3],
         "output_dim": [1],
-        "reg_strength": [0.01]
+        "reg_strength": [0.01],
+        "output_range": [[0, 27]]
       }
     }
 }
