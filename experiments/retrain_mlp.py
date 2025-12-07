@@ -90,7 +90,7 @@ def match_config(config: Dict) -> Dict:
     
     # Various MLP related configs may mismatch, but other configs must match
     config_updates = copy.deepcopy(config)
-    exceptions = ['target', 'graph_attrs', 'graph_attrs_to_standardise']
+    exceptions = ['target', 'graph_attrs', 'graph_attrs_to_standardise', 'num_graph_attr']
     reinit_pooling = config.get('reinit_pooling', True)
     if reinit_pooling: # new pooling, so pooling configs don't need to match
         exceptions.extend(['pooling_cfg', 'context_attrs'])
