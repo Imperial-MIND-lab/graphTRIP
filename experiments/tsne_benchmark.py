@@ -24,10 +24,12 @@ import pandas as pd
 import logging
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
+from sklearn.preprocessing import StandardScaler 
 
 from utils.files import project_root, add_project_root
 from utils.helpers import fix_random_seed, get_logger, save_test_indices
 from utils.plotting import plot_loss_curves, true_vs_pred_scatter
+
 
 # Torch dataset for t-SNE embeddings -------------------------------------------
 class TSNEDataset(torch.utils.data.Dataset):
@@ -145,25 +147,24 @@ def create_tsne_dataset(data, n_components, perplexity, seed):
     Parameters:
     -----------
     data (torch_geometric.data): The entire torch geometric dataset.
-    test_indices (numpy.array): Array where test_indices[i] indicates,
-      which test fold sample i belongs to.
     n_components (int): Number of t-SNE components.
     perplexity (int): t-SNE perplexity.
     seed (int): Random seed.
 
     Returns:
     --------
-    train_loaders (list): List of train dataloaders.
-    val_loaders (list): List of val dataloaders.
-    test_loaders (list): List of test dataloaders.
+    tsne_dataset (TSNEDataset): Dataset containing embeddings and targets.
     '''
     # Get flattened features from all graphs
     batch = Batch.from_data_list([graph for graph in data])
     flattened_features = get_flattened_features(batch).cpu().numpy()
     subject_ids = batch.subject
 
+    # Standardize features before t-SNE 
+    scaler = StandardScaler()
+    flattened_features = scaler.fit_transform(flattened_features)
+
     # Compute t-SNE embeddings
-    logger.info('Computing t-SNE embeddings...')
     tsne = TSNE(n_components=n_components, perplexity=perplexity, random_state=seed)
     embeddings = tsne.fit_transform(flattened_features)
     

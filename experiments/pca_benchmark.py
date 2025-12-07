@@ -23,6 +23,7 @@ import pandas as pd
 import logging
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 
 from utils.files import project_root, add_project_root
 from utils.helpers import fix_random_seed, get_logger, save_test_indices
@@ -101,27 +102,35 @@ def get_flattened_features(batch):
     flattened_features = torch.cat([node_features, edge_features], dim=1)
     return flattened_features
 
-def get_x(batch, device, pca):
+def get_x(batch, device, pca, scaler):
     '''Get the MLP inputs from the batch.'''
     # Get PCA embeddings
     flattened_features = get_flattened_features(batch)
-    embeddings = reduce_dimensions(flattened_features, pca)
+    embeddings = reduce_dimensions(flattened_features, pca, scaler)
     embeddings = torch.tensor(embeddings, dtype=torch.float32)
     # Concatenate clinical data and PCA embeddings
     x = torch.cat([batch.graph_attr, embeddings], dim=1)
     return x.to(device) # [batch_size, num_features]
 
-def reduce_dimensions(flattened_features, pca):
-    '''Performs PCA on the flattened input features.'''
+def reduce_dimensions(flattened_features, pca, scaler):
+    '''Performs PCA on the flattened input features after standardization.'''
     flattened_features = flattened_features.cpu().numpy()
+    # Standardize using training data statistics
+    flattened_features = scaler.transform(flattened_features)
     return pca.transform(flattened_features) 
 
 @ex.capture
 def fit_pca(flattened_features, n_components, seed):
-    '''Fits PCA to the flattened input features.'''
+    '''Fits PCA to the standardized flattened input features.'''
+    # Standardize the features based on training data statistics
+    scaler = StandardScaler()
+    flattened_features_np = flattened_features.cpu().numpy() if isinstance(flattened_features, torch.Tensor) else flattened_features
+    flattened_features_standardized = scaler.fit_transform(flattened_features_np)
+    
+    # Fit PCA on standardized features
     pca = PCA(n_components=n_components, random_state=seed)
-    pca.fit(flattened_features)
-    return pca
+    pca.fit(flattened_features_standardized)
+    return pca, scaler
 
 @ex.capture
 def get_dataloaders(data, balance_attrs, seed):
@@ -173,9 +182,9 @@ def run(_config):
         mlp = build_mlp(latent_dim=n_components).to(device)
         optimizer = get_optimizer(mlp)
 
-        # Fit PCA to all training data once per fold
+        # Fit PCA to all training data once per fold (with standardization)
         train_features = torch.cat([get_flattened_features(batch) for batch in train_loaders[k]], dim=0)
-        pca = fit_pca(train_features)
+        pca, scaler = fit_pca(train_features)
 
         # Best validation loss
         best_val_loss = float('inf')
@@ -184,14 +193,14 @@ def run(_config):
         for epoch in range(_config['num_epochs']):
             # Train MLP
             _ = train_mlp(mlp, train_loaders[k], optimizer, device, 
-                          get_x=get_x, pca=pca)
+                          get_x=get_x, pca=pca, scaler=scaler)
             
             # Compute training losses
-            mlp_train_loss_epoch = test_mlp(mlp, train_loaders[k], device, get_x=get_x, pca=pca)
+            mlp_train_loss_epoch = test_mlp(mlp, train_loaders[k], device, get_x=get_x, pca=pca, scaler=scaler)
             mlp_train_loss[k].append(mlp_train_loss_epoch)
             
             # Test MLP
-            mlp_test_loss_epoch = test_mlp(mlp, test_loaders[k], device, get_x=get_x, pca=pca)
+            mlp_test_loss_epoch = test_mlp(mlp, test_loaders[k], device, get_x=get_x, pca=pca, scaler=scaler)
             mlp_test_loss[k].append(mlp_test_loss_epoch)
 
             # Log training and test losses
@@ -200,7 +209,7 @@ def run(_config):
 
             # Validate models, if applicable
             if len(val_loaders) > 0:
-                mlp_val_loss_epoch = test_mlp(mlp, val_loaders[k], device, get_x=get_x, pca=pca)
+                mlp_val_loss_epoch = test_mlp(mlp, val_loaders[k], device, get_x=get_x, pca=pca, scaler=scaler)
                 mlp_val_loss[k].append(mlp_val_loss_epoch)
                 ex.log_scalar(f'validation/fold{k}/epoch/mlp_loss', mlp_val_loss_epoch)
                 
@@ -222,7 +231,7 @@ def run(_config):
 
         # Save the test predictions of the best model
         outputs = get_mlp_outputs_nograd(mlp, test_loaders[k], device, 
-                                         get_x=get_x, pca=pca)
+                                         get_x=get_x, pca=pca, scaler=scaler)
         update_best_outputs(best_outputs, outputs)
 
     # Print training time
