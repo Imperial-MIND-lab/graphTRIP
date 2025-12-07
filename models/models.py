@@ -9,7 +9,7 @@ import sys
 sys.path.append('../')
 
 import abc
-from typing import Dict, Optional
+from typing import Dict, Optional, Union, List, Tuple
 import torch
 from torch_geometric.utils import to_dense_adj, scatter, to_dense_batch
 from torch_geometric.data import Data, Batch
@@ -253,11 +253,37 @@ class RegressionMLP(StandardMLP):
                  dropout: float = 0.25,
                  layernorm: bool = False,
                  reg_strength: float = 0.01, 
-                 mse_reduction: str = 'sum'):
+                 mse_reduction: str = 'sum',
+                 output_range: Union[List[float], Tuple[float, float]] = None):
         layer_dims = [input_dim] + [hidden_dim]*(num_layers-1) + [output_dim]
         super().__init__(layer_dims, dropout=dropout, layernorm=layernorm)
         self.reg_strength = reg_strength
         self.mse_reduction = mse_reduction
+        
+        # Handle output range
+        if output_range is not None:
+            if len(output_range) != 2:
+                raise ValueError(f"output_range must have exactly 2 elements (min, max), got {output_range}")
+            self.output_range = tuple(output_range)
+
+        # Allow constraining the output range to valid values
+        self.output_range = output_range
+        if self.output_range is not None:
+            lower, upper = output_range
+            buffer = 1.0 # to prevent vanishing gradients at the extremes
+            self.scale_min = lower - buffer
+            self.scale_max = upper + buffer
+            self.scale_diff = self.scale_max - self.scale_min
+        else:
+            self.scale_min = None
+            self.scale_max = None
+            self.scale_diff = None
+
+    def forward(self, x):
+        x = super().forward(x)
+        if self.output_range is not None:
+            x = torch.sigmoid(x) * self.scale_diff + self.scale_min
+        return x
 
     def penalty(self):
         return self.reg_strength * L2_reg(self)

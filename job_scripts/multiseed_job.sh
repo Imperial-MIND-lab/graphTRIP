@@ -1,9 +1,9 @@
 #!/bin/bash
 
 #PBS -l select=1:ncpus=4:mem=4gb
-#PBS -l walltime=4:00:00
-#PBS -N attention_pooling_graphtrip
-#PBS -J 0-39
+#PBS -l walltime=2:30:00
+#PBS -N retrain_mlp_constrained
+#PBS -J 0-179
 
 module load anaconda3/personal
 source activate graphtrip
@@ -12,10 +12,10 @@ cd ~/projects/graphTRIP/experiments
 
 # Settings
 OBSERVER='FileStorageObserver'
-EXNAME='train_jointly'
-CONFIG_JSON='attention_pooling.json'
-SEEDS=(0 1 2 3 4 5 6 7 8 9)
-MAX_NUM_CONFIGS=4
+EXNAME='transfer_vgae'
+CONFIG_JSON='retrain_mlp.json'
+SEEDS=(0 1 2)
+MAX_NUM_CONFIGS=60
 
 # Calculate config index (jobid) and seed index from PBS_ARRAY_INDEX
 # For example, with 288 configs and 3 seeds: PBS_ARRAY_INDEX 0-863 maps to:
