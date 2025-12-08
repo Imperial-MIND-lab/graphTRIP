@@ -48,9 +48,6 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
         
     # Experiment settings
     observer = 'FileStorageObserver'
-    config['verbose'] = verbose
-    config['seed'] = seed
-    config['save_weights'] = True
     if debug:
         config['num_epochs'] = 2
 
@@ -80,16 +77,15 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
             config_updates['dataset']['node_attrs'] = []
             config_updates['dataset']['edge_attrs'] = []
             config_updates['dataset']['context_attrs'] = []
-
-            # Set MLP hidden_dim to latent_dim of graphTRIP model 
-            # (graphTRIP has hidden_dim = None, which will set it to latent_dim)
-            graphTRIP_latent_dim = config['vgae_model']['params']['latent_dim']
-            config_updates['mlp_model']['params']['hidden_dim'] = graphTRIP_latent_dim
+            numerical_attrs = ['QIDS_Before', 'BDI_Before']
+            config_updates['dataset']['graph_attrs_to_standardise'] = numerical_attrs
 
             # Add more config to the config_updates
             config_updates['save_weights'] = False
-            config_updates['output_dir'] = ex_dir       
-            
+            config_updates['output_dir'] = ex_dir    
+            config_updates['seed'] = seed
+            config_updates['verbose'] = verbose
+
             # Run experiment
             run(exname, observer, config_updates)
             
@@ -123,6 +119,8 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
             # Add more config to the config_updates
             config_updates['save_weights'] = False
             config_updates['output_dir'] = ex_dir
+            config_updates['seed'] = seed
+            config_updates['verbose'] = verbose
             
             # Run experiment
             run(exname, observer, config_updates)
@@ -158,6 +156,8 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
             # Add more config to the config_updates
             config_updates['save_weights'] = False
             config_updates['output_dir'] = ex_dir
+            config_updates['seed'] = seed
+            config_updates['verbose'] = verbose
             
             # Run experiment
             run(exname, observer, config_updates)
