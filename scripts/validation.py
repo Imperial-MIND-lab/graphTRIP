@@ -149,6 +149,98 @@ def main(config_file, weights_base_dir, output_dir, verbose, debug, seed, config
     else:
         print(f"Finetuning pre-trained MLP on Psilodep1 experiment already exists in {ex_dir}.")
 
+    # --------------------------------------------------------------------------
+    # Validation Dataset Benchmarks 
+    # --------------------------------------------------------------------------
+
+    # 1. Linear regression trained on clinical data ----------------------------
+    exname = 'train_linreg_on_clinical'
+    ex_dir = os.path.join(output_dir, 'linreg_on_clinical_data', f'seed_{seed}')
+    if not os.path.exists(add_project_root(ex_dir)):
+        config_updates = {}
+
+        # Dataset configs
+        config_updates['dataset'] = copy.deepcopy(config['dataset'])
+        config_updates['dataset']['batch_size'] = -1 # linear regression uses full batch
+        config_updates['dataset']['graph_attrs_to_standardise'] = ['QIDS_Before', 'BDI_Before']
+
+        # Other configs
+        config_updates['regression_model'] = 'LinearRegression'
+        config_updates['output_dir'] = ex_dir
+        config_updates['seed'] = seed
+        config_updates['verbose'] = verbose
+        config_updates['save_weights'] = False 
+        run(exname, observer, config_updates)
+    else:
+        print(f"Train linear regression on clinical data experiment already exists in {ex_dir}.")
+
+    # 2. Control MLP trained on clinical data ----------------------------------
+    exname = 'train_mlp'
+    ex_dir = os.path.join(output_dir, 'control_mlp', f'seed_{seed}')
+    if not os.path.exists(add_project_root(ex_dir)):
+        # Use MLP model config from graphTRIP model and dataset config from psilodep1
+        config_updates = {}
+        config_updates['mlp_model'] = copy.deepcopy(graphtrip_config['mlp_model'])
+        config_updates['dataset'] = copy.deepcopy(config['dataset'])
+
+        # Training configs from graphTRIP
+        config_updates['num_epochs'] = 2 if debug else graphtrip_config['num_epochs']
+        config_updates['lr'] = graphtrip_config['lr']
+
+        # Make sure we don't use any transforms on data that doesn't exist
+        config_updates['dataset']['edge_tfm_type'] = None
+        config_updates['dataset']['edge_tfm_params'] = {}
+        config_updates['dataset']['add_3Dcoords'] = False
+        config_updates['dataset']['standardise_x'] = False
+
+        # Remove neuroimaging and context attributes
+        config_updates['dataset']['node_attrs'] = []
+        config_updates['dataset']['edge_attrs'] = []
+        config_updates['dataset']['context_attrs'] = []
+
+        # Add more demographic and clinical data available in psilodep1
+        additional_attrs = ['HAMD_Before', 'LOTR_Before', 'Gender', 'Age']
+        config_updates['dataset']['graph_attrs'] += additional_attrs
+        numerical_attrs = ['QIDS_Before', 'BDI_Before', 'HAMD_Before', 'LOTR_Before', 'Age']
+        config_updates['dataset']['graph_attrs_to_standardise'] = numerical_attrs
+
+        # Adapt clinical data dimensions
+        graph_attrs = config_updates['dataset']['graph_attrs']
+        config_updates['mlp_model']['extra_dim'] = len(graph_attrs)
+
+        # Saving, seed, and verbose configs
+        config_updates['save_weights'] = False
+        config_updates['output_dir'] = ex_dir
+        config_updates['seed'] = seed
+        config_updates['verbose'] = verbose
+        
+        # Run experiment
+        run(exname, observer, config_updates)
+    else:
+        print(f"Control MLP benchmark experiment already exists in {ex_dir}.")
+
+    # 3. Train a new graphTRIP model on psilodep1 --------------------------------
+    exname = 'train_jointly'
+    ex_dir = os.path.join(output_dir, 'psilodep1_graphtrip', f'seed_{seed}')
+    if not os.path.exists(ex_dir):
+        config_updates = copy.deepcopy(graphtrip_config)
+        config_updates['dataset'] = copy.deepcopy(config['dataset'])
+
+        # Psilodep1-specific configs
+        config_updates['balance_attrs'] = None # no k-fold split balancing based on Condition
+        graph_attrs = config_updates['dataset']['graph_attrs']
+        config_updates['mlp_model']['extra_dim'] = len(graph_attrs)
+
+        # Debugging, saving, seed, and verbose configs
+        config_updates['num_epochs'] = 2 if debug else graphtrip_config['num_epochs']
+        config_updates['output_dir'] = ex_dir
+        config_updates['save_weights'] = False
+        config_updates['seed'] = seed
+        config_updates['verbose'] = verbose
+        run(exname, observer, config_updates)
+    else:
+        print(f"Psilodep1 graphTRIP experiment already exists in {ex_dir}.")
+
 if __name__ == "__main__":
     """
     How to run:
@@ -161,7 +253,8 @@ if __name__ == "__main__":
                         help='Path to the config file with psilodep1 validation model config')
     parser.add_argument('-w', '--weights_base_dir', type=str, default='outputs/graphtrip/weights/', 
                         help='Path to the base directory with graphTRIP VGAE weights')
-    parser.add_argument('-o', '--output_dir', type=str, default='outputs/validation/', help='Path to the output directory')
+    parser.add_argument('-o', '--output_dir', type=str, default='outputs/validation/', 
+                        help='Path to the output directory')
     parser.add_argument('-s', '--seed', type=int, default=0, help='Random seed')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode')
