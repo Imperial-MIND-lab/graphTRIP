@@ -105,7 +105,7 @@ def main(grail_dir=None, weights_dir=None, attention_dir=None, verbose=False, se
                 json.dump(features_filtered, f, indent=4)
             
             weighted_mean_alignments_stats.to_csv(os.path.join(ex_dir, 'weighted_mean_alignments_stats.csv'))
-            weighted_mean_alignments.to_csv(os.path.join(ex_dir, 'weighted_mean_alignments.csv'))
+            weighted_mean_alignments.to_csv(os.path.join(ex_dir, 'weighted_mean_alignments.csv'), index=False)
 
             print(f"GRAIL posthoc analysis completed. Output saved in {ex_dir}.")
         else:
@@ -167,13 +167,8 @@ def main(grail_dir=None, weights_dir=None, attention_dir=None, verbose=False, se
             # Compute performance-weighted attention weights and stats --------------------------------------
             weighted_attention_weights, weighted_attention_weights_stats = \
                 compute_performance_weighted_means(all_subject_dfs, performance)
-            wm_attention_file = os.path.join(ex_dir, 'weighted_attention_weights.csv')         
-            weighted_attention_weights_stats.to_csv(os.path.join(ex_dir, 'weighted_attention_weights_stats.csv'))
-            weighted_attention_weights.to_csv(wm_attention_file)
-
-            # Also save the mean weighted-mean across all subjects without headers 
-            np.savetxt(os.path.join(ex_dir, 'population_mean_attention_weights.csv'), 
-                       weighted_attention_weights.mean(axis=0).values, delimiter=',')
+            weighted_attention_weights_stats.to_csv(os.path.join(ex_dir, 'weighted_mean_attention_weights_stats.csv'))
+            weighted_attention_weights.to_csv(os.path.join(ex_dir, 'weighted_mean_attention_weights.csv'), index=False)
 
             # Perform dominance analysis on weighted-mean attention weights --------------------------------
             atlas = 'schaefer100'
@@ -190,7 +185,7 @@ def main(grail_dir=None, weights_dir=None, attention_dir=None, verbose=False, se
                 analysis_name=analysis_name,
                 rotated_roi_indices=rotated_roi_indices)
             da_stats.to_csv(os.path.join(ex_dir, f'da_{analysis_name}_stats.csv'))
-            coef_df.to_csv(os.path.join(ex_dir, f'da_{analysis_name}_coeffs.csv'))
+            coef_df.to_csv(os.path.join(ex_dir, f'da_{analysis_name}_coeffs.csv'), index=False)
             results.to_csv(os.path.join(ex_dir, f'da_{analysis_name}_r2_pval_tstat.csv'), index=False)
 
             # Compute average weighted-mean attention weights per RSN --------------------------------------
