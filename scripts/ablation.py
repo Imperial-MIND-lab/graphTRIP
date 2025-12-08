@@ -194,7 +194,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
             config_updates['dataset']['graph_attrs_to_standardise'] = ['QIDS_Before', 'BDI_Before']
 
             # Other configs
-            config_updates['ridge_alpha'] = 1.0
+            config_updates['regression_model'] = 'LinearRegression'
             config_updates['output_dir'] = ex_dir
             config_updates['seed'] = seed
             config_updates['verbose'] = verbose

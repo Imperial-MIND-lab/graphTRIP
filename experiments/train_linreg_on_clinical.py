@@ -1,5 +1,5 @@
 """
-Trains a ridge regression model on clinical data only (batch.graph_attr).
+Trains a linear regression model (OLS or Ridge) on clinical data only (batch.graph_attr).
 
 Author: Hanna Tolle
 Date: 2025-11-19 
@@ -22,7 +22,7 @@ import pandas as pd
 import numpy as np
 import logging
 import matplotlib.pyplot as plt
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Ridge, LinearRegression
 
 from utils.files import add_project_root
 from utils.helpers import fix_random_seed, get_logger
@@ -51,7 +51,7 @@ def cfg():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # Training configurations
-    ridge_alpha = 1.0     # Regularization strength for Ridge regression
+    regression_model = 'LinearRegression'  # Options: 'LinearRegression' or 'Ridge'
 
 # Match configs function -------------------------------------------------------
 def match_config(config: Dict) -> Dict:
@@ -125,9 +125,13 @@ def run(_config):
     verbose = _config['verbose']
     save_weights = _config['save_weights']
     seed = _config['seed']
-    ridge_alpha = _config['ridge_alpha']
+    regression_model = _config['regression_model']
     num_folds = _config['dataset']['num_folds']
     graph_attrs = _config['dataset']['graph_attrs']
+    
+    # Validate regression_model parameter
+    assert regression_model in ['LinearRegression', 'Ridge'], \
+        f"regression_model must be 'LinearRegression' or 'Ridge', got '{regression_model}'"
 
     # Create output directories, fix seed
     os.makedirs(output_dir, exist_ok=True)
@@ -143,12 +147,12 @@ def run(_config):
     train_loaders, _, test_loaders, test_indices, _ = \
         get_kfold_dataloaders(data, batch_size=-1, seed=seed)
 
-    # Train ridge regression models on clinical data only ---------------------
+    # Train linear regression models on clinical data only ---------------------
     start_time = time()
 
     # Initialize outputs dictionary
     all_outputs = init_outputs_dict(data)
-    ridge_models = []
+    models = []
 
     for k in tqdm(range(num_folds), desc='Folds', disable=not verbose):
         # Extract standardized clinical data from dataloaders (for training)
@@ -161,13 +165,16 @@ def run(_config):
         _, clinical_test_original, _ = extract_clinical_data_from_indices(
             data, test_indices[k], device)
         
-        # Train Ridge regression model on clinical data only
-        ridge_model = Ridge(alpha=ridge_alpha, random_state=seed)
-        ridge_model.fit(clinical_train, y_train)
-        ridge_models.append(ridge_model)
+        # Train regression model on clinical data only
+        if regression_model == 'Ridge':
+            model = Ridge(alpha=1.0, random_state=seed)
+        else:  
+            model = LinearRegression()
+        model.fit(clinical_train, y_train)
+        models.append(model)
         
         # Make predictions on test set
-        y_pred_test = ridge_model.predict(clinical_test)
+        y_pred_test = model.predict(clinical_test)
         
         # Store outputs (using original, unstandardized clinical data)
         outputs = {'prediction': y_pred_test, 
@@ -194,9 +201,9 @@ def run(_config):
         # Save model weights if requested
         if save_weights:
             import pickle
-            model_path = os.path.join(output_dir, f'k{k}_ridge_model.pkl')
+            model_path = os.path.join(output_dir, f'k{k}_{regression_model.lower()}_model.pkl')
             with open(model_path, 'wb') as f:
-                pickle.dump(ridge_model, f)
+                pickle.dump(model, f)
 
     # Print training time
     end_time = time()

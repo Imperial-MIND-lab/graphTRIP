@@ -26,7 +26,7 @@ from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import mutual_info_score, r2_score
 from scipy.stats import chi2_contingency
 from sklearn.model_selection import KFold
-from sklearn.linear_model import ElasticNetCV
+from sklearn.linear_model import ElasticNetCV, RidgeCV
 
 
 # Helper functions --------------------------------------------------------------
@@ -1359,6 +1359,56 @@ def elasticnet_cv_predict(X, y, subject_ids=None, n_splits=7, random_state=0, ve
         X_test_scaled = scaler.transform(X_test)
 
         model = ElasticNetCV(cv=5, random_state=random_state, max_iter=10000)
+        model.fit(X_train_scaled, y_train)
+        preds = model.predict(X_test_scaled)
+
+        y_preds_all.extend(preds)
+        y_true_all.extend(y_test)
+        if subject_ids is not None:
+            subject_ids_all.extend(subject_ids[test_idx])
+        else:
+            subject_ids_all.extend([None]*len(test_idx))
+        if verbose:
+            print(f"Fold {fold_i+1}/{n_splits} complete.")
+
+    y_true_all = np.array(y_true_all)
+    y_preds_all = np.array(y_preds_all)
+    subject_ids_all = np.array(subject_ids_all)
+
+    r_value, _ = pearsonr(y_true_all, y_preds_all)
+    r2_val = r2_score(y_true_all, y_preds_all)
+
+    if verbose:
+        print("\n--- Final Results (Aggregated) ---")
+        print(f"Pearson Correlation (r): {r_value:.3f}")
+        print(f"Coefficient of Determination (R²): {r2_val:.3f}")
+
+    df = pd.DataFrame({'prediction': y_preds_all, 'label': y_true_all, 'subject_id': subject_ids_all})
+    df = df.sort_values('subject_id').reset_index(drop=True)
+    return df
+
+def ridge_cv_predict(X, y, subject_ids=None, n_splits=7, random_state=0, verbose=True):
+    """
+    Run k-fold CV Ridge regression prediction given X, y, [optional] subject_ids.
+    Returns a DataFrame with columns: 'prediction', 'label', and 'subject_id' (if provided).
+    """
+
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+
+    y_preds_all = []
+    y_true_all = []
+    subject_ids_all = []
+
+    # Loop over folds
+    for fold_i, (train_idx, test_idx) in enumerate(kf.split(X)):
+        X_train, X_test = X[train_idx], X[test_idx]
+        y_train, y_test = y[train_idx], y[test_idx]
+
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
+
+        model = RidgeCV(cv=5, alphas=np.logspace(-6, 6, 13))
         model.fit(X_train_scaled, y_train)
         preds = model.predict(X_test_scaled)
 
