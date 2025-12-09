@@ -446,7 +446,7 @@ def run(_config):
                 ypred_grad = compute_gradient(ypred, z)
                 
                 # Regional gradient analysis ----------------------------------------
-                # Normalize ypred_grad (or a copy of it)
+                # Normalize ypred_grad
                 ypred_grad_copy = ypred_grad.clone().detach()
                 ypred_grad_norm = torch.nn.functional.normalize(ypred_grad_copy, p=2, dim=0)
                 
@@ -455,7 +455,7 @@ def run(_config):
                 
                 # For each node, compute the sum over ypred_grad_norm_reshaped values
                 # to get one "importance score" per brain region
-                regional_importance = torch.sum(ypred_grad_norm_reshaped, dim=1)  # (num_nodes,)
+                regional_importance = torch.sum(torch.abs(ypred_grad_norm_reshaped), dim=1)  # (num_nodes,)
                 
                 # Store regional importance for this latent sample
                 subject_regional_importance.append(regional_importance.cpu().numpy())
