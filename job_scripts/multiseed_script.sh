@@ -13,7 +13,12 @@ cd ~/projects/graphTRIP/scripts
 # Calculate job_id (0-6) and seed (0-9) from array index (0-69)
 # job_id = array_index // 10
 # seed = array_index % 10
-JOBID=$((PBS_ARRAY_INDEX / 10))
-SEED=$((PBS_ARRAY_INDEX % 10))
+SEEDS=(0 1 2 3 4 5 6 7 8 9)
+MAX_NUM_CONFIGS=7
+
+JOBID=$((PBS_ARRAY_INDEX % MAX_NUM_CONFIGS))
+SEED_INDEX=$((PBS_ARRAY_INDEX / MAX_NUM_CONFIGS))
+SEED=${SEEDS[$SEED_INDEX]}
+echo "JOBID: ${JOBID}, SEED: ${SEED}"
 
 python interpret.py -j ${JOBID} -s ${SEED} -v

@@ -49,20 +49,18 @@ def main(config_file, output_dir, verbose, debug, seed, config_id=0, job_id=None
     # GRAIL -------------------------------------------------------------------
     exname = 'grail'
     ex_dir = os.path.join(output_dir, 'grail', f'seed_{seed}')
-    if not os.path.exists(ex_dir):
-        config_updates = {}
-        config_updates['this_k'] = job_id
-        config_updates['output_dir'] = ex_dir
-        config_updates['vgae_weights_dir'] = weights_dir
-        config_updates['mlp_weights_dir'] = weights_dir
-        config_updates['seed'] = seed
-        config_updates['verbose'] = verbose
-        config_updates['num_z_samples'] = 100 if not debug else 2
-        config_updates['sigma'] = 2.0
-        config_updates['all_rsn_conns'] = False
-        run(exname, observer, config_updates)
-    else:
-        print(f"GRAIL experiment already exists in {ex_dir}.")
+    config_updates = {}
+    config_updates['this_k'] = job_id
+    config_updates['output_dir'] = ex_dir
+    config_updates['vgae_weights_dir'] = weights_dir
+    config_updates['mlp_weights_dir'] = weights_dir
+    config_updates['seed'] = seed
+    config_updates['verbose'] = verbose
+    config_updates['num_z_samples'] = 100 if not debug else 2
+    config_updates['sigma'] = 2.0
+    config_updates['all_rsn_conns'] = False
+    run(exname, observer, config_updates)
+
 
 if __name__ == "__main__":
     """
