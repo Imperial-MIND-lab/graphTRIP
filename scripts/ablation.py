@@ -51,6 +51,10 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
     if debug:
         config['num_epochs'] = 2
 
+    # Check valid job ID input
+    if jobid not in [0, 1, 2, 3, 4, -1]:
+        raise ValueError(f"Invalid job ID: {jobid}. Must be one of [0, 1, 2, 3, 4, -1].")
+
     # 1. Control MLP benchmark -----------------------------------------------
     # Train MLP on clinical data only, without neuroimaging features
     if jobid == 0 or jobid == -1:
@@ -202,9 +206,6 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
             run(exname, observer, config_updates)
         else:
             print(f"Train linear regression on clinical data experiment already exists in {ex_dir}.")
-    else:
-        print(f"Invalid job ID: {jobid}")
-        exit(1)
 
 if __name__ == "__main__":
     """

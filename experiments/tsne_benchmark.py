@@ -75,7 +75,7 @@ def cfg():
     # Experiment name and ID
     exname = 'tsne_benchmark'
     jobid = 0
-    seed = 291
+    seed = 0
     run_name = f'{exname}_job{jobid}_seed{seed}'
     output_dir = os.path.join(project_root(), 'outputs', 'runs', run_name)
 
@@ -388,8 +388,7 @@ def run(_config):
     best_outputs.to_csv(data_file, index=False)
 
     # Save test fold assignments
-    if save_weights:
-        test_indices_file = save_test_indices(test_indices, output_dir)
+    _ = save_test_indices(test_indices, output_dir)
 
     # Save final prediction results
     r, p, mae, mae_std = evaluate_regression(best_outputs)
