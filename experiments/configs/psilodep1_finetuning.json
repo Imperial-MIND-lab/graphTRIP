@@ -2,7 +2,7 @@
     "num_epochs": [100],
     "vgae_lr": [0.0],
     "mlp_lr": [0.001],
-    "num_z_samples": [3],
+    "num_z_samples": [1],
     "alpha": [0.0],
     "rho": [0.0],
     "leak_rate": [0.0],

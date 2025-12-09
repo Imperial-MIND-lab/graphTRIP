@@ -107,7 +107,7 @@ def main(config_file, weights_base_dir, output_dir, verbose, debug, seed, config
         # Training configs
         config_updates['num_epochs'] = 2 if debug else graphtrip_config['num_epochs']
         config_updates['mlp_lr'] = graphtrip_config['lr']
-        config_updates['num_z_samples'] = 3      # slight data augmentation
+        config_updates['num_z_samples'] = graphtrip_config['num_z_samples']
         config_updates['alpha'] = 0              # VGAE is frozen
         config_updates['vgae_lr'] = 0.0          # VGAE is frozen
         config_updates['reinit_pooling'] = False # Re-use trained, frozen pooling module
