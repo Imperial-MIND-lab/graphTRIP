@@ -33,12 +33,16 @@ import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
 import seaborn as sns
+from scipy.stats import ttest_1samp
+from sklearn.linear_model import Ridge
+from sklearn.metrics import r2_score
+from statsmodels.stats.multitest import fdrcorrection
 
 from utils.files import add_project_root
 from utils.helpers import get_logger, check_weights_exist, fix_random_seed, triu_vector2mat_torch, sort_features
 from utils.configs import load_ingredient_configs, match_ingredient_configs
 from utils.annotations import load_receptor_maps
-from utils.statsalg import get_fold_performance, min_significant_r
+from utils.statsalg import get_fold_performance, min_significant_r, calculate_cohens_d
 from models.utils import freeze_model
 from utils.plotting import plot_heatmap, COOLWARM
 from preprocessing.metrics import compute_modularity_torch, get_rsn_mapping
@@ -167,8 +171,10 @@ def get_alignments_and_features(triu_edges, ypred_grad, z,
     Returns:
     --------
     alignments (dict): The alignments between the feature gradients and ypred_grad.
+    feature_gradients (dict): The gradients of each feature with respect to z.
     """
     alignments = {}
+    feature_gradients = {}
     device = triu_edges.device
     
     # Get adjacency matrix
@@ -179,6 +185,7 @@ def get_alignments_and_features(triu_edges, ypred_grad, z,
         grad = compute_gradient(value, z)
         alignment = compute_gradient_alignment(ypred_grad, grad)
         alignments[name] = alignment
+        feature_gradients[name] = grad.detach().cpu().numpy()
 
     # Compute modularity using RSN mapping
     rsn_modularity = compute_modularity_torch(adj, rsn_mapping)
@@ -245,7 +252,7 @@ def get_alignments_and_features(triu_edges, ypred_grad, z,
                 feat = compute_correlation(x[:, i], x[:, j])
                 process_feature(f'x{node_attrs[i]}_corr_x{node_attrs[j]}', feat)
     
-    return alignments
+    return alignments, feature_gradients
 
 @ex.capture
 def get_ypred_from_z(z, vgae, mlp, batch, medusa=False):
@@ -352,6 +359,7 @@ def run(_config):
     save_outputs = _config['save_outputs']
     node_attrs = _config['dataset']['node_attrs']
     node_attrs = [attr.split('_')[0] for attr in node_attrs]
+    num_z_samples = _config['num_z_samples']
 
     # Determine the type of prediction head
     prediction_head_type = _config['mlp_model']['model_type']
@@ -409,6 +417,11 @@ def run(_config):
         vgae = vgaes[k].eval()
         mlp = mlps[k].eval()
         
+        # Initialize lists for Ridge regression analysis
+        all_subject_ridge_betas = []  # List of arrays, one per subject
+        all_subject_ridge_r2 = []     # List of arrays, one per subject
+        feature_names = None
+        
         for sub in tqdm(range(num_subs), desc=f'Fold {k}', disable=not verbose):
             batch = Batch.from_data_list([data[sub]]).to(device)
             out = vgae(batch)
@@ -417,6 +430,10 @@ def run(_config):
 
             # Get latent samples
             zs = get_zs(mu, logvar, vgae)
+            
+            # Initialize storage for this subject's Ridge regression data
+            subject_feature_gradients_list = []   # List of dicts, one per z_sample
+            subject_ypred_grads = []              # List of arrays, one per z_sample
             
             for z_idx, z in enumerate(zs):
                 # Get MLP prediction and its gradient
@@ -427,7 +444,7 @@ def run(_config):
                 x, triu_edges = get_reconstructions(z, vgae, batch)
                 
                 # Compute interpretable features and their gradients
-                alignments = get_alignments_and_features(
+                alignments, feature_gradients = get_alignments_and_features(
                     triu_edges=triu_edges, 
                     ypred_grad=ypred_grad, 
                     z=z,
@@ -436,6 +453,10 @@ def run(_config):
                     receptor_maps=receptor_maps, 
                     x=x, 
                     node_attrs=node_attrs)
+                
+                # Store feature gradients and ypred_grad for Ridge regression
+                subject_feature_gradients_list.append(feature_gradients)
+                subject_ypred_grads.append(ypred_grad.detach().cpu().numpy())
                 
                 # Base record for this sample
                 base_record = {'sub': sub,
@@ -446,14 +467,66 @@ def run(_config):
                 alignment_record = base_record.copy()
                 alignment_record.update(alignments)
                 alignment_records.append(alignment_record)
+            
+            # Fit Ridge regression models for this subject --------------------------------
+            # Get consistent feature names
+            if feature_names is None:
+                feature_names = list(subject_feature_gradients_list[0].keys())
+            num_features = len(feature_names)
+            
+            # Initialize storage for betas and R2 per z_sample
+            subject_ridge_betas = np.zeros((num_z_samples, num_features))
+            subject_ridge_r2 = np.zeros(num_z_samples)
+            
+            # Fit Ridge regression for each z_sample
+            for z_idx in range(num_z_samples):
+                feature_grads = subject_feature_gradients_list[z_idx] 
+                X = np.array([feature_grads[feat_name] for feat_name in feature_names])  # (num_features, latent_dim)
+                y = subject_ypred_grads[z_idx]  # (latent_dim,)
+                
+                # Normalize all gradients to unit length
+                X_norms = np.linalg.norm(X, axis=1, keepdims=True)
+                X_norms[X_norms == 0] = 1  # avoid division by zero
+                X_normalized = X / X_norms
+                
+                # Normalize ypred_grad
+                y_norm = np.linalg.norm(y)
+                if y_norm > 0:
+                    y_normalized = y / y_norm
+                else:
+                    y_normalized = y
+                X_reshaped = X_normalized.T  # (latent_dim, num_features)
+                
+                # Fit Ridge regression
+                ridge = Ridge(alpha=1.0)
+                ridge.fit(X_reshaped, y_normalized)
+                
+                # Get coefficients
+                betas = ridge.coef_  # (num_features,)
+                subject_ridge_betas[z_idx, :] = betas
+                
+                # Compute R2 using normalized values
+                y_pred = ridge.predict(X_reshaped)
+                r2 = r2_score(y_normalized, y_pred)
+                subject_ridge_r2[z_idx] = r2
+            
+            # Store results for this subject
+            all_subject_ridge_betas.append(subject_ridge_betas)
+            all_subject_ridge_r2.append(subject_ridge_r2)
         
-        # Convert to dataframes
+        # Convert alignments to dataframes ---------------------------------------
         alignment_df = pd.DataFrame(alignment_records)
 
         # Sort the feature columns
         non_feature_cols = ['sub', 'latent_sample', 'ypred']
         feature_cols = [col for col in alignment_df.columns if col not in non_feature_cols]
-        
+
+        # Make sure it matches feature_names
+        assert set(feature_cols) == set(feature_names), \
+            "Feature names from Ridge regression don't match feature columns from alignments"
+        if not feature_cols == feature_names:
+            feature_cols = feature_names
+
         # Compute mean alignments for each subject
         mean_alignments = np.zeros((num_subs, len(feature_cols)))
         for sub in range(num_subs):
@@ -468,6 +541,59 @@ def run(_config):
 
         # Store alignments for correlation analysis
         all_fold_alignments.append(mean_alignments)
+        
+        # Process Ridge regression results ---------------------------------------
+        # all_subject_ridge_betas is a list of arrays, each of shape (num_z_samples, num_features)
+        # all_subject_ridge_r2 is a list of arrays, each of length num_z_samples
+        
+        # For each subject, perform one-sample t-test on betas across z_samples
+        ridge_beta_pvals = np.zeros((num_subs, len(feature_cols)))
+        ridge_beta_pvals_fdr = np.zeros((num_subs, len(feature_cols)))
+        ridge_beta_cohen_ds = np.zeros((num_subs, len(feature_cols)))
+        ridge_mean_r2 = np.zeros(num_subs)
+        
+        for sub in range(num_subs):
+            # Get betas for this subject: (num_z_samples, num_features)
+            subject_betas = all_subject_ridge_betas[sub]
+            
+            # Get R2 for this subject
+            subject_r2 = all_subject_ridge_r2[sub]
+            ridge_mean_r2[sub] = np.mean(subject_r2)
+            
+            # For each feature, perform one-sample t-test
+            pvals_subject = []
+            for feat_idx, feat_name in enumerate(feature_cols):              
+                # Get betas for this feature across z_samples
+                betas_for_feature = subject_betas[:, feat_idx]
+                
+                # One-sample t-test
+                if len(betas_for_feature) > 1:
+                    t_stat, p_val = ttest_1samp(betas_for_feature, 0.0, nan_policy='omit')
+                    cohen_d = calculate_cohens_d(betas_for_feature)
+                else:
+                    p_val = 1.0
+                    cohen_d = 0.0
+                
+                ridge_beta_pvals[sub, feat_idx] = p_val
+                ridge_beta_cohen_ds[sub, feat_idx] = cohen_d
+                pvals_subject.append(p_val)
+            
+            # Perform FDR correction for this subject across all features
+            _, pvals_fdr_subject = fdrcorrection(pvals_subject, alpha=0.05)
+            ridge_beta_pvals_fdr[sub, :] = pvals_fdr_subject
+        
+        # Save Ridge regression results
+        ridge_beta_pvals_df = pd.DataFrame(ridge_beta_pvals_fdr, columns=feature_cols)
+        ridge_beta_pvals_df.to_csv(os.path.join(output_dir, f'k{k}_ridge_beta_pvals.csv'), index=False)
+        ex.add_artifact(os.path.join(output_dir, f'k{k}_ridge_beta_pvals.csv'))
+        
+        ridge_beta_cohen_ds_df = pd.DataFrame(ridge_beta_cohen_ds, columns=feature_cols)
+        ridge_beta_cohen_ds_df.to_csv(os.path.join(output_dir, f'k{k}_ridge_beta_cohen_ds.csv'), index=False)
+        ex.add_artifact(os.path.join(output_dir, f'k{k}_ridge_beta_cohen_ds.csv'))
+        
+        ridge_mean_r2_df = pd.DataFrame(ridge_mean_r2, columns=['mean_r2'])
+        ridge_mean_r2_df.to_csv(os.path.join(output_dir, f'k{k}_ridge_mean_r2.csv'), index=False)
+        ex.add_artifact(os.path.join(output_dir, f'k{k}_ridge_mean_r2.csv'))
 
         # Plot mean alignments for this fold
         sorted_features = sort_features(list(mean_alignments_df.columns))
