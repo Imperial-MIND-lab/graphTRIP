@@ -39,13 +39,13 @@ from sklearn.metrics import r2_score
 from statsmodels.stats.multitest import fdrcorrection
 
 from utils.files import add_project_root
-from utils.helpers import get_logger, check_weights_exist, fix_random_seed, triu_vector2mat_torch, sort_features
+from utils.helpers import get_logger, fix_random_seed, triu_vector2mat_torch, sort_features
 from utils.configs import load_ingredient_configs, match_ingredient_configs
 from utils.annotations import load_receptor_maps
 from utils.statsalg import get_fold_performance, min_significant_r, calculate_cohens_d
 from models.utils import freeze_model
 from utils.plotting import plot_heatmap, COOLWARM
-from preprocessing.metrics import compute_modularity_torch, get_rsn_mapping
+from preprocessing.metrics import compute_modularity_torch, get_rsn_mapping, get_atlas
 
 
 # Create the experiment -------------------------------------------------------
@@ -83,6 +83,7 @@ def cfg(dataset):
     sigma = 2.0                 # Std of the Gaussian noise added to the latent means.
     all_rsn_conns = False       # Whether to compute RSN connectivity for all RSN pairs.
     medusa = False              # Only works with CFRHead MLP. Grails mlp1-mlp0 instead of ypred.
+    this_k = None               # If None, compute all folds sequentially. If int, compute only fold this_k.
 
 # Match configs function -------------------------------------------------------
 def match_config(config: Dict) -> Dict:
@@ -191,15 +192,15 @@ def get_alignments_and_features(triu_edges, ypred_grad, z,
     rsn_modularity = compute_modularity_torch(adj, rsn_mapping)
     process_feature('modularity_rsn', rsn_modularity)
 
-    # Compute Louvain communities (no gradients)
-    adj_np = adj.detach().cpu().numpy()
-    np.fill_diagonal(adj_np, 0) # no self-loops
-    G = nx.from_numpy_array(adj_np)
-    louvain_communities = nx.community.louvain_communities(G, seed=seed)
+    # # Compute Louvain communities (no gradients)
+    # adj_np = adj.detach().cpu().numpy()
+    # np.fill_diagonal(adj_np, 0) # no self-loops
+    # G = nx.from_numpy_array(adj_np)
+    # louvain_communities = nx.community.louvain_communities(G, seed=seed)
     
-    # Compute modularity with Louvain communities
-    louvain_modularity = compute_modularity_torch(adj, louvain_communities)
-    process_feature('modularity', louvain_modularity)
+    # # Compute modularity with Louvain communities
+    # louvain_modularity = compute_modularity_torch(adj, louvain_communities)
+    # process_feature('modularity', louvain_modularity)
 
     # RSN connectivity
     if all_rsn_conns:
@@ -360,6 +361,7 @@ def run(_config):
     node_attrs = _config['dataset']['node_attrs']
     node_attrs = [attr.split('_')[0] for attr in node_attrs]
     num_z_samples = _config['num_z_samples']
+    this_k = _config['this_k']
 
     # Determine the type of prediction head
     prediction_head_type = _config['mlp_model']['model_type']
@@ -387,6 +389,10 @@ def run(_config):
         # Add treatment transform to the dataset (required for CFRHead)
         add_treatment_transform(data)
 
+    # Get brain region labels
+    atlas = get_atlas(data.atlas)
+    brain_region_labels = [label.decode('utf-8') if isinstance(label, bytes) else label for label in atlas['labels']]
+
     # Compute fold-wise performance of each model --------------------------
     if len(vgaes) > 1:
         fold_performance = get_fold_performance(mlp_weights_dir)
@@ -409,7 +415,13 @@ def run(_config):
     num_folds = len(vgaes)
     all_fold_alignments = []  # Store alignments for all folds
     
-    for k in range(num_folds):
+    # Determine which folds to compute
+    if this_k is None:
+        folds_to_compute = range(num_folds)
+    else:
+        folds_to_compute = [this_k]
+    
+    for k in folds_to_compute:
         # Initialize dataframes for storing results
         alignment_records = []
         
@@ -422,6 +434,9 @@ def run(_config):
         all_subject_ridge_r2 = []     # List of arrays, one per subject
         feature_names = None
         
+        # Initialize storage for regional gradient weights
+        all_subject_regional_importance = []  # List of arrays, one per subject
+        
         for sub in tqdm(range(num_subs), desc=f'Fold {k}', disable=not verbose):
             batch = Batch.from_data_list([data[sub]]).to(device)
             out = vgae(batch)
@@ -431,14 +446,36 @@ def run(_config):
             # Get latent samples
             zs = get_zs(mu, logvar, vgae)
             
+            # Get number of nodes and latent dimension
+            num_nodes = batch[0].num_nodes
+            latent_dim = zs[0].shape[1]
+            
             # Initialize storage for this subject's Ridge regression data
             subject_feature_gradients_list = []   # List of dicts, one per z_sample
             subject_ypred_grads = []              # List of arrays, one per z_sample
+            
+            # Initialize storage for regional importance scores across latent samples
+            subject_regional_importance = []  # List of arrays, one per z_sample
             
             for z_idx, z in enumerate(zs):
                 # Get MLP prediction and its gradient
                 ypred = get_ypred_from_z(z, vgae, mlp, batch)
                 ypred_grad = compute_gradient(ypred, z)
+                
+                # Regional gradient analysis ----------------------------------------
+                # Normalize ypred_grad (or a copy of it)
+                ypred_grad_copy = ypred_grad.clone().detach()
+                ypred_grad_norm = torch.nn.functional.normalize(ypred_grad_copy, p=2, dim=0)
+                
+                # Reshape ypred_grad back to shape (num_nodes, latent_dim)
+                ypred_grad_norm_reshaped = ypred_grad_norm.view(num_nodes, latent_dim)
+                
+                # For each node, compute the sum over ypred_grad_norm_reshaped values
+                # to get one "importance score" per brain region
+                regional_importance = torch.sum(ypred_grad_norm_reshaped, dim=1)  # (num_nodes,)
+                
+                # Store regional importance for this latent sample
+                subject_regional_importance.append(regional_importance.cpu().numpy())
                 
                 # Get reconstructed outputs
                 x, triu_edges = get_reconstructions(z, vgae, batch)
@@ -513,8 +550,12 @@ def run(_config):
             # Store results for this subject
             all_subject_ridge_betas.append(subject_ridge_betas)
             all_subject_ridge_r2.append(subject_ridge_r2)
+            
+            # Compute mean regional importance scores across latent samples for this subject
+            subject_regional_importance_mean = np.mean(subject_regional_importance, axis=0)  # (num_nodes,)
+            all_subject_regional_importance.append(subject_regional_importance_mean)
         
-        # Convert alignments to dataframes ---------------------------------------
+        # Process alignment results ----------------------------------------------
         alignment_df = pd.DataFrame(alignment_records)
 
         # Sort the feature columns
@@ -541,6 +582,18 @@ def run(_config):
 
         # Store alignments for correlation analysis
         all_fold_alignments.append(mean_alignments)
+
+        # Plot mean alignments for this fold
+        sorted_features = sort_features(list(mean_alignments_df.columns))
+        save_path = os.path.join(output_dir, f'k{k}_mean_alignments.png')
+        vmax = np.percentile(np.abs(mean_alignments_df.values), 95)
+        plot_heatmap(mean_alignments_df[sorted_features].values, 
+                     features=sorted_features, 
+                     vrange=(-vmax, vmax), 
+                     figsize=(10, 4), 
+                     cmap=COOLWARM,
+                     save_path=save_path)
+        ex.add_artifact(save_path)
         
         # Process Ridge regression results ---------------------------------------
         # all_subject_ridge_betas is a list of arrays, each of shape (num_z_samples, num_features)
@@ -594,46 +647,12 @@ def run(_config):
         ridge_mean_r2_df = pd.DataFrame(ridge_mean_r2, columns=['mean_r2'])
         ridge_mean_r2_df.to_csv(os.path.join(output_dir, f'k{k}_ridge_mean_r2.csv'), index=False)
         ex.add_artifact(os.path.join(output_dir, f'k{k}_ridge_mean_r2.csv'))
-
-        # Plot mean alignments for this fold
-        sorted_features = sort_features(list(mean_alignments_df.columns))
-        save_path = os.path.join(output_dir, f'k{k}_mean_alignments.png')
-        vmax = np.percentile(np.abs(mean_alignments_df.values), 95)
-        plot_heatmap(mean_alignments_df[sorted_features].values, 
-                     features=sorted_features, 
-                     vrange=(-vmax, vmax), 
-                     figsize=(10, 4), 
-                     cmap=COOLWARM,
-                     save_path=save_path)
-
-    # Compute correlations between folds for each subject
-    if len(vgaes) > 1:
-        corr_matrices = []
-        for sub in range(num_subs):
-            # Compute correlation matrix between folds for this subject
-            sub_alignments = np.array([fold_alignments[sub] for fold_alignments in all_fold_alignments])
-            corr_matrix = np.corrcoef(sub_alignments)
-            corr_matrices.append(corr_matrix)
-
-        # Compute mean correlations between folds
-        mean_correlations = np.mean(corr_matrices, axis=0)
-        np.savetxt(os.path.join(output_dir, 'mean_fold_correlations.csv'), mean_correlations, delimiter=',')
-        ex.add_artifact(os.path.join(output_dir, 'mean_fold_correlations.csv'))
-
-        # Check how many correlations are significant
-        num_features = mean_alignments_df.shape[1]
-        r_critical = min_significant_r(num_features)
-
-        fig, ax = plt.subplots(figsize=(6, 5))
-        sns.heatmap(mean_correlations, ax=ax, cmap=COOLWARM, vmin=-1, vmax=1, 
-                    square=True, annot=True, cbar=True)
-        num_unique_pairs = num_folds * (num_folds - 1) / 2
-        num_significant_pairs = np.sum(np.triu(mean_correlations, k=1) > r_critical)
-        fraction_significant_pairs = (num_significant_pairs / num_unique_pairs)*100
-        ax.set_title(f'Significant corrs (r > {r_critical:.2f}): {fraction_significant_pairs:.2f}%');
-        save_path = os.path.join(output_dir, 'mean_fold_correlations.png')
-        plt.savefig(save_path)
-        ex.add_artifact(save_path)
+        
+        # Process regional gradient weights --------------------------------------
+        regional_grad_weights = np.array(all_subject_regional_importance) # (num_subs, num_nodes)
+        regional_grad_weights_df = pd.DataFrame(regional_grad_weights, columns=brain_region_labels)
+        regional_grad_weights_df.to_csv(os.path.join(output_dir, f'k{k}_regional_grad_weights.csv'), index=False)
+        ex.add_artifact(os.path.join(output_dir, f'k{k}_regional_grad_weights.csv'))
 
     # Log the runtime
     run_time = (time()-start_time)/60
