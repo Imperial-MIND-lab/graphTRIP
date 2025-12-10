@@ -44,17 +44,17 @@
       "model_type": ["NodeLevelVGAE"],
       "params": {
         "dropout": [0.25],
-        "latent_dim": [32],
-        "node_emb_dim": [32],
+        "latent_dim": [64],
+        "node_emb_dim": [64],
         "reg_strength": [0.01]
       },
       "node_emb_model_cfg": {
         "model_type": ["NodeEmbeddingGraphormer"],
         "params": {
-          "hidden_dim": [16],
+          "hidden_dim": [32],
           "layernorm": [true],
           "num_heads": [2],
-          "num_layers": [3]
+          "num_layers": [4]
         }
       },
       "encoder_cfg": {
