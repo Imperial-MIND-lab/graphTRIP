@@ -27,6 +27,7 @@ from sklearn.metrics import mutual_info_score, r2_score
 from scipy.stats import chi2_contingency
 from sklearn.model_selection import KFold
 from sklearn.linear_model import ElasticNetCV, RidgeCV
+from itertools import combinations
 
 
 # Helper functions --------------------------------------------------------------
@@ -753,6 +754,20 @@ def test_column_significance(df, test_type='t-test', alpha=0.05):
     
     return stats_df
 
+def get_cohen_d_label(cohen_d: float) -> str:
+    """
+    Given a Cohen's d value, returns the string label representing the effect size.
+    """
+    ad = abs(cohen_d)
+    if ad < 0.2:
+        return "small"
+    elif ad < 0.5:
+        return "medium"
+    elif ad < 0.8:
+        return "large"
+    else:
+        return "very large"
+
 # Regression model evaluation ---------------------------------------------------
 
 def analyze_coefficient_sparsity(pred_models: Dict, 
@@ -1436,3 +1451,122 @@ def ridge_cv_predict(X, y, subject_ids=None, n_splits=7, random_state=0, verbose
     df = pd.DataFrame({'prediction': y_preds_all, 'label': y_true_all, 'subject_id': subject_ids_all})
     df = df.sort_values('subject_id').reset_index(drop=True)
     return df
+
+
+# Comparing performances of multiple models --------------------------------------
+
+def compare_model_performances(data_dict, is_dependent=True):
+    """
+    Performs non-parametric statistical testing for multiple model comparisons.
+    
+    Args:
+        data_dict (dict): Keys are model names, values are lists of performance scores. 
+                          All lists must be of the same length (N seeds).
+        is_dependent (bool): If True, assumes paired samples (same seeds used).
+                             If False, assumes independent samples.
+                             
+    Returns:
+        global_stats (pd.DataFrame): Results of the omnibus test (Friedman or Kruskal-Wallis).
+        pairwise_stats (pd.DataFrame): Results of post-hoc pairwise comparisons with correction.
+    """
+    
+    # 1. Prepare Data
+    df = pd.DataFrame(data_dict)
+    models = list(df.columns)
+    n_models = len(models)
+    n_samples = len(df)
+    
+    # 2. Global (Omnibus) Test
+    # Tests the null hypothesis that all groups come from the same distribution
+    if is_dependent:
+        # Friedman Test (Non-parametric Repeated Measures ANOVA)
+        # Input: measurements for each group as separate arguments
+        stat, p_global = stats.friedmanchisquare(*[df[col] for col in df.columns])
+        test_name = "Friedman Test"
+    else:
+        # Kruskal-Wallis H-test (Non-parametric One-Way ANOVA)
+        stat, p_global = stats.kruskal(*[df[col] for col in df.columns])
+        test_name = "Kruskal-Wallis Test"
+
+    global_results = pd.DataFrame({
+        "Test": [test_name],
+        "Statistic": [stat],
+        "P-Value": [p_global],
+        "Significant (alpha=0.05)": [p_global < 0.05]
+    })
+
+    # 3. Post-hoc Pairwise Comparisons
+    # Only meaningful if the global test is significant, but we compute them regardless.
+    
+    pairwise_data = []
+    
+    # Generate all unique pairs of models
+    model_pairs = list(combinations(models, 2))
+    
+    p_values = []
+    
+    for m1, m2 in model_pairs:
+        group1 = df[m1]
+        group2 = df[m2]
+        
+        if is_dependent:
+            # Wilcoxon Signed-Rank Test (Non-parametric Paired T-Test)
+            # Use 'pratt' or 'wilcox' zero_method. 'pratt' is generally robust.
+            s, p = stats.wilcoxon(group1, group2, zero_method='pratt')
+        else:
+            # Mann-Whitney U Test (Non-parametric Independent T-Test)
+            s, p = stats.mannwhitneyu(group1, group2)
+            
+        p_values.append(p)
+        
+    # 4. Multiple Testing Correction    
+    reject, p_corrected = fdrcorrection(p_values, alpha=0.05)
+    
+    # 5. Assemble Results
+    for i, (m1, m2) in enumerate(model_pairs):
+        pairwise_data.append({
+            "Model A": m1,
+            "Model B": m2,
+            "Original P-Value": p_values[i],
+            "Corrected P-Value": p_corrected[i],
+            "Reject Null (Significant Difference)": reject[i]
+        })
+        
+    pairwise_results = pd.DataFrame(pairwise_data)
+    
+    # Sort by corrected p-value for readability
+    pairwise_results = pairwise_results.sort_values("Corrected P-Value")
+    
+    return global_results, pairwise_results
+
+def compute_within_group_pearsonr(
+    df, cond_dict: dict = {'P': 1, 'E': -1}, grouping_col: str = 'Condition'):
+    """
+    Computes Pearson correlation coefficient and p-value between 'prediction' and 'label',
+    within each unique group in the given column.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing 'prediction', 'label', and the grouping column.
+    cond_dict : dict, optional
+        Mapping from group values to string names.
+    grouping_col : str, default 'Condition'
+        Categorical column in df to group by.
+
+    Returns
+    -------
+    pd.DataFrame with columns: ['Condition', 'p', 'r', 'n']
+    """
+    rows = []
+    for group_val, group in df.groupby(grouping_col):
+        preds = group['prediction']
+        labels = group['label']
+        n = len(group)
+        if n < 2 or preds.nunique() < 2 or labels.nunique() < 2:
+            r, p = float('nan'), float('nan')
+        else:
+            r, p = pearsonr(preds, labels)
+        cond_name = cond_dict[group_val] if cond_dict and group_val in cond_dict else group_val
+        rows.append({'Condition': cond_name, 'r': r, 'p': p, 'n': n})
+    return pd.DataFrame(rows)

@@ -311,16 +311,24 @@ def get_test_reconstructions(vgaes, dataset, test_indices,
     
     return adj_orig_rcn, x_orig_rcn, fold_assignments
 
-def get_mean_test_reconstructions(test_indices_dict, vgaes_dict, data):
+def get_mean_test_reconstructions(vgaes_dict, data, test_indices_dict=None):
     """
-    Compute mean adj_orig_rcn and x_orig_rcn across seeds.
+    Compute mean adj_orig_rcn and x_orig_rcn across seeds and folds.
+
+    If test_indices_dict is None, reconstruct all samples with all VGAEs (from all folds, all seeds)
+    and average reconstructions for each sample across all VGAEs.
 
     Parameters
     ----------
-    test_indices_dict : dict
-        Dict mapping seed keys to test indices arrays.
+    test_indices_dict : dict or None
+        Dict mapping seed keys to test indices arrays, where the i-th element indicates 
+        the index of the VGAE model (trained with the partical seed) which had
+        data sample i in its testfold. E.g., test_indices_dict[seed] = [0, 1, 1, 0]
+        means sample 0 and 3 were in the testfold of vgaes_dict[seed][0], and
+        sample 1 and 2 were in the testfold of vgaes_dict[seed][1].
+        If None, reconstructions are generated for all samples by all VGAEs of all seeds.
     vgaes_dict : dict
-        Dict mapping seed keys to VGAE models.
+        Dict mapping seed keys to CV-fold validated VGAE models, trained with that seed.
     data : object
         Dataset or data object required by get_test_reconstructions.
 
@@ -331,26 +339,70 @@ def get_mean_test_reconstructions(test_indices_dict, vgaes_dict, data):
     mean_x_orig_rcn : dict
         Dict with 'original', 'reconstructed', and 'feature_names' for node features.
     """
-    adj_orig_rcn_list = []
-    x_orig_rcn_list = []
-    for seed_key in test_indices_dict:
-        num_folds = max(test_indices_dict[seed_key]) + 1
-        test_indices_list = [np.where(test_indices_dict[seed_key] == fold)[0] for fold in range(num_folds)]
-        vgae = vgaes_dict[seed_key]
-        adj_rcn, x_rcn, _ = get_test_reconstructions(vgae, data, test_indices_list, mean_std=None)
-        adj_orig_rcn_list.append(adj_rcn)
-        x_orig_rcn_list.append(x_rcn)
+    # Determine number of samples and nodes
+    n_samples = len(data)
+    n_nodes = data[0].x.shape[0]
+    n_node_features = data[0].x.shape[1]
 
-    mean_adj_orig_rcn = {
-        'original': np.mean([d['original'] for d in adj_orig_rcn_list], axis=0),
-        'reconstructed': np.mean([d['reconstructed'] for d in adj_orig_rcn_list], axis=0)
-    }
-    mean_x_orig_rcn = {
-        'original': np.mean([d['original'] for d in x_orig_rcn_list], axis=0),
-        'reconstructed': np.mean([d['reconstructed'] for d in x_orig_rcn_list], axis=0),
-        'feature_names': x_orig_rcn_list[0]['feature_names']
-    }
-    return mean_adj_orig_rcn, mean_x_orig_rcn
+    adj_shape = (n_nodes, n_nodes, n_samples)
+    x_shape = (n_nodes, n_node_features, n_samples)
+
+    if test_indices_dict is None:
+        # For every VGAE in every seed and every fold, reconstruct all data samples
+        all_adj_orig = []
+        all_adj_rcn = []
+        all_x_orig = []
+        all_x_rcn = []
+        feature_names = None
+
+        for seed_key in vgaes_dict:
+            vgaes = vgaes_dict[seed_key]
+            for fold in range(len(vgaes)):
+                vgae = vgaes[fold]
+                # Use all data for reconstructions (pass all indices in one fold)
+                test_indices_list = [np.arange(n_samples)]
+                adj_rcn, x_rcn, _ = get_test_reconstructions([vgae], data, test_indices_list, mean_std=None)
+                # expected output shape: adj_rcn['original']: (n_nodes, n_nodes, n_samples)
+                all_adj_orig.append(adj_rcn['original'])
+                all_adj_rcn.append(adj_rcn['reconstructed'])
+                all_x_orig.append(x_rcn['original'])
+                all_x_rcn.append(x_rcn['reconstructed'])
+                if feature_names is None:
+                    feature_names = x_rcn.get('feature_names', None)
+
+        mean_adj_orig_rcn = {
+            'original': np.mean(all_adj_orig, axis=0),
+            'reconstructed': np.mean(all_adj_rcn, axis=0)
+        }
+        mean_x_orig_rcn = {
+            'original': np.mean(all_x_orig, axis=0),
+            'reconstructed': np.mean(all_x_rcn, axis=0),
+            'feature_names': feature_names
+        }
+        return mean_adj_orig_rcn, mean_x_orig_rcn
+
+    else:
+        # Average each patient's reconstruction only across corresponding fold+seed
+        adj_orig_rcn_list = []
+        x_orig_rcn_list = []
+        for seed_key in test_indices_dict:
+            num_folds = max(test_indices_dict[seed_key]) + 1
+            test_indices_list = [np.where(test_indices_dict[seed_key] == fold)[0] for fold in range(num_folds)]
+            vgae = vgaes_dict[seed_key]
+            adj_rcn, x_rcn, _ = get_test_reconstructions(vgae, data, test_indices_list, mean_std=None)
+            adj_orig_rcn_list.append(adj_rcn)
+            x_orig_rcn_list.append(x_rcn)
+
+        mean_adj_orig_rcn = {
+            'original': np.mean([d['original'] for d in adj_orig_rcn_list], axis=0),
+            'reconstructed': np.mean([d['reconstructed'] for d in adj_orig_rcn_list], axis=0)
+        }
+        mean_x_orig_rcn = {
+            'original': np.mean([d['original'] for d in x_orig_rcn_list], axis=0),
+            'reconstructed': np.mean([d['reconstructed'] for d in x_orig_rcn_list], axis=0),
+            'feature_names': x_orig_rcn_list[0]['feature_names']
+        }
+        return mean_adj_orig_rcn, mean_x_orig_rcn
 
 def evaluate_fc_reconstructions(adj_orig_rcn):
     '''
