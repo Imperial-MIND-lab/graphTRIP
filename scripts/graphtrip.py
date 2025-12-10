@@ -9,8 +9,6 @@ Outputs:
 - outputs/graphtrip/permutation_importance/
 - outputs/graphtrip/transfer_atlas/schaefer200/
 - outputs/graphtrip/transfer_atlas/aal/
-- outputs/graphtrip/attention_weights/
-- outputs/graphtrip/grail/
 
 Author: Hanna M. Tolle
 Date: 2025-05-31
@@ -112,35 +110,6 @@ def main(config_file, output_dir, verbose, debug, seed, config_id=0):
         else:
             print(f"Transfer to {atlas} experiment already exists in {ex_dir}.")
 
-    # Attention weights -------------------------------------------------------
-    exname = 'attention_weights'
-    ex_dir = os.path.join(output_dir, 'attention_weights', f'seed_{seed}')
-    if not os.path.exists(ex_dir):
-        config_updates = {}
-        config_updates['output_dir'] = ex_dir
-        config_updates['weights_dir'] = weights_dir
-        config_updates['seed'] = seed
-        config_updates['verbose'] = verbose
-        run(exname, observer, config_updates)
-    else:
-        print(f"Attention weights experiment already exists in {ex_dir}.")
-
-    # GRAIL -------------------------------------------------------------------
-    exname = 'grail'
-    ex_dir = os.path.join(output_dir, 'grail', f'seed_{seed}')
-    if not os.path.exists(ex_dir):
-        config_updates = {}
-        config_updates['output_dir'] = ex_dir
-        config_updates['vgae_weights_dir'] = weights_dir
-        config_updates['mlp_weights_dir'] = weights_dir
-        config_updates['seed'] = seed
-        config_updates['verbose'] = verbose
-        config_updates['num_z_samples'] = 100 if not debug else 2
-        config_updates['sigma'] = 2.0
-        config_updates['all_rsn_conns'] = False
-        run(exname, observer, config_updates)
-    else:
-        print(f"GRAIL experiment already exists in {ex_dir}.")
 
 if __name__ == "__main__":
     """

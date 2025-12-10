@@ -12,7 +12,8 @@ Outputs:
 - outputs/ablation/control_mlp/
 - outputs/ablation/pca_mlp/
 - outputs/ablation/tsne_mlp/
-- outputs/ablation/vgae_linreg/
+- outputs/ablation/vgae_linreg_head//
+- outputs/ablation/linreg_on_clinical_data/
 
 Author: Hanna M. Tolle
 Date: 2025-12-04
@@ -170,7 +171,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
     # Train VGAE with a linear regression head end-to-end
     if jobid == 3 or jobid == -1:
         exname = 'train_jointly'
-        ex_dir = os.path.join(output_dir, 'linreg_benchmark', f'seed_{seed}')
+        ex_dir = os.path.join(output_dir, 'vgae_linreg_head', f'seed_{seed}')
 
         # Check if the experiment has already been run
         if not os.path.exists(ex_dir):

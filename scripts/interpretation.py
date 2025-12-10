@@ -85,7 +85,7 @@ def main(weights_base_dir, output_dir, verbose, debug, seed, job_id=None, mlp_we
 if __name__ == "__main__":
     """
     How to run:
-    python interpret.py -w outputs/graphtrip/weights/ -o outputs/graphtrip/grail/ -s 0 -v -dbg
+    python interpretation.py -w outputs/graphtrip/weights/ -o outputs/graphtrip/grail/ -s 0 -v -dbg
     """
     # Parse command line arguments
     parser = argparse.ArgumentParser()
