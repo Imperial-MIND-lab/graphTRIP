@@ -14,8 +14,12 @@ cd ~/projects/graphTRIP/scripts
 # Run post-hoc analysis for graphTRIP
 GRAIL_DIR='outputs/graphtrip/grail/'
 WEIGHTS_DIR='outputs/graphtrip/weights/'
-python posthoc.py --grail_dir $GRAIL_DIR --weights_dir $WEIGHTS_DIR
+python posthoc.py --grail_dir $GRAIL_DIR --weights_dir $WEIGHTS_DIR -s 0
 
 # Run post-hoc analysis for x-graphTRIP
 GRAIL_DIR='outputs/x_graphtrip/medusa_grail/'
-python posthoc.py --grail_dir $GRAIL_DIR 
+python posthoc.py --grail_dir $GRAIL_DIR -s 0
+
+# Run post-hoc analysis for cate model
+GRAIL_DIR='outputs/x_graphtrip/grail/'
+python posthoc.py --grail_dir $GRAIL_DIR -s 0
