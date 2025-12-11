@@ -28,9 +28,9 @@ import numpy as np
 from utils.files import add_project_root
 from utils.configs import load_configs_from_json
 from utils.statsalg import load_fold_data, compute_performance_weighted_means, ridge_cv_predict
-from utils.statsalg import grail_posthoc_analysis
 from utils.annotations import load_receptor_maps, load_rotated_rois, load_ut_axis
 from preprocessing.metrics import get_rsn_mapping
+from utils.statsalg import calculate_consistency_scores
 from experiments.run_experiment import run
 from experiments.attention_weights import dominance_analysis_pipeline
 
@@ -101,6 +101,14 @@ def main(grail_dir=None, weights_dir=None, verbose=False, seed=0):
             weighted_mean_alignments_stats.to_csv(os.path.join(ex_dir, 'weighted_mean_alignments_stats.csv'))
             weighted_mean_alignments.to_csv(os.path.join(ex_dir, 'weighted_mean_alignments.csv'), index=False)
 
+            # Check agreement between fold models ------------------------------------------
+            agreement_scores = calculate_consistency_scores(all_subject_dfs)
+            agreement_scores.to_csv(
+                os.path.join(ex_dir, 'grail_agreement_scores.csv'), 
+                header=["consistency_score"], 
+                index=True,
+                index_label="subject_id")
+
             # Filter features -------------------------------------------------------------
             # 1. Filter based on significance and effect size
             filtered_features = list(
@@ -156,6 +164,14 @@ def main(grail_dir=None, weights_dir=None, verbose=False, seed=0):
                 compute_performance_weighted_means(all_subject_dfs, performance)
             wm_grad_weights_stats.to_csv(os.path.join(ex_dir, 'weighted_mean_grad_weights_stats.csv'))
             wm_grad_weights.to_csv(os.path.join(ex_dir, 'weighted_mean_grad_weights.csv'), index=False)
+
+            # Check agreement between fold models ------------------------------------------
+            agreement_scores = calculate_consistency_scores(all_subject_dfs)
+            agreement_scores.to_csv(
+                os.path.join(ex_dir, 'regional_importance_agreement_scores.csv'), 
+                header=["consistency_score"], 
+                index=True,
+                index_label="subject_id")
 
             # Perform dominance analysis on weighted-mean attention weights ---------------
             atlas = 'schaefer100'

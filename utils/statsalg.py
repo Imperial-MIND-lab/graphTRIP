@@ -1352,6 +1352,54 @@ def calculate_subject_consistency(
 
     return pd.DataFrame(results)
 
+def calculate_consistency_scores(subject_dict):
+    """
+    Computes the agreement between models for each subject using 
+    Fisher-Z transformed average correlations.
+    
+    Args:
+        subject_dict (dict): Keys are subject IDs. Values are DataFrames 
+                             of shape (num_models, num_features).
+                             
+    Returns:
+        pd.Series: A vector of consistency scores indexed by subject ID.
+    """
+    scores = {}
+    for subject_id, df in subject_dict.items():
+        # Ensure we are working with numeric data
+        # shape is (num_models, num_features)
+        data = df.select_dtypes(include=[np.number]).values
+        
+        # Compute correlation matrix between models (rows)
+        # np.corrcoef calculates correlation between rows of the input
+        corr_matrix = np.corrcoef(data)
+        
+        # We only want the unique pairwise correlations (upper triangle),
+        # excluding the diagonal (self-correlation of 1.0)
+        n_models = corr_matrix.shape[0]
+        if n_models < 2:
+            scores[subject_id] = np.nan
+            continue
+            
+        upper_tri_indices = np.triu_indices(n_models, k=1)
+        r_values = corr_matrix[upper_tri_indices]
+        
+        # Clip values slightly to avoid infinity in arctanh if r=1.0 or r=-1.0
+        r_values = np.clip(r_values, -0.999999, 0.999999)
+        
+        # 1. Fisher Z-transformation
+        z_values = np.arctanh(r_values)
+        
+        # 2. Average the Z-values
+        avg_z = np.mean(z_values)
+        
+        # 3. Convert back to correlation coefficient
+        avg_r = np.tanh(avg_z)
+        
+        scores[subject_id] = avg_r
+        
+    return pd.Series(scores)
+
 def elasticnet_cv_predict(X, y, subject_ids=None, n_splits=7, random_state=0, verbose=True):
     """
     Run k-fold CV ElasticNet prediction given X, y, [optional] conditions vector.
