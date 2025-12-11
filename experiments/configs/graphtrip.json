@@ -32,10 +32,10 @@
       "model_type": ["RegressionMLP"],
       "params": {
         "dropout": [0.25],
-        "hidden_dim": [128],
+        "hidden_dim": [64],
         "layernorm": [false],
         "mse_reduction": ["sum"],
-        "num_layers": [4],
+        "num_layers": [3],
         "output_dim": [1],
         "reg_strength": [0.01]
       }
@@ -44,17 +44,17 @@
       "model_type": ["NodeLevelVGAE"],
       "params": {
         "dropout": [0.25],
-        "latent_dim": [64],
-        "node_emb_dim": [64],
+        "latent_dim": [32],
+        "node_emb_dim": [32],
         "reg_strength": [0.01]
       },
       "node_emb_model_cfg": {
         "model_type": ["NodeEmbeddingGraphormer"],
         "params": {
-          "hidden_dim": [32],
+          "hidden_dim": [16],
           "layernorm": [true],
           "num_heads": [2],
-          "num_layers": [4]
+          "num_layers": [3]
         }
       },
       "encoder_cfg": {
@@ -88,7 +88,7 @@
         "params": {
           "reduce": ["mean"],
           "num_heads": [4],
-          "ff_hidden_dim": [64]
+          "ff_hidden_dim": [32]
         }
       }
     }
