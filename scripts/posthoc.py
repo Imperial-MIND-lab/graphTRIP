@@ -64,15 +64,20 @@ def main(grail_dir=None, weights_dir=None, verbose=False, seed=0):
                                   'threshold': 0.00} 
             
             # Filtering criteria for PLS analysis
-            filtering_criteria = {'seed': seed,
-                                  'num_seeds': 10,
-                                  'filter_percentile': 75}
+            filtering_criteria = {'effect_size': 'very large',
+                                  'fdr_p_value': 0.05,
+                                  'percentile': 25}
 
             # Save all analysis settings
             posthoc_config = {'inclusion_criteria': inclusion_criteria,
                               'filtering_criteria': filtering_criteria}
             with open(os.path.join(ex_dir, 'config.json'), 'w') as f:
                 json.dump(posthoc_config, f, indent=4)
+
+            # Load the config from grail_dir
+            config_file = os.path.join(grail_dir, 'seed_0', 'config.json')
+            grail_config = load_configs_from_json(config_file)
+            medusa = grail_config.get('medusa', False) # Apply two-sided filtering for medusa models
 
             # -----------------------------------------------------------------------------
             # GRADIENT ALIGNMENT ANALYSIS
@@ -96,14 +101,40 @@ def main(grail_dir=None, weights_dir=None, verbose=False, seed=0):
             weighted_mean_alignments_stats.to_csv(os.path.join(ex_dir, 'weighted_mean_alignments_stats.csv'))
             weighted_mean_alignments.to_csv(os.path.join(ex_dir, 'weighted_mean_alignments.csv'), index=False)
 
-            # Run PLS analysis ------------------------------------------------------------
-            # Run clustering analysis and filter biomarkers
-            cluster_labels, filtered_features = grail_posthoc_analysis(weighted_mean_alignments,
-                                                                       num_seeds=filtering_criteria['num_seeds'],
-                                                                       seed=filtering_criteria['seed'],
-                                                                       filter_percentile=filtering_criteria['filter_percentile'])
+            # Filter features -------------------------------------------------------------
+            # 1. Filter based on significance and effect size
+            filtered_features = list(
+                weighted_mean_alignments_stats[
+                    (weighted_mean_alignments_stats['fdr_p_value'] < filtering_criteria['fdr_p_value']) &
+                    (weighted_mean_alignments_stats['effect_size'] == filtering_criteria['effect_size'])
+                ].index)
+
+            # 2. Filter based on percentile of mean alignment magnitude
+            if medusa:
+                half_pctl = filtering_criteria['percentile'] / 2  
+                
+                # Positive features
+                pos_indices = weighted_mean_alignments_stats[weighted_mean_alignments_stats['t_statistic'] > 0].index
+                pos_means = weighted_mean_alignments[pos_indices].mean() 
+                pos_threshold = np.percentile(pos_means, 100 - half_pctl)
+                filtered_positive = pos_means[pos_means > pos_threshold].index.tolist()
+
+                # Negative features
+                neg_indices = weighted_mean_alignments_stats[weighted_mean_alignments_stats['t_statistic'] < 0].index
+                neg_means = weighted_mean_alignments[neg_indices].mean()
+                neg_threshold = np.percentile(np.abs(neg_means), 100 - half_pctl)
+                filtered_negative = neg_means[np.abs(neg_means) > neg_threshold].index.tolist()
+
+                # Combine and filter based on intersection
+                both = filtered_positive + filtered_negative
+                filtered_features = [f for f in filtered_features if f in both]
+            else:
+                pctl = filtering_criteria['percentile']
+                means = weighted_mean_alignments.mean()
+                threshold = np.percentile(np.abs(means), 100 - pctl)
+                filtered_features = [col for col in filtered_features if np.abs(means[col]) > threshold]
+            
             # Save results
-            np.savetxt(os.path.join(ex_dir, 'cluster_labels.csv'), cluster_labels, delimiter=',')
             with open(os.path.join(ex_dir, 'filtered_features.json'), 'w') as f:
                 json.dump(filtered_features, f, indent=4)
 
