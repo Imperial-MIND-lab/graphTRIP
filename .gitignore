@@ -1,6 +1,7 @@
 # Pycache
 __pycache__/
 **/__pycache__/
+experiments/.neptune/
 
 # Outputs and weights
 outputs/
@@ -13,6 +14,7 @@ notebooks/sandbox.ipynb
 notebooks/print_models.ipynb
 notebooks/graphormer.ipynb
 notebooks/graphormer_figures.ipynb
+notebooks/figures_XL.ipynb
 
 # VScode degugging configs
 .vscode/
@@ -23,3 +25,6 @@ data/
 
 # Helper bash scripts
 local/
+
+# Write up and notes
+paper/
