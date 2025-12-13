@@ -452,7 +452,7 @@ def run(_config):
                 
                 # Compute regional importance scores
                 ypred_grad_norm_reshaped = ypred_grad_norm.view(num_nodes, latent_dim) # (num_nodes, latent_dim)
-                regional_importance = torch.sum(ypred_grad_norm_reshaped ** 2, dim=1)  # (num_nodes,)
+                regional_importance = torch.sum(torch.abs(ypred_grad_norm_reshaped), dim=1)  # (num_nodes,)
                 subject_regional_importance.append(regional_importance.cpu().numpy())  
                 
                 # Get reconstructed outputs
