@@ -450,15 +450,10 @@ def run(_config):
                 ypred_grad_copy = ypred_grad.clone().detach()
                 ypred_grad_norm = torch.nn.functional.normalize(ypred_grad_copy, p=2, dim=0)
                 
-                # Reshape ypred_grad back to shape (num_nodes, latent_dim)
-                ypred_grad_norm_reshaped = ypred_grad_norm.view(num_nodes, latent_dim)
-                
-                # For each node, compute the sum over ypred_grad_norm_reshaped values
-                # to get one "importance score" per brain region
-                regional_importance = torch.sum(torch.abs(ypred_grad_norm_reshaped), dim=1)  # (num_nodes,)
-                
-                # Store regional importance for this latent sample
-                subject_regional_importance.append(regional_importance.cpu().numpy())
+                # Compute regional importance scores
+                ypred_grad_norm_reshaped = ypred_grad_norm.view(num_nodes, latent_dim) # (num_nodes, latent_dim)
+                regional_importance = torch.sum(ypred_grad_norm_reshaped ** 2, dim=1)  # (num_nodes,)
+                subject_regional_importance.append(regional_importance.cpu().numpy())  
                 
                 # Get reconstructed outputs
                 x, triu_edges = get_reconstructions(z, vgae, batch)
