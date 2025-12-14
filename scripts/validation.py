@@ -167,7 +167,23 @@ def main(config_file, weights_base_dir, output_dir, verbose, debug, seed, jobid=
             # Dataset configs
             config_updates['dataset'] = copy.deepcopy(config['dataset'])
             config_updates['dataset']['batch_size'] = -1 # linear regression uses full batch
-            config_updates['dataset']['graph_attrs_to_standardise'] = ['QIDS_Before', 'BDI_Before']
+
+            # Make sure we don't use any transforms on data that doesn't exist
+            config_updates['dataset']['edge_tfm_type'] = None
+            config_updates['dataset']['edge_tfm_params'] = {}
+            config_updates['dataset']['add_3Dcoords'] = False
+            config_updates['dataset']['standardise_x'] = False
+
+            # Remove neuroimaging and context attributes
+            config_updates['dataset']['node_attrs'] = []
+            config_updates['dataset']['edge_attrs'] = []
+            config_updates['dataset']['context_attrs'] = []
+
+            # Add more demographic and clinical data available in psilodep1
+            additional_attrs = ['HAMD_Before', 'LOTR_Before', 'Gender', 'Age']
+            config_updates['dataset']['graph_attrs'] += additional_attrs
+            numerical_attrs = ['QIDS_Before', 'BDI_Before', 'HAMD_Before', 'LOTR_Before', 'Age']
+            config_updates['dataset']['graph_attrs_to_standardise'] = numerical_attrs
 
             # Other configs
             config_updates['regression_model'] = 'LinearRegression'
