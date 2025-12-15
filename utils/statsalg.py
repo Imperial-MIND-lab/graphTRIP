@@ -1503,7 +1503,7 @@ def ridge_cv_predict(X, y, subject_ids=None, n_splits=7, random_state=0, verbose
 
 # Comparing performances of multiple models --------------------------------------
 
-def compare_model_performances(data_dict, is_dependent=True):
+def compare_model_performances(data_dict, is_dependent=True, model_of_interest: str = None):
     """
     Performs non-parametric statistical testing for multiple model comparisons.
     
@@ -1512,6 +1512,7 @@ def compare_model_performances(data_dict, is_dependent=True):
                           All lists must be of the same length (N seeds).
         is_dependent (bool): If True, assumes paired samples (same seeds used).
                              If False, assumes independent samples.
+        model_of_interest (str, optional): If provided, restrict post-hoc tests to pairs including this model.
                              
     Returns:
         global_stats (pd.DataFrame): Results of the omnibus test (Friedman or Kruskal-Wallis).
@@ -1551,6 +1552,12 @@ def compare_model_performances(data_dict, is_dependent=True):
     # Generate all unique pairs of models
     model_pairs = list(combinations(models, 2))
     
+    # Filter pairs based on model_of_interest, if specified
+    if model_of_interest is not None:
+        if model_of_interest not in models:
+            raise ValueError(f"model_of_interest '{model_of_interest}' not found among models: {models}")
+        model_pairs = [pair for pair in model_pairs if model_of_interest in pair]
+    
     p_values = []
     
     for m1, m2 in model_pairs:
@@ -1568,22 +1575,27 @@ def compare_model_performances(data_dict, is_dependent=True):
         p_values.append(p)
         
     # 4. Multiple Testing Correction    
-    reject, p_corrected = fdrcorrection(p_values, alpha=0.05)
+    if p_values:
+        reject, p_corrected = fdrcorrection(p_values, alpha=0.05)
+    else:
+        # If no pairs, return empty results
+        reject, p_corrected = [], []
     
     # 5. Assemble Results
     for i, (m1, m2) in enumerate(model_pairs):
         pairwise_data.append({
             "Model A": m1,
             "Model B": m2,
-            "Original P-Value": p_values[i],
-            "Corrected P-Value": p_corrected[i],
-            "Reject Null (Significant Difference)": reject[i]
+            "Original P-Value": p_values[i] if i < len(p_values) else None,
+            "Corrected P-Value": p_corrected[i] if i < len(p_corrected) else None,
+            "Reject Null (Significant Difference)": reject[i] if i < len(reject) else None
         })
         
     pairwise_results = pd.DataFrame(pairwise_data)
     
     # Sort by corrected p-value for readability
-    pairwise_results = pairwise_results.sort_values("Corrected P-Value")
+    if not pairwise_results.empty and "Corrected P-Value" in pairwise_results.columns:
+        pairwise_results = pairwise_results.sort_values("Corrected P-Value")
     
     return global_results, pairwise_results
 

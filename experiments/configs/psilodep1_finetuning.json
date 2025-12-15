@@ -1,5 +1,5 @@
 { 
-    "num_epochs": [100],
+    "num_epochs": [300],
     "vgae_lr": [0.0],
     "mlp_lr": [0.001],
     "num_z_samples": [1],

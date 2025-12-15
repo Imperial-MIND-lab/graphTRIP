@@ -160,9 +160,8 @@ def main(grail_dir=None, weights_dir=None, verbose=False, seed=0):
             performance = fold_performances[inclusion_criteria['metric']].values
 
             # Compute performance-weighted regional gradient weights ----------------------
-            wm_grad_weights, wm_grad_weights_stats = \
+            wm_grad_weights, _ = \
                 compute_performance_weighted_means(all_subject_dfs, performance)
-            wm_grad_weights_stats.to_csv(os.path.join(ex_dir, 'weighted_mean_grad_weights_stats.csv'))
             wm_grad_weights.to_csv(os.path.join(ex_dir, 'weighted_mean_grad_weights.csv'), index=False)
 
             # Check agreement between fold models ------------------------------------------
