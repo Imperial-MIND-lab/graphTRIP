@@ -61,9 +61,10 @@ def main(weights_base_dir, output_dir, verbose, debug, seed, job_id=None, mlp_we
     config_updates['mlp_weights_dir'] = mlp_weights_dir
     config_updates['seed'] = seed
     config_updates['verbose'] = verbose
-    config_updates['num_z_samples'] = 100 if not debug else 2
+    config_updates['num_z_samples'] = 25 if not debug else 2
     config_updates['sigma'] = 2.0
     config_updates['all_rsn_conns'] = False
+    config_updates['n_permutations'] = 1000 if not debug else 3
 
     # Model-specific configs
     # CATE models don't have MLP config and need SklearnLinearModelWrapper

@@ -677,6 +677,55 @@ def discrete_variables_permutation_test(var1, var2, n_permutations=10000, save_p
 
     return results
 
+def compute_permutation_stats(observed_val, null_dist, alternative='two-sided'):
+    """
+    Computes permutation test statistics for a single observed value against a null distribution.
+    
+    Args:
+        observed_val (float): The test statistic for the real data (True Biomarker Alignment).
+        null_dist (array-like): Array of test statistics from surrogate data (Rotated Biomarkers).
+        alternative (str): 'two-sided', 'greater', or 'less'. 
+    
+    Returns:
+        dict: A dictionary containing p-values, z-scores, and distribution stats.
+    """
+    null_dist = np.array(null_dist)
+    n_permutations = len(null_dist)
+    
+    # Calculate Distribution Stats
+    null_mean = np.mean(null_dist)
+    null_std = np.std(null_dist, ddof=1) # Use ddof=1 for sample std dev
+
+    # Compute P-Values (non-paramertric)
+    if alternative == 'greater':
+        r = np.sum(null_dist >= observed_val)
+        p_val_nonparam = (r + 1) / (n_permutations + 1)
+        
+    elif alternative == 'less':
+        r = np.sum(null_dist <= observed_val)
+        p_val_nonparam = (r + 1) / (n_permutations + 1)
+        
+    elif alternative == 'two-sided':
+        r_greater = np.sum(null_dist >= observed_val)
+        p_greater = (r_greater + 1) / (n_permutations + 1)
+        
+        r_less = np.sum(null_dist <= observed_val)
+        p_less = (r_less + 1) / (n_permutations + 1)
+        
+        p_val_nonparam = 2 * min(p_greater, p_less)
+        # Cap at 1.0
+        p_val_nonparam = min(1.0, p_val_nonparam)
+        
+    else:
+        raise ValueError("alternative must be 'greater', 'less', or 'two-sided'")
+
+    return {
+        "observed": observed_val,
+        "p_value": p_val_nonparam,
+        "null_mean": null_mean,
+        "null_std": null_std,
+    }
+
 def test_column_significance(df, test_type='t-test', alpha=0.05):
     """
     Perform statistical tests on each column of a DataFrame to check if values are different from zero.

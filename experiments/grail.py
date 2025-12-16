@@ -24,24 +24,22 @@ from experiments.ingredients.mlp_ingredient import *
 
 import os
 import torch
+import json
 from tqdm import tqdm
 from time import time
 import pandas as pd
 import logging
 from torch_geometric.data import Batch
 import numpy as np
-import networkx as nx
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 from utils.files import add_project_root
-from utils.helpers import get_logger, fix_random_seed, triu_vector2mat_torch, sort_features
+from utils.helpers import get_logger, fix_random_seed, triu_vector2mat_torch
 from utils.configs import load_ingredient_configs, match_ingredient_configs
-from utils.annotations import load_receptor_maps
-from utils.statsalg import get_fold_performance, min_significant_r
+from utils.annotations import load_receptor_maps, load_rotated_rois
+from utils.statsalg import get_fold_performance, test_column_significance, compute_permutation_stats
 from models.utils import freeze_model
-from utils.plotting import plot_heatmap, COOLWARM
 from preprocessing.metrics import compute_modularity_torch, get_rsn_mapping, get_atlas
+from statsmodels.stats.multitest import fdrcorrection
 
 
 # Create the experiment -------------------------------------------------------
@@ -75,11 +73,13 @@ def cfg(dataset):
                         'test_fold_indices': ['test_fold_indices.csv']}
     
     # Experiment-specific configs
-    num_z_samples = 100         # Number of samples to draw from the VGAE latent distribution.
+    num_z_samples = 25          # Number of samples to draw from the VGAE latent distribution.
     sigma = 2.0                 # Std of the Gaussian noise added to the latent means.
     all_rsn_conns = False       # Whether to compute RSN connectivity for all RSN pairs.
     medusa = False              # Only works with CFRHead MLP. Grails mlp1-mlp0 instead of ypred.
     this_k = None               # If None, compute all folds sequentially. If int, compute only fold this_k.
+    n_permutations = 1000       # Number of permutations to use for null model analysis.
+    cohen_d_threshold = 0.8     # Threshold for Cohen's d to consider a feature significant.
 
 # Match configs function -------------------------------------------------------
 def match_config(config: Dict) -> Dict:
@@ -149,8 +149,9 @@ def compute_correlation(x, y):
 @ex.capture
 def get_alignments_and_features(triu_edges, ypred_grad, z,
                                 rsn_mapping, rsn_names, receptor_maps, 
-                                seed, all_rsn_conns,
-                                x = None, node_attrs = None):
+                                all_rsn_conns,
+                                x = None, node_attrs = None,
+                                selected_features = None):
     """
     Computes feature gradients and alignment with ypred_grad.
 
@@ -164,14 +165,13 @@ def get_alignments_and_features(triu_edges, ypred_grad, z,
     receptor_maps (dict): The receptor maps.
     x (torch.Tensor): The node attributes.
     node_attrs (list): The names of the node attributes.
+    selected_features (list, optional): If provided, only compute alignments for these features.
 
     Returns:
     --------
     alignments (dict): The alignments between the feature gradients and ypred_grad.
-    feature_gradients (dict): The gradients of each feature with respect to z.
     """
     alignments = {}
-    feature_gradients = {}
     device = triu_edges.device
     
     # Get adjacency matrix
@@ -179,10 +179,10 @@ def get_alignments_and_features(triu_edges, ypred_grad, z,
     
     # Process each feature one at a time 
     def process_feature(name, value):
-        grad = compute_gradient(value, z)
-        alignment = compute_gradient_alignment(ypred_grad, grad)
-        alignments[name] = alignment
-        feature_gradients[name] = grad.detach().cpu().numpy()
+        if selected_features is None or name in selected_features:
+            grad = compute_gradient(value, z)
+            alignment = compute_gradient_alignment(ypred_grad, grad)
+            alignments[name] = alignment
 
     # Compute modularity using RSN mapping
     rsn_modularity = compute_modularity_torch(adj, rsn_mapping)
@@ -228,16 +228,9 @@ def get_alignments_and_features(triu_edges, ypred_grad, z,
         
         # Correlations between node attributes and receptor densities
         for receptor, density in receptor_maps.items():
-            if receptor.upper() not in node_attrs:
-                for attr_idx, attr in enumerate(node_attrs):
-                    feat = compute_correlation(x[:, attr_idx], density)
-                    process_feature(f'x{attr}_corr_{receptor}', feat)
-        
-        # Correlations between pairs of node attributes
-        for i in range(len(node_attrs)):
-            for j in range(i+1, len(node_attrs)):
-                feat = compute_correlation(x[:, i], x[:, j])
-                process_feature(f'x{node_attrs[i]}_corr_x{node_attrs[j]}', feat)
+            for attr_idx, attr in enumerate(node_attrs):
+                feat = compute_correlation(x[:, attr_idx], density)
+                process_feature(f'x{attr}_corr_{receptor}', feat)
     
     return alignments
 
@@ -343,11 +336,11 @@ def run(_config):
     seed = _config['seed']
     output_dir = add_project_root(_config['output_dir'])
     verbose = _config['verbose']
-    save_outputs = _config['save_outputs']
     node_attrs = _config['dataset']['node_attrs']
     node_attrs = [attr.split('_')[0] for attr in node_attrs]
-    num_z_samples = _config['num_z_samples']
     this_k = _config['this_k']
+    cohen_d_threshold = _config['cohen_d_threshold']
+    n_permutations = _config['n_permutations']
 
     # Validate this_k input
     max_num_folds = _config['dataset']['num_folds']
@@ -398,6 +391,7 @@ def run(_config):
     atlas = _config['dataset']['atlas']
     receptor_maps = load_receptor_maps(atlas)
     rsn_mapping, rsn_names = get_rsn_mapping(atlas)
+    rotated_roi_indices = load_rotated_rois(atlas, n_permutations=_config['n_permutations'])
 
     # Convert to tensors (needed for gradient computation later)
     rsn_mapping = torch.tensor(rsn_mapping, device=device)
@@ -405,7 +399,7 @@ def run(_config):
                     for name, values in receptor_maps.items()}
 
     num_folds = len(vgaes)
-    all_fold_alignments = []  # Store alignments for all folds
+    feature_names = None
     
     # Determine which folds to compute
     if this_k is None:
@@ -414,15 +408,17 @@ def run(_config):
         folds_to_compute = [this_k]
     
     for k in folds_to_compute:
-        # Initialize dataframes for storing results
-        alignment_records = []
         
         # Load models for this fold
         vgae = vgaes[k].eval()
         mlp = mlps[k].eval()
         
         # Initialize storage for regional gradient weights
-        all_subject_regional_importance = []  # List of arrays, one per subject
+        all_subject_regional_importance = []
+        
+        # Storage for spin-permutation test results
+        all_mean_alignments = []  
+        all_selected_features = {}  # sub: [selected_features]
         
         for sub in tqdm(range(num_subs), desc=f'Fold {k}', disable=not verbose):
             batch = Batch.from_data_list([data[sub]]).to(device)
@@ -438,12 +434,23 @@ def run(_config):
             latent_dim = zs[0].shape[1]
             
             # Initialize storage for regional importance scores across latent samples
-            subject_regional_importance = []  # List of arrays, one per z_sample
+            subject_regional_importance = []
             
-            for z_idx, z in enumerate(zs):
+            # Storage for alignments across latent samples
+            subject_alignments = []
+            ypred_grads = []
+            zs_list = []
+            xs_list = []
+            triu_edges_list = []
+            
+            for z in zs:
                 # Get MLP prediction and its gradient
                 ypred = get_ypred_from_z(z, vgae, mlp, batch)
                 ypred_grad = compute_gradient(ypred, z)
+                
+                # Store ypred_grad for null distribution computation
+                ypred_grads.append(ypred_grad.detach().clone())
+                zs_list.append(z)
                 
                 # Regional gradient analysis ----------------------------------------
                 # Normalize ypred_grad
@@ -457,6 +464,8 @@ def run(_config):
                 
                 # Get reconstructed outputs
                 x, triu_edges = get_reconstructions(z, vgae, batch)
+                xs_list.append(x)
+                triu_edges_list.append(triu_edges)
                 
                 # Compute interpretable features and their gradients
                 alignments = get_alignments_and_features(
@@ -468,54 +477,100 @@ def run(_config):
                     receptor_maps=receptor_maps, 
                     x=x, 
                     node_attrs=node_attrs)
-                
-                # Base record for this sample
-                base_record = {'sub': sub,
-                             'latent_sample': z_idx,
-                             'ypred': ypred.item()}
-
-                # Store alignments
-                alignment_record = base_record.copy()
-                alignment_record.update(alignments)
-                alignment_records.append(alignment_record)
+                subject_alignments.append(alignments)
             
             # Compute mean regional importance scores across latent samples for this subject
             subject_regional_importance_mean = np.mean(subject_regional_importance, axis=0)  # (num_nodes,)
             all_subject_regional_importance.append(subject_regional_importance_mean)
-        
-        # Process alignment results ----------------------------------------------
-        alignment_df = pd.DataFrame(alignment_records)
+            
+            # First-stage GRAIL feature screening ----------------------------------------------
+            # Perform 1-sample t-test + cohen d across latent samples for each feature
 
-        # Sort the feature columns
-        non_feature_cols = ['sub', 'latent_sample', 'ypred']
-        feature_cols = [col for col in alignment_df.columns if col not in non_feature_cols]
+            # Get feature names
+            if feature_names is None:
+                feature_names = list(subject_alignments[0].keys())
 
-        # Compute mean alignments for each subject
-        mean_alignments = np.zeros((num_subs, len(feature_cols)))
-        for sub in range(num_subs):
-            sub_df = alignment_df[alignment_df['sub'] == sub]
-            for feature_idx, feature in enumerate(feature_cols):
-                mean_alignments[sub, feature_idx] = np.mean(sub_df[feature].to_numpy())
+            # Convert alignments to dataframe and store mean alignments for this subject
+            feature_alignments = pd.DataFrame(subject_alignments)
+            observed_mean_alignments = feature_alignments.mean(axis=0)
+            all_mean_alignments.append(observed_mean_alignments.to_dict())
+            
+            # Perform 1-sample t-test for each feature 
+            feature_stats = test_column_significance(feature_alignments, test_type='t-test')
+            fdr_p_values = feature_stats['fdr_p_value']
+            cohen_ds = feature_stats['cohen_d']
+            
+            # Identify selected features
+            selected_features = [feat for feat, fdr_p, cd in zip(feature_names, fdr_p_values, cohen_ds) 
+                                if fdr_p < 0.05 and abs(cd) > cohen_d_threshold]
+            
+            # Second-stage GRAIL permutation test ----------------------------------------------
+            # Compute null distributions for selected features with spin maps
+
+            if len(selected_features) > 0:
+                mean_alignment_null_distributions = []
+                
+                # Compute mean alignment across latent samples for each spin map
+                for perm_idx in range(n_permutations):
+                    perm_indices = rotated_roi_indices[:, perm_idx]
+                    
+                    # Create permuted rsn_mapping and receptor_maps
+                    rsn_mapping_perm = rsn_mapping[perm_indices]
+                    receptor_maps_perm = {name: values[perm_indices] 
+                                         for name, values in receptor_maps.items()}
+                    null_alignments = []
+                    for z, ypred_grad, x, triu_edges in zip(zs_list, ypred_grads, xs_list, triu_edges_list):
+                        # Compute alignments for non-correlation features
+                        alignments_perm = get_alignments_and_features(
+                            triu_edges=triu_edges,
+                            ypred_grad=ypred_grad,
+                            z=z,
+                            rsn_mapping=rsn_mapping_perm,
+                            rsn_names=rsn_names,
+                            receptor_maps=receptor_maps_perm,
+                            x=x,
+                            node_attrs=node_attrs,
+                            selected_features=selected_features)
+
+                        null_alignments.append(alignments_perm)
+                
+                    # Average across latent samples to get mean alignment for each permutation
+                    mean_alignment_null_distributions.append(pd.DataFrame(null_alignments).mean(axis=0))
+                
+                # Perform permutation test for each selected feature
+                mean_alignment_null_distributions = pd.DataFrame(mean_alignment_null_distributions)
+                permtest_results = []
+                for feat in selected_features:
+                    observed_mean = observed_mean_alignments[feat]
+                    null_dist = mean_alignment_null_distributions[feat].values
+                    
+                    # Two-tailed p-value: proportion of null values >= |observed|
+                    results = compute_permutation_stats(observed_mean, null_dist, alternative='two-sided')
+                    base_results = {'feature': feat}
+                    base_results.update(results)
+                    permtest_results.append(base_results)
+                
+                # FDR correction for permutation test p-values
+                permtest_results = pd.DataFrame(permtest_results)
+                permtest_results['fdr_p_value'] = fdrcorrection(permtest_results['p_value'], alpha=0.05)[1]
+
+                # Identify significant features
+                significant_features = list(permtest_results[permtest_results['fdr_p_value'] < 0.05]['feature'])
+                all_selected_features[sub] = significant_features
+            else:
+                all_selected_features[sub] = []
         
-        # Save mean alignments for this fold
-        mean_alignments_df = pd.DataFrame(mean_alignments, columns=feature_cols)
+        # Process alignment results ----------------------------------------------        
+        # Save mean alignments from all subjects for this fold
+        mean_alignments_df = pd.DataFrame(all_mean_alignments)
         mean_alignments_df.to_csv(os.path.join(output_dir, f'k{k}_mean_alignments.csv'), index=False)
         ex.add_artifact(os.path.join(output_dir, f'k{k}_mean_alignments.csv'))
-
-        # Store alignments for correlation analysis
-        all_fold_alignments.append(mean_alignments)
-
-        # Plot mean alignments for this fold
-        sorted_features = sort_features(list(mean_alignments_df.columns))
-        save_path = os.path.join(output_dir, f'k{k}_mean_alignments.png')
-        vmax = np.percentile(np.abs(mean_alignments_df.values), 95)
-        plot_heatmap(mean_alignments_df[sorted_features].values, 
-                     features=sorted_features, 
-                     vrange=(-vmax, vmax), 
-                     figsize=(10, 4), 
-                     cmap=COOLWARM,
-                     save_path=save_path)
-        ex.add_artifact(save_path)
+        
+        # Save selected features for each subject as a JSON file
+        selected_features_path = os.path.join(output_dir, f'k{k}_selected_features.json')
+        with open(selected_features_path, 'w') as f:
+            json.dump(all_selected_features, f, indent=2)
+        ex.add_artifact(selected_features_path)
         
         # Process regional gradient weights --------------------------------------
         regional_grad_weights = np.array(all_subject_regional_importance) # (num_subs, num_nodes)
