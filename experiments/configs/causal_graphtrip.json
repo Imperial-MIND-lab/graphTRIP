@@ -1,7 +1,7 @@
 { 
     "lr": [0.001],
     "num_epochs": [300],
-    "num_z_samples": [1, 3],
+    "num_z_samples": [3],
     "alpha": [0.5],
     "beta": [1.0],
     "balance_treatment": [true],
@@ -9,12 +9,11 @@
       "study": ["psilodep2"],
       "session": ["before"],
       "atlas": ["schaefer100"],
-      "target": ["QIDS_Final_Integration"],
+      "target": ["QIDS_Final_Integration_shuffled"],
       "batch_size": [9],
       "num_folds": [7],
       "val_split": [0.0],
       "graph_attrs": [
-        ["QIDS_Before", "BDI_Before", "Stop_SSRI"],
         ["QIDS_Before", "BDI_Before"]
       ],
       "graph_attrs_to_standardise": [[]],
@@ -57,7 +56,7 @@
           "hidden_dim": [16],
           "layernorm": [true],
           "num_heads": [2],
-          "num_layers": [3, 4]
+          "num_layers": [4]
         }
       },
       "encoder_cfg": {
