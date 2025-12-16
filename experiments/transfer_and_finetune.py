@@ -350,6 +350,7 @@ def run(_config):
     num_folds = _config['dataset']['num_folds']
     weights_dir = add_project_root(_config['weights_dir'])
     weight_filenames = _config['weight_filenames']
+    is_cfrnet = _config['mlp_model']['model_type'] == 'CFRHead'
 
     # Create output directories, fix seed
     os.makedirs(output_dir, exist_ok=True)
@@ -358,6 +359,9 @@ def run(_config):
 
     # Load data
     data = load_data()
+    if is_cfrnet:
+        # Add treatment transform to the dataset (required for CFRHead)
+        add_treatment_transform(data)
     device = torch.device(_config['device'])
     logger.info(f'Using device: {device}')
     train_loaders, val_loaders, test_loaders, test_indices_list, mean_std = \
