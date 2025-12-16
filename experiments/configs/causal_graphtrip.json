@@ -1,7 +1,7 @@
 { 
     "lr": [0.001],
     "num_epochs": [300],
-    "num_z_samples": [3],
+    "num_z_samples": [1, 3],
     "alpha": [0.5],
     "beta": [1.0],
     "balance_treatment": [true],
@@ -13,7 +13,10 @@
       "batch_size": [9],
       "num_folds": [7],
       "val_split": [0.0],
-      "graph_attrs": [["QIDS_Before", "BDI_Before", "Stop_SSRI"]],
+      "graph_attrs": [
+        ["QIDS_Before", "BDI_Before", "Stop_SSRI"],
+        ["QIDS_Before", "BDI_Before"]
+      ],
       "graph_attrs_to_standardise": [[]],
       "context_attrs": [[]],
       "node_attrs": [["5-HT1A_Believeau-3", "5-HT2A_Believeau-3", "5-HTT_Believeau-3"]],
@@ -31,7 +34,7 @@
     "mlp_model": {
       "model_type": ["CFRHead"],
       "params": {
-        "dropout": [0.2],
+        "dropout": [0.25],
         "hidden_dim": [32],
         "layernorm": [false],
         "mse_reduction": ["sum"],
@@ -43,7 +46,7 @@
     "vgae_model": {
       "model_type": ["NodeLevelVGAE"],
       "params": {
-        "dropout": [0.2],
+        "dropout": [0.25],
         "latent_dim": [32],
         "node_emb_dim": [32],
         "reg_strength": [0.01]
@@ -54,7 +57,7 @@
           "hidden_dim": [16],
           "layernorm": [true],
           "num_heads": [2],
-          "num_layers": [3]
+          "num_layers": [3, 4]
         }
       },
       "encoder_cfg": {
