@@ -18,13 +18,14 @@ import sys
 sys.path.append("../")
 
 import os
+import copy
 import argparse
 from utils.files import add_project_root
 from utils.configs import load_configs_from_json
 from experiments.run_experiment import run
 
 
-def main(weights_base_dir, output_dir, verbose, debug, seed, job_id=None, mlp_weights_dir=None):
+def main(weights_base_dir, output_dir, verbose, debug, seed, job_id=None, mlp_weights_dir=None, grail_mode='normal'):
     # Add project root to paths
     weights_base_dir = add_project_root(weights_base_dir)
     output_dir = add_project_root(output_dir)
@@ -74,11 +75,28 @@ def main(weights_base_dir, output_dir, verbose, debug, seed, job_id=None, mlp_we
             'mlp': [f'k{k}_linear_model.pth' for k in range(config['dataset']['num_folds'])],
             'test_fold_indices': ['test_fold_indices.csv']}
 
-    # CFRNet t-learners should do medusa grail
-    elif config['exname'] == 'train_cfrnet':
+    # Set GRAIL mode -----------------------------------------------------------
+    config_updates['dataset'] = copy.deepcopy(config['dataset'])
+    if grail_mode == 'medusa':
+        assert config['exname'] == 'train_cfrnet', 'Medusa mode only works with CFRNet architectures.'
+        config_updates['dataset']['drug_condition'] = None # use original treatment condition
         config_updates['medusa'] = True
 
-    # Run the experiment
+    elif grail_mode == 'escitalopram':
+        config_updates['dataset']['drug_condition'] = -1   # fix treatment to escitalopram
+        config_updates['medusa'] = False
+
+    elif grail_mode == 'psilocybin':
+        config_updates['dataset']['drug_condition'] = 1    # fix treatment to psilocybin
+        config_updates['medusa'] = False
+
+    elif grail_mode == 'normal':
+        config_updates['dataset']['drug_condition'] = None # use original treatment condition
+        config_updates['medusa'] = False
+    else:
+        raise ValueError(f'Invalid grail mode: {grail_mode}')
+
+    # Run the experiment ------------------------------------------------------
     run(exname, observer, config_updates)
 
 
@@ -100,7 +118,8 @@ if __name__ == "__main__":
     parser.add_argument('-j', '--job_id', type=int, default=None, help='Job ID')
     parser.add_argument('--mlp_weights_dir', type=str, default=None, 
                         help='Path to the directory with MLP weights. If None, use the same as the VGAE weights.')
+    parser.add_argument('--grail_mode', type=str, default='normal', choices=['normal', 'medusa', 'escitalopram', 'psilocybin'], help='Grail mode')
     args = parser.parse_args()
 
     # Run the main function
-    main(args.weights_base_dir, args.output_dir, args.verbose, args.debug, args.seed, args.job_id, args.mlp_weights_dir)
+    main(args.weights_base_dir, args.output_dir, args.verbose, args.debug, args.seed, args.job_id, args.mlp_weights_dir, args.grail_mode)
