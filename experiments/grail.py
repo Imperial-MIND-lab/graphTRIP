@@ -24,7 +24,6 @@ from experiments.ingredients.mlp_ingredient import *
 
 import os
 import torch
-import json
 from tqdm import tqdm
 from time import time
 import pandas as pd
@@ -36,7 +35,7 @@ from utils.files import add_project_root
 from utils.helpers import get_logger, fix_random_seed, triu_vector2mat_torch
 from utils.configs import load_ingredient_configs, match_ingredient_configs
 from utils.annotations import load_receptor_maps, load_rotated_rois
-from utils.statsalg import get_fold_performance, test_column_significance, compute_permutation_stats
+from utils.statsalg import test_column_significance, compute_permutation_stats
 from models.utils import freeze_model
 from preprocessing.metrics import compute_modularity_torch, get_rsn_mapping, get_atlas
 from statsmodels.stats.multitest import fdrcorrection
@@ -78,6 +77,7 @@ def cfg(dataset):
     all_rsn_conns = False       # Whether to compute RSN connectivity for all RSN pairs.
     medusa = False              # Only works with CFRHead MLP. Grails mlp1-mlp0 instead of ypred.
     this_k = None               # If None, compute all folds sequentially. If int, compute only fold this_k.
+    this_sub = None             # If None, compute all subjects sequentially. If int, compute only subject this_sub.
     n_permutations = 1000       # Number of permutations to use for null model analysis.
     cohen_d_threshold = 0.8     # Threshold for Cohen's d to consider a feature significant.
 
@@ -339,6 +339,7 @@ def run(_config):
     node_attrs = _config['dataset']['node_attrs']
     node_attrs = [attr.split('_')[0] for attr in node_attrs]
     this_k = _config['this_k']
+    this_sub = _config.get('this_sub', None)
     cohen_d_threshold = _config['cohen_d_threshold']
     n_permutations = _config['n_permutations']
 
@@ -347,6 +348,8 @@ def run(_config):
     if this_k is not None:
         if this_k < 0 or this_k >= max_num_folds:
             raise ValueError(f'Invalid this_k value: {this_k}. Must be None or 0 <= this_k < {max_num_folds}.')
+    
+    # Validate this_sub input (will be validated again after num_subs is known)
 
     # Determine the type of prediction head
     prediction_head_type = _config['mlp_model']['model_type']
@@ -374,16 +377,6 @@ def run(_config):
         # Add treatment transform to the dataset (required for CFRHead)
         add_treatment_transform(data)
 
-    # Get brain region labels
-    atlas = get_atlas(data.atlas)
-    brain_region_labels = [label.decode('utf-8') if isinstance(label, bytes) else label for label in atlas['labels']]
-
-    # Compute fold-wise performance of each model --------------------------
-    if len(vgaes) > 1:
-        fold_performance = get_fold_performance(mlp_weights_dir)
-        fold_performance.to_csv(os.path.join(output_dir, 'fold_performance.csv'), index=False)
-        ex.add_artifact(os.path.join(output_dir, 'fold_performance.csv'))
-
     # Sampling for each subject --------------------------------------------
     start_time = time()
 
@@ -407,22 +400,21 @@ def run(_config):
     else:
         folds_to_compute = [this_k]
     
+    # Determine which subjects to compute
+    if this_sub is None:
+        subjects_to_compute = range(num_subs)
+    else:
+        if this_sub < 0 or this_sub >= num_subs:
+            raise ValueError(f'Invalid this_sub value: {this_sub}. Must be 0 <= this_sub < {num_subs}.')
+        subjects_to_compute = [this_sub]
+    
     for k in folds_to_compute:
         
         # Load models for this fold
         vgae = vgaes[k].eval()
         mlp = mlps[k].eval()
         
-        # Initialize storage for regional gradient weights
-        all_subject_regional_importance = []
-        
-        # Storage for spin-permutation test results
-        all_mean_alignments = []  
-        all_selected_features = {}  # sub: [selected_features]
-        all_feature_zscores = []  # List of dicts, one per subject
-        all_feature_pvals = []  # List of dicts, one per subject
-        
-        for sub in tqdm(range(num_subs), desc=f'Fold {k}', disable=not verbose):
+        for sub in tqdm(subjects_to_compute, desc=f'Fold {k}', disable=not verbose):
             batch = Batch.from_data_list([data[sub]]).to(device)
             out = vgae(batch)
             mu = out.mu.detach()
@@ -430,13 +422,6 @@ def run(_config):
 
             # Get latent samples
             zs = get_zs(mu, logvar, vgae)
-            
-            # Get number of nodes and latent dimension
-            num_nodes = batch[0].num_nodes
-            latent_dim = zs[0].shape[1]
-            
-            # Initialize storage for regional importance scores across latent samples
-            subject_regional_importance = []
             
             # Storage for alignments across latent samples
             subject_alignments = []
@@ -453,16 +438,6 @@ def run(_config):
                 # Store ypred_grad for null distribution computation
                 ypred_grads.append(ypred_grad.detach().clone())
                 zs_list.append(z)
-                
-                # Regional gradient analysis ----------------------------------------
-                # Normalize ypred_grad
-                ypred_grad_copy = ypred_grad.clone().detach()
-                ypred_grad_norm = torch.nn.functional.normalize(ypred_grad_copy, p=2, dim=0)
-                
-                # Compute regional importance scores
-                ypred_grad_norm_reshaped = ypred_grad_norm.view(num_nodes, latent_dim) # (num_nodes, latent_dim)
-                regional_importance = torch.sum(torch.abs(ypred_grad_norm_reshaped), dim=1)  # (num_nodes,)
-                subject_regional_importance.append(regional_importance.cpu().numpy())  
                 
                 # Get reconstructed outputs
                 x, triu_edges = get_reconstructions(z, vgae, batch)
@@ -481,10 +456,6 @@ def run(_config):
                     node_attrs=node_attrs)
                 subject_alignments.append(alignments)
             
-            # Compute mean regional importance scores across latent samples for this subject
-            subject_regional_importance_mean = np.mean(subject_regional_importance, axis=0)  # (num_nodes,)
-            all_subject_regional_importance.append(subject_regional_importance_mean)
-            
             # First-stage GRAIL feature screening ----------------------------------------------
             # Perform 1-sample t-test + cohen d across latent samples for each feature
 
@@ -495,7 +466,6 @@ def run(_config):
             # Convert alignments to dataframe and store mean alignments for this subject
             feature_alignments = pd.DataFrame(subject_alignments)
             observed_mean_alignments = feature_alignments.mean(axis=0)
-            all_mean_alignments.append(observed_mean_alignments.to_dict())
             
             # Perform 1-sample t-test for each feature 
             feature_stats = test_column_significance(feature_alignments, test_type='t-test')
@@ -558,7 +528,6 @@ def run(_config):
 
                 # Identify significant features
                 significant_features = list(permtest_results[permtest_results['fdr_p_value'] < 0.05]['feature'])
-                all_selected_features[sub] = significant_features
                 
                 # Create dictionaries for z-scores and p-values for all features
                 # Initialize with NaN for all features
@@ -574,42 +543,31 @@ def run(_config):
                 # No selected features, so all features get NaN
                 feature_zscores = {feat: np.nan for feat in feature_names}
                 feature_pvals = {feat: np.nan for feat in feature_names}
-                all_selected_features[sub] = []
+                significant_features = []
             
-            # Store z-scores and p-values for this subject
-            all_feature_zscores.append(feature_zscores)
-            all_feature_pvals.append(feature_pvals)
-        
-        # Process alignment results ----------------------------------------------        
-        # Save mean alignments from all subjects for this fold
-        mean_alignments_df = pd.DataFrame(all_mean_alignments)
-        mean_alignments_df.insert(0, 'sub', range(num_subs))  # Add subject index as first column
-        mean_alignments_df.to_csv(os.path.join(output_dir, f'k{k}_mean_alignments.csv'), index=False)
-        ex.add_artifact(os.path.join(output_dir, f'k{k}_mean_alignments.csv'))
-        
-        # Save selected features for each subject as a JSON file
-        selected_features_path = os.path.join(output_dir, f'k{k}_selected_features.json')
-        with open(selected_features_path, 'w') as f:
-            json.dump(all_selected_features, f, indent=2)
-        ex.add_artifact(selected_features_path)
-        
-        # Save z-scores and p-values for all features and subjects
-        feature_zscores_df = pd.DataFrame(all_feature_zscores)
-        feature_zscores_df.insert(0, 'sub', range(num_subs))  # Add subject index as first column
-        feature_zscores_df.to_csv(os.path.join(output_dir, f'k{k}_feature_zscores.csv'), index=False)
-        ex.add_artifact(os.path.join(output_dir, f'k{k}_feature_zscores.csv'))
-        
-        feature_pvals_df = pd.DataFrame(all_feature_pvals)
-        feature_pvals_df.insert(0, 'sub', range(num_subs))  # Add subject index as first column
-        feature_pvals_df.to_csv(os.path.join(output_dir, f'k{k}_feature_pvals.csv'), index=False)
-        ex.add_artifact(os.path.join(output_dir, f'k{k}_feature_pvals.csv'))
-        
-        # Process regional gradient weights --------------------------------------
-        regional_grad_weights = np.array(all_subject_regional_importance) # (num_subs, num_nodes)
-        regional_grad_weights_df = pd.DataFrame(regional_grad_weights, columns=brain_region_labels)
-        regional_grad_weights_df.insert(0, 'sub', range(num_subs))  # Add subject index as first column
-        regional_grad_weights_df.to_csv(os.path.join(output_dir, f'k{k}_regional_grad_weights.csv'), index=False)
-        ex.add_artifact(os.path.join(output_dir, f'k{k}_regional_grad_weights.csv'))
+            # Create subject-specific output directory
+            sub_output_dir = os.path.join(output_dir, f'sub_{sub}')
+            os.makedirs(sub_output_dir, exist_ok=True)
+            
+            # Save mean alignments for this subject
+            mean_alignments_df = pd.DataFrame([observed_mean_alignments.to_dict()])
+            mean_alignments_df.to_csv(os.path.join(sub_output_dir, f'k{k}_mean_alignments.csv'), index=False)
+            ex.add_artifact(os.path.join(sub_output_dir, f'k{k}_mean_alignments.csv'))
+            
+            # Save selected features as CSV (one row, columns are feature names, 1 if selected, 0 if not)
+            selected_features_dict = {feat: 1 if feat in significant_features else 0 for feat in feature_names}
+            selected_features_df = pd.DataFrame([selected_features_dict])
+            selected_features_df.to_csv(os.path.join(sub_output_dir, f'k{k}_selected_features.csv'), index=False)
+            ex.add_artifact(os.path.join(sub_output_dir, f'k{k}_selected_features.csv'))
+            
+            # Save z-scores and p-values for this subject
+            feature_zscores_df = pd.DataFrame([feature_zscores])
+            feature_zscores_df.to_csv(os.path.join(sub_output_dir, f'k{k}_feature_zscores.csv'), index=False)
+            ex.add_artifact(os.path.join(sub_output_dir, f'k{k}_feature_zscores.csv'))
+            
+            feature_pvals_df = pd.DataFrame([feature_pvals])
+            feature_pvals_df.to_csv(os.path.join(sub_output_dir, f'k{k}_feature_pvals.csv'), index=False)
+            ex.add_artifact(os.path.join(sub_output_dir, f'k{k}_feature_pvals.csv'))
 
     # Log the runtime
     run_time = (time()-start_time)/60

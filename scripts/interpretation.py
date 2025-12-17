@@ -20,15 +20,12 @@ sys.path.append("../")
 import os
 import copy
 import argparse
-import resource
-import torch
 from utils.files import add_project_root
 from utils.configs import load_configs_from_json
 from experiments.run_experiment import run
 
 
-def main(weights_base_dir, output_dir, verbose, debug, seed, job_id=None, mlp_weights_dir=None, grail_mode='normal', 
-         n_workers=1, use_threads=True, max_memory_gb=None, cpu_limit=None):
+def main(weights_base_dir, output_dir, verbose, debug, seed, job_id=None, mlp_weights_dir=None, grail_mode='normal'):
     # Add project root to paths
     weights_base_dir = add_project_root(weights_base_dir)
     output_dir = add_project_root(output_dir)
@@ -44,24 +41,6 @@ def main(weights_base_dir, output_dir, verbose, debug, seed, job_id=None, mlp_we
     if not os.path.exists(weights_base_dir):
         raise FileNotFoundError(f"{weights_base_dir} not found")
     
-    # Set resource limits for cluster execution
-    if max_memory_gb is not None:
-        # Set memory limit (soft limit)
-        max_memory_bytes = int(max_memory_gb * 1024 * 1024 * 1024)
-        resource.setrlimit(resource.RLIMIT_AS, (max_memory_bytes, max_memory_bytes))
-        if verbose:
-            print(f"Memory limit set to {max_memory_gb} GB")
-    
-    if cpu_limit is not None:
-        # Set CPU affinity and thread limits
-        os.environ['OMP_NUM_THREADS'] = str(cpu_limit)
-        os.environ['MKL_NUM_THREADS'] = str(cpu_limit)
-        os.environ['NUMEXPR_NUM_THREADS'] = str(cpu_limit)
-        os.environ['OPENBLAS_NUM_THREADS'] = str(cpu_limit)
-        torch.set_num_threads(cpu_limit)
-        if verbose:
-            print(f"CPU threads limited to {cpu_limit}")
-    
     # Experiment settings
     observer = 'FileStorageObserver'
     weights_dir = os.path.join(weights_base_dir, f'seed_{seed}')
@@ -72,11 +51,12 @@ def main(weights_base_dir, output_dir, verbose, debug, seed, job_id=None, mlp_we
     config = load_configs_from_json(config_file)
 
     # GRAIL -------------------------------------------------------------------
-    exname = 'grail_parallel'
+    exname = 'grail'
     ex_dir = os.path.join(output_dir, f'seed_{seed}')
     # Common configs
     config_updates = {}
-    config_updates['this_k'] = job_id
+    config_updates['this_k'] = None
+    config_updates['this_sub'] = job_id
     config_updates['output_dir'] = ex_dir
     config_updates['vgae_weights_dir'] = weights_dir
     config_updates['mlp_weights_dir'] = mlp_weights_dir
@@ -87,8 +67,6 @@ def main(weights_base_dir, output_dir, verbose, debug, seed, job_id=None, mlp_we
     config_updates['cohen_d_threshold'] = 0.5
     config_updates['all_rsn_conns'] = False
     config_updates['n_permutations'] = 1000 if not debug else 3
-    config_updates['n_workers'] = n_workers
-    config_updates['use_threads'] = use_threads
 
     # Model-specific configs
     # CATE models don't have MLP config and need SklearnLinearModelWrapper
@@ -144,19 +122,8 @@ if __name__ == "__main__":
     parser.add_argument('--mlp_weights_dir', type=str, default=None, 
                         help='Path to the directory with MLP weights. If None, use the same as the VGAE weights.')
     parser.add_argument('--grail_mode', type=str, default='normal', choices=['normal', 'medusa', 'escitalopram', 'psilocybin'], help='Grail mode')
-    parser.add_argument('--n_workers', type=int, default=1, 
-                        help='Number of parallel workers for subject processing. Set to 1 for sequential, >1 for parallel.')
-    parser.add_argument('--use_threads', action='store_true', default=True,
-                        help='Use ThreadPoolExecutor (safer with CUDA). This is the default.')
-    parser.add_argument('--use_processes', dest='use_threads', action='store_false',
-                        help='Use ProcessPoolExecutor instead of ThreadPoolExecutor (not recommended with CUDA).')
-    parser.add_argument('--max_memory_gb', type=float, default=None,
-                        help='Maximum memory limit in GB (for cluster resource management).')
-    parser.add_argument('--cpu_limit', type=int, default=None,
-                        help='Limit number of CPU threads used by PyTorch and NumPy.')
     args = parser.parse_args()
 
     # Run the main function
     main(args.weights_base_dir, args.output_dir, args.verbose, args.debug, args.seed, args.job_id, 
-         args.mlp_weights_dir, args.grail_mode, args.n_workers, args.use_threads, 
-         args.max_memory_gb, args.cpu_limit)
+         args.mlp_weights_dir, args.grail_mode)
