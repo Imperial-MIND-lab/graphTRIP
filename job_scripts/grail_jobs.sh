@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#PBS -l select=1:ncpus=12:mem=8gb
-#PBS -l walltime=8:00:00
-#PBS -N grail_jobs
+#PBS -l select=1:ncpus=16:mem=8gb
+#PBS -l walltime=12:00:00
+#PBS -N speedy_grail_jobs
 #PBS -J 0-279
 
 # GRAIL interpretation jobs.
@@ -29,10 +29,10 @@ INTERPRETATION_XGRAPHTRIP_ESCITALOPRAM_END=209
 INTERPRETATION_XGRAPHTRIP_PSILOCYBIN_START=210
 INTERPRETATION_XGRAPHTRIP_PSILOCYBIN_END=279
 
-# Resource limits (adjust based on cluster requirements)
-N_WORKERS=2
-MAX_MEMORY_GB=6
-CPU_LIMIT=4
+# Resource limits
+N_WORKERS=4 
+MAX_MEMORY_GB=7      
+CPU_LIMIT=3 
 
 # Run the appropriate script based on PBS_ARRAY_INDEX
 if [ $PBS_ARRAY_INDEX -ge $INTERPRETATION_GRAPHTRIP_START ] && [ $PBS_ARRAY_INDEX -le $INTERPRETATION_GRAPHTRIP_END ]; then
@@ -43,7 +43,7 @@ if [ $PBS_ARRAY_INDEX -ge $INTERPRETATION_GRAPHTRIP_START ] && [ $PBS_ARRAY_INDE
     SEED=$((RELATIVE_INDEX % 10))
     WEIGHTS_BASE_DIR='outputs/graphtrip/weights/'
     MLP_WEIGHTS_DIR='outputs/graphtrip/weights/'
-    OUTPUT_DIR='outputs/graphtrip/grail_100_perms/'
+    OUTPUT_DIR='outputs/graphtrip/grail_1000_perms/'
     python interpretation.py -j ${JOBID} -s ${SEED} -v \
         --weights_base_dir ${WEIGHTS_BASE_DIR} \
         --mlp_weights_dir ${MLP_WEIGHTS_DIR} \
@@ -60,7 +60,7 @@ elif [ $PBS_ARRAY_INDEX -ge $INTERPRETATION_XGRAPHTRIP_MEDUSA_START ] && [ $PBS_
     SEED=$((RELATIVE_INDEX % 10))
     WEIGHTS_BASE_DIR='outputs/x_graphtrip/tlearner/'
     MLP_WEIGHTS_DIR='outputs/x_graphtrip/tlearner/'
-    OUTPUT_DIR='outputs/x_graphtrip/medusa_grail/'
+    OUTPUT_DIR='outputs/x_graphtrip/medusa_grail_1000_perms/'
     GRAIL_MODE='medusa'
     python interpretation.py -j ${JOBID} -s ${SEED} -v \
         --weights_base_dir ${WEIGHTS_BASE_DIR} \
@@ -79,7 +79,7 @@ elif [ $PBS_ARRAY_INDEX -ge $INTERPRETATION_XGRAPHTRIP_ESCITALOPRAM_START ] && [
     SEED=$((RELATIVE_INDEX % 10))
     WEIGHTS_BASE_DIR='outputs/x_graphtrip/tlearner/'
     MLP_WEIGHTS_DIR='outputs/x_graphtrip/tlearner/'
-    OUTPUT_DIR='outputs/x_graphtrip/grail_escitalopram/'
+    OUTPUT_DIR='outputs/x_graphtrip/grail_escitalopram_1000_perms/'
     GRAIL_MODE='escitalopram'
     python interpretation.py -j ${JOBID} -s ${SEED} -v \
         --weights_base_dir ${WEIGHTS_BASE_DIR} \
@@ -98,7 +98,7 @@ elif [ $PBS_ARRAY_INDEX -ge $INTERPRETATION_XGRAPHTRIP_PSILOCYBIN_START ] && [ $
     SEED=$((RELATIVE_INDEX % 10))
     WEIGHTS_BASE_DIR='outputs/x_graphtrip/tlearner/'
     MLP_WEIGHTS_DIR='outputs/x_graphtrip/tlearner/'
-    OUTPUT_DIR='outputs/x_graphtrip/grail_psilocybin/'
+    OUTPUT_DIR='outputs/x_graphtrip/grail_psilocybin_1000_perms/'
     GRAIL_MODE='psilocybin'
     python interpretation.py -j ${JOBID} -s ${SEED} -v \
         --weights_base_dir ${WEIGHTS_BASE_DIR} \
