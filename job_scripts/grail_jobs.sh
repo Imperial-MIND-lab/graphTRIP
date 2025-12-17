@@ -43,7 +43,7 @@ if [ $PBS_ARRAY_INDEX -ge $INTERPRETATION_GRAPHTRIP_START ] && [ $PBS_ARRAY_INDE
     SEED=$((RELATIVE_INDEX % 10))
     WEIGHTS_BASE_DIR='outputs/graphtrip/weights/'
     MLP_WEIGHTS_DIR='outputs/graphtrip/weights/'
-    OUTPUT_DIR='outputs/graphtrip/grail/'
+    OUTPUT_DIR='outputs/graphtrip/grail_100_perms/'
     python interpretation.py -j ${JOBID} -s ${SEED} -v \
         --weights_base_dir ${WEIGHTS_BASE_DIR} \
         --mlp_weights_dir ${MLP_WEIGHTS_DIR} \
