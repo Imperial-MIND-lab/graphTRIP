@@ -719,11 +719,15 @@ def compute_permutation_stats(observed_val, null_dist, alternative='two-sided'):
     else:
         raise ValueError("alternative must be 'greater', 'less', or 'two-sided'")
 
+    # Also return z-score
+    z_score = (observed_val - null_mean) / null_std
+
     return {
         "observed": observed_val,
         "p_value": p_val_nonparam,
         "null_mean": null_mean,
         "null_std": null_std,
+        "z_score": z_score
     }
 
 def test_column_significance(df, test_type='t-test', alpha=0.05):

@@ -84,8 +84,9 @@ def main(weights_base_dir, output_dir, verbose, debug, seed, job_id=None, mlp_we
     config_updates['verbose'] = verbose
     config_updates['num_z_samples'] = 25 if not debug else 2
     config_updates['sigma'] = 2.0
+    config_updates['cohen_d_threshold'] = 0.5
     config_updates['all_rsn_conns'] = False
-    config_updates['n_permutations'] = 100 if not debug else 3
+    config_updates['n_permutations'] = 1000 if not debug else 3
     config_updates['n_workers'] = n_workers
     config_updates['use_threads'] = use_threads
 

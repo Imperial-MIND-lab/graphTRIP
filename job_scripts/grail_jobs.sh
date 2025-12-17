@@ -1,7 +1,7 @@
 #!/bin/bash
 
-#PBS -l select=1:ncpus=16:mem=16gb
-#PBS -l walltime=12:00:00
+#PBS -l select=1:ncpus=12:mem=8gb
+#PBS -l walltime=8:00:00
 #PBS -N grail_jobs
 #PBS -J 0-279
 

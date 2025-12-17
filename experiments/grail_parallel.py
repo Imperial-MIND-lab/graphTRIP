@@ -83,7 +83,7 @@ def cfg(dataset):
     n_permutations = 1000       # Number of permutations to use for null model analysis.
     cohen_d_threshold = 0.8     # Threshold for Cohen's d to consider a feature significant.
     n_workers = 1               # Number of parallel workers for subject processing. Set to 1 for sequential, >1 for parallel.
-    use_threads = True           # If True, use ThreadPoolExecutor (safer with CUDA). If False, use ProcessPoolExecutor.
+    use_threads = True          # If True, use ThreadPoolExecutor. If False, use ProcessPoolExecutor.
 
 # Match configs function -------------------------------------------------------
 def match_config(config: Dict) -> Dict:
@@ -471,13 +471,31 @@ def process_subject(sub, data, vgae, mlp, device, rsn_mapping, rsn_names, recept
 
         # Identify significant features
         significant_features = list(permtest_results[permtest_results['fdr_p_value'] < 0.05]['feature'])
+        
+        # Create dictionaries for z-scores and p-values for all features
+        # Initialize with NaN for all features
+        feature_zscores = {feat: np.nan for feat in feature_names}
+        feature_pvals = {feat: np.nan for feat in feature_names}
+        
+        # Fill in values for selected features that were tested
+        for _, row in permtest_results.iterrows():
+            feat = row['feature']
+            feature_zscores[feat] = row['z_score']
+            feature_pvals[feat] = row['p_value']
+    else:
+        # No selected features, so all features get NaN
+        feature_zscores = {feat: np.nan for feat in feature_names}
+        feature_pvals = {feat: np.nan for feat in feature_names}
+        significant_features = []
     
     return {
         'sub': sub,
         'regional_importance': subject_regional_importance_mean,
         'mean_alignments': observed_mean_alignments.to_dict(),
         'selected_features': significant_features,
-        'feature_names': feature_names
+        'feature_names': feature_names,
+        'feature_zscores': feature_zscores,
+        'feature_pvals': feature_pvals
     }
 
 # Main function ----------------------------------------------------------------
@@ -578,10 +596,13 @@ def run(_config):
         
         # Initialize storage for regional gradient weights
         all_subject_regional_importance = []
+        all_subject_indices = []  # Store subject indices to ensure correct ordering
         
         # Storage for spin-permutation test results
         all_mean_alignments = []  
         all_selected_features = {}  # sub: [selected_features]
+        all_feature_zscores = []  # List of dicts, one per subject
+        all_feature_pvals = []  # List of dicts, one per subject
         
         # Create partial function with fixed arguments
         process_subject_partial = partial(
@@ -629,20 +650,27 @@ def run(_config):
             
             # Extract results
             for result in results_list:
+                all_subject_indices.append(result['sub'])
                 all_subject_regional_importance.append(result['regional_importance'])
                 all_mean_alignments.append(result['mean_alignments'])
                 all_selected_features[result['sub']] = result['selected_features']
+                all_feature_zscores.append(result['feature_zscores'])
+                all_feature_pvals.append(result['feature_pvals'])
         else:
             # Sequential processing (original behavior)
             for sub in tqdm(range(num_subs), desc=f'Fold {k}', disable=not verbose):
                 result = process_subject_partial(sub)
+                all_subject_indices.append(result['sub'])
                 all_subject_regional_importance.append(result['regional_importance'])
                 all_mean_alignments.append(result['mean_alignments'])
                 all_selected_features[result['sub']] = result['selected_features']
+                all_feature_zscores.append(result['feature_zscores'])
+                all_feature_pvals.append(result['feature_pvals'])
         
         # Process alignment results ----------------------------------------------        
         # Save mean alignments from all subjects for this fold
         mean_alignments_df = pd.DataFrame(all_mean_alignments)
+        mean_alignments_df.insert(0, 'sub', all_subject_indices)  # Add subject index as first column
         mean_alignments_df.to_csv(os.path.join(output_dir, f'k{k}_mean_alignments.csv'), index=False)
         ex.add_artifact(os.path.join(output_dir, f'k{k}_mean_alignments.csv'))
         
@@ -652,9 +680,21 @@ def run(_config):
             json.dump(all_selected_features, f, indent=2)
         ex.add_artifact(selected_features_path)
         
+        # Save z-scores and p-values for all features and subjects
+        feature_zscores_df = pd.DataFrame(all_feature_zscores)
+        feature_zscores_df.insert(0, 'sub', all_subject_indices)  # Add subject index as first column
+        feature_zscores_df.to_csv(os.path.join(output_dir, f'k{k}_feature_zscores.csv'), index=False)
+        ex.add_artifact(os.path.join(output_dir, f'k{k}_feature_zscores.csv'))
+        
+        feature_pvals_df = pd.DataFrame(all_feature_pvals)
+        feature_pvals_df.insert(0, 'sub', all_subject_indices)  # Add subject index as first column
+        feature_pvals_df.to_csv(os.path.join(output_dir, f'k{k}_feature_pvals.csv'), index=False)
+        ex.add_artifact(os.path.join(output_dir, f'k{k}_feature_pvals.csv'))
+        
         # Process regional gradient weights --------------------------------------
         regional_grad_weights = np.array(all_subject_regional_importance) # (num_subs, num_nodes)
         regional_grad_weights_df = pd.DataFrame(regional_grad_weights, columns=brain_region_labels)
+        regional_grad_weights_df.insert(0, 'sub', all_subject_indices)  # Add subject index as first column
         regional_grad_weights_df.to_csv(os.path.join(output_dir, f'k{k}_regional_grad_weights.csv'), index=False)
         ex.add_artifact(os.path.join(output_dir, f'k{k}_regional_grad_weights.csv'))
 
