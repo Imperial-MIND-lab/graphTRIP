@@ -956,9 +956,23 @@ def get_kfold_features_for_all_subjects(results_paths):
     if not all_data:
         raise ValueError("No valid data files found in results_paths")
     
-    # Get subjects and features from first dataframe
-    subjects = all_data[0].index
-    features = all_data[0].columns
+    # Check if "sub" column exists in the first dataframe
+    first_df = all_data[0]
+    use_sub_column = 'sub' in first_df.columns
+    
+    # If using "sub" column, verify all dataframes have it
+    if use_sub_column:
+        for idx, df in enumerate(all_data):
+            if 'sub' not in df.columns:
+                raise ValueError(f"Dataframe at index {idx} is missing 'sub' column, but first dataframe has it.")
+        # Use "sub" column to identify subjects
+        subjects = first_df['sub'].unique()
+        # Get feature columns (exclude "sub" column)
+        features = [col for col in first_df.columns if col != 'sub']
+    else:
+        # Fall back to using index
+        subjects = first_df.index
+        features = first_df.columns
     
     # For each subject, create a dataframe of their feature values across folds
     for subject in subjects:
@@ -967,7 +981,18 @@ def get_kfold_features_for_all_subjects(results_paths):
         
         # Fill in the feature values for each fold
         for fold_idx, df in enumerate(all_data):
-            subject_df.loc[fold_idx] = df.loc[subject]
+            if use_sub_column:
+                # Use "sub" column to select the row for this subject
+                subject_row = df[df['sub'] == subject]
+                if len(subject_row) == 0:
+                    raise ValueError(f"Subject {subject} not found in fold {fold_idx}")
+                # Extract feature values (exclude "sub" column)
+                feature_values = subject_row[features].iloc[0]
+            else:
+                # Use index to select the row
+                feature_values = df.loc[subject]
+            
+            subject_df.loc[fold_idx] = feature_values
         
         subject_dataframes.append(subject_df)
     

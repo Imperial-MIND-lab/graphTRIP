@@ -8,12 +8,13 @@ import matplotlib.colors as mcolors
 
 import numpy as np
 import pandas as pd
-from scipy.stats import pearsonr, ttest_rel, linregress
+from scipy.stats import pearsonr, ttest_rel
 from scipy import stats
 from statsmodels.stats.multitest import fdrcorrection
 from sklearn.metrics import confusion_matrix, roc_curve, roc_auc_score
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
+from matplotlib.patches import Patch
 
 from nilearn import plotting, datasets, surface
 from nilearn.image import new_img_like
@@ -2537,6 +2538,66 @@ def plot_categorical_matrix(df, palette, figsize=None, save_path=None):
     if save_path:
         plt.savefig(save_path, bbox_inches='tight')
     else:
+        plt.show()
+
+def plot_biomarker_heatmap(df, palette_dict, save_path=None):
+    """
+    Plots a categorical heatmap for biomarkers across subjects.
+    
+    Args:
+        df: pd.DataFrame (subjects x biomarkers) containing string labels.
+        palette_dict: dict mapping string labels to RGB tuples (e.g., (0.1, 0.2, 0.5)).
+    """
+    # 1. Map the string labels to integers for plotting
+    # We sort keys to ensure consistent mapping
+    categories = list(palette_dict.keys())
+    cat_to_int = {cat: i for i, cat in enumerate(categories)}
+    int_df = df.replace(cat_to_int)
+    
+    # 2. Create a discrete colormap from the palette_dict
+    # Ensure colors are in the same order as the categories
+    colors = [palette_dict[cat] for cat in categories]
+    custom_cmap = ListedColormap(colors)
+    
+    # 3. Initialize the figure
+    plt.figure(figsize=(max(10, len(df.columns) * 0.3), max(6, len(df) * 0.2)))
+    
+    # 4. Plot the heatmap
+    # cbar=False because we will create a custom legend
+    ax = sns.heatmap(
+        int_df, 
+        cmap=custom_cmap, 
+        cbar=False, 
+        linewidths=0.5, 
+        linecolor='lightgray',
+        yticklabels=True,
+        xticklabels=True
+    )
+    
+    # 5. Formatting Ticks
+    plt.xticks(rotation=90, fontsize=10)
+    plt.yticks(rotation=0, fontsize=8)
+    plt.xlabel("Candidate Biomarkers", fontsize=12, fontweight='bold')
+    plt.ylabel("Subjects", fontsize=12, fontweight='bold')
+    
+    # 6. Add Custom Legend
+    legend_elements = [
+        Patch(facecolor=palette_dict[cat], label=cat, edgecolor='black') 
+        for cat in categories
+    ]
+    plt.legend(
+        handles=legend_elements, 
+        title="Response Category",
+        bbox_to_anchor=(1.05, 1), 
+        loc='upper left', 
+        borderaxespad=0.
+    )
+
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.tight_layout()
         plt.show()
 
 # VGAE plotting -----------------------------------------------------------------

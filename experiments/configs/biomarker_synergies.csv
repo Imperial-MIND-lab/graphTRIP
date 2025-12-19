@@ -1,0 +1,17 @@
+Shared,Psilocybin,Escitalopram,ITE,Biomarker_Category
+-1,-1,-1,0,Shared_response
+-1,-1,-1,1,Shared_response
+-1,-1,-1,-1,Shared_response
+1,1,1,0,Shared_resistance
+1,1,1,1,Shared_resistance
+1,1,1,-1,Shared_resistance
+-1,0,-1,1,E_response
+0,0,-1,1,E_response
+-1,-1,0,-1,P_response
+0,-1,0,-1,P_response
+1,0,1,-1,E_resistance
+0,0,1,-1,E_resistance
+1,1,0,1,P_resistance
+0,1,0,1,P_resistance
+0,1,-1,1,E_response_P_resistance
+0,-1,1,-1,P_response_E_resistance
