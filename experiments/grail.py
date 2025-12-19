@@ -37,7 +37,7 @@ from utils.configs import load_ingredient_configs, match_ingredient_configs
 from utils.annotations import load_receptor_maps, load_rotated_rois
 from utils.statsalg import test_column_significance, compute_permutation_stats
 from models.utils import freeze_model
-from preprocessing.metrics import compute_modularity_torch, get_rsn_mapping, get_atlas
+from preprocessing.metrics import compute_modularity_torch, get_rsn_mapping
 from statsmodels.stats.multitest import fdrcorrection
 
 
@@ -349,8 +349,6 @@ def run(_config):
         if this_k < 0 or this_k >= max_num_folds:
             raise ValueError(f'Invalid this_k value: {this_k}. Must be None or 0 <= this_k < {max_num_folds}.')
     
-    # Validate this_sub input (will be validated again after num_subs is known)
-
     # Determine the type of prediction head
     prediction_head_type = _config['mlp_model']['model_type']
 

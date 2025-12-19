@@ -39,7 +39,7 @@ if [ $PBS_ARRAY_INDEX -ge $INTERPRETATION_GRAPHTRIP_START ] && [ $PBS_ARRAY_INDE
     WEIGHTS_BASE_DIR='outputs/graphtrip/weights/'
     MLP_WEIGHTS_DIR='outputs/graphtrip/weights/'
     OUTPUT_DIR='outputs/graphtrip/grail/'
-    python interpretation.py -j ${JOBID} -s ${SEED} -v \
+    python xai_biomarkers.py -j ${JOBID} -s ${SEED} -v \
         --weights_base_dir ${WEIGHTS_BASE_DIR} \
         --mlp_weights_dir ${MLP_WEIGHTS_DIR} \
         --output_dir ${OUTPUT_DIR}
@@ -54,7 +54,7 @@ elif [ $PBS_ARRAY_INDEX -ge $INTERPRETATION_XGRAPHTRIP_MEDUSA_START ] && [ $PBS_
     MLP_WEIGHTS_DIR='outputs/x_graphtrip/tlearner/'
     OUTPUT_DIR='outputs/x_graphtrip/medusa_grail/'
     GRAIL_MODE='medusa'
-    python interpretation.py -j ${JOBID} -s ${SEED} -v \
+    python xai_biomarkers.py -j ${JOBID} -s ${SEED} -v \
         --weights_base_dir ${WEIGHTS_BASE_DIR} \
         --mlp_weights_dir ${MLP_WEIGHTS_DIR} \
         --output_dir ${OUTPUT_DIR} \
@@ -70,7 +70,7 @@ elif [ $PBS_ARRAY_INDEX -ge $INTERPRETATION_XGRAPHTRIP_ESCITALOPRAM_START ] && [
     MLP_WEIGHTS_DIR='outputs/x_graphtrip/tlearner/'
     OUTPUT_DIR='outputs/x_graphtrip/grail_escitalopram/'
     GRAIL_MODE='escitalopram'
-    python interpretation.py -j ${JOBID} -s ${SEED} -v \
+    python xai_biomarkers.py -j ${JOBID} -s ${SEED} -v \
         --weights_base_dir ${WEIGHTS_BASE_DIR} \
         --mlp_weights_dir ${MLP_WEIGHTS_DIR} \
         --output_dir ${OUTPUT_DIR} \
@@ -86,7 +86,7 @@ elif [ $PBS_ARRAY_INDEX -ge $INTERPRETATION_XGRAPHTRIP_PSILOCYBIN_START ] && [ $
     MLP_WEIGHTS_DIR='outputs/x_graphtrip/tlearner/'
     OUTPUT_DIR='outputs/x_graphtrip/grail_psilocybin/'
     GRAIL_MODE='psilocybin'
-    python interpretation.py -j ${JOBID} -s ${SEED} -v \
+    python xai_biomarkers.py -j ${JOBID} -s ${SEED} -v \
         --weights_base_dir ${WEIGHTS_BASE_DIR} \
         --mlp_weights_dir ${MLP_WEIGHTS_DIR} \
         --output_dir ${OUTPUT_DIR} \
