@@ -557,7 +557,7 @@ def main(core_model_dir, medusa_model_dir, overwrite=False):
     # Perform post-hoc analysis for each model -----------------------------------------------------
     grail_dirs = {
         'Shared': os.path.join(core_model_dir, 'grail'),                      # Shared biomarkers
-        'ITE': os.path.join(medusa_model_dir, 'medusa_grail'),                # ITE biomarkers (negative = P response, positive = E response)
+        'ITE': os.path.join(medusa_model_dir, 'grail'),                       # ITE biomarkers (negative = P response, positive = E response)
         'Escitalopram': os.path.join(medusa_model_dir, 'grail_escitalopram'), # Escitalopram biomarkers
         'Psilocybin': os.path.join(medusa_model_dir, 'grail_psilocybin'),     # Psilocybin biomarkers
     }
