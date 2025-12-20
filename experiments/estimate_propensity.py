@@ -83,6 +83,33 @@ def extract_latent_representations(vgae, data, device):
     
     return z, y, clinical_data, subject_ids
 
+def median_pairwise_distance(x):
+    with torch.no_grad():
+        dist = torch.cdist(x, x, p=2)  # shape (n, n)
+        triu = dist.triu(1)  # upper triangle without diagonal
+        return torch.median(triu[triu > 0])
+
+def compute_mmd(x_treated, x_control):
+    # Estimate the MMD kernel width from the data
+    mmd_sigma = median_pairwise_distance(torch.cat([x_treated, x_control], dim=0))
+
+    # Compute the MMD
+    def rbf_kernel(a, b, sigma):
+        a_norm = (a ** 2).sum(1).reshape(-1, 1)
+        b_norm = (b ** 2).sum(1).reshape(1, -1)
+        dist = a_norm + b_norm - 2.0 * torch.mm(a, b.T)
+        return torch.exp(-dist / (2 * sigma ** 2))
+
+    K_tt = rbf_kernel(x_treated, x_treated, mmd_sigma)
+    K_cc = rbf_kernel(x_control, x_control, mmd_sigma)
+    K_tc = rbf_kernel(x_treated, x_control, mmd_sigma)
+
+    m = x_treated.shape[0]
+    n = x_control.shape[0]
+
+    mmd = K_tt.sum() / (m * m) + K_cc.sum() / (n * n) - 2 * K_tc.sum() / (m * n)
+    return mmd
+
 # Define configurations --------------------------------------------------------
 @ex.config
 def cfg(dataset):
@@ -208,7 +235,7 @@ def run(_config):
         # We actually want to train on [z, clinical_data] -> the MLP input in train_jointly.py
         x_train = np.concatenate([z_train, clinical_train], axis=1)
         x_test = np.concatenate([z_test, clinical_test], axis=1)
-        
+
         # Apply PCA if requested
         pca = None
         if n_pca_components > 0:
@@ -403,7 +430,6 @@ def run(_config):
 
     # 4. Raincloud plot with propensity distributions
     palette = {'escitalopram': ESCIT, 'psilocybin': PSILO}
-    symbols = {'escitalopram': 'o', 'psilocybin': 'd'}
     save_path = os.path.join(output_dir, 'propensity_raincloud.png')
     distributions = {
         'escitalopram': all_outputs_df[all_outputs_df['label'] == 0]['prediction'],
@@ -417,8 +443,49 @@ def run(_config):
 
     # Close all plots
     plt.close('all')
+    
+    # Compute MMD distances between treatment groups ----------------------------
+    mmd_results = []
+    
+    for k in tqdm(range(num_folds), desc='MMD folds', disable=not verbose):
+        # Get pretrained VGAE for this fold
+        vgae = pretrained_vgaes[k].to(device)
+        vgae = freeze_model(vgae)
+        
+        # Extract latent representations for entire dataset
+        z_all, y_all, clinical_all, _ = extract_latent_representations(
+            vgae, data, device)
+        
+        # Create x_all (concatenate z and clinical data)
+        x_all = np.concatenate([z_all, clinical_all], axis=1)
 
-    # Log all images
+        # Z-score all x (handle zero std)
+        x_std = x_all.std(axis=0)
+        x_std[x_std == 0] = 1.0
+        x_all = (x_all - x_all.mean(axis=0)) / x_std
+        
+        # Separate by treatment condition (0 = control, 1 = treated)
+        x_control = x_all[y_all == 0]
+        x_treated = x_all[y_all == 1]
+        
+        # Convert to torch tensors for MMD computation
+        x_control_tensor = torch.from_numpy(x_control).float().to(device)
+        x_treated_tensor = torch.from_numpy(x_treated).float().to(device)
+        
+        # Compute MMD distances
+        mmd_x = compute_mmd(x_treated_tensor, x_control_tensor)
+        mmd_results.append({
+            'fold': k,
+            'mmd': mmd_x.cpu().item()
+        })
+    
+    # Save to CSV
+    mmd_df = pd.DataFrame(mmd_results)
+    mmd_path = os.path.join(output_dir, 'mmd.csv')
+    mmd_df.to_csv(mmd_path, index=False)
+    logger.info(f"Saved MMD results to {mmd_path}")
+        
+    # Log all images (including t-SNE plots)
     for img in image_files:
         if img is not None:
             ex.add_artifact(filename=img)
