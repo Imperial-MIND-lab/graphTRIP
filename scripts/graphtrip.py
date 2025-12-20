@@ -9,6 +9,8 @@ Outputs:
 - outputs/graphtrip/permutation_importance/
 - outputs/graphtrip/transfer_atlas/schaefer200/
 - outputs/graphtrip/transfer_atlas/aal/
+- outputs/graphtrip/predictions_escitalopram/
+- outputs/graphtrip/predictions_psilocybin/
 
 Author: Hanna M. Tolle
 Date: 2025-05-31
@@ -109,6 +111,30 @@ def main(config_file, output_dir, verbose, debug, seed, config_id=0):
             run(exname, observer, config_updates)
         else:
             print(f"Transfer to {atlas} experiment already exists in {ex_dir}.")
+
+    # Generate counterfactual predictions for each drug -----------------------
+    exname = 'test_and_finetune'
+    drugs = ['escitalopram', 'psilocybin']
+
+    for drug in drugs:
+        ex_dir = os.path.join(output_dir, f'predictions_{drug}', f'seed_{seed}')
+        drug_label = -1.0 if drug == 'escitalopram' else 1.0
+        if not os.path.exists(ex_dir):
+            # Get ingredient configs
+            config_updates = copy.deepcopy(ingredient_config)
+            
+            # Change the atlas
+            config_updates['dataset']['drug_condition'] = drug_label
+
+            # Other settings
+            config_updates['num_epochs'] = 0 # no finetuning
+            config_updates['output_dir'] = ex_dir
+            config_updates['weights_dir'] = weights_dir
+            config_updates['save_weights'] = False 
+
+            run(exname, observer, config_updates)
+        else:
+            print(f"Counterfactual predictions for {drug} already exist in {ex_dir}.")
 
 
 if __name__ == "__main__":

@@ -1,10 +1,10 @@
 #!/bin/bash
 
-#PBS -l select=1:ncpus=4:mem=4gb
+#PBS -l select=1:ncpus=4:mem=8gb
 #PBS -l walltime=0:30:00
 #PBS -N posthoc_analysis
 
-# Script for running the post-hoc analysis after primary scripts have been run.
+# Script for running the post-hoc analysis after primary and secondary scripts have been run.
 
 # Load environment
 module load anaconda3/personal
@@ -12,14 +12,6 @@ source activate graphtrip
 cd ~/projects/graphTRIP/scripts
 
 # Run post-hoc analysis for graphTRIP
-GRAIL_DIR='outputs/graphtrip/grail/'
-WEIGHTS_DIR='outputs/graphtrip/weights/'
-python posthoc.py --grail_dir $GRAIL_DIR --weights_dir $WEIGHTS_DIR -s 0
-
-# Run post-hoc analysis for x-graphTRIP
-GRAIL_DIR='outputs/x_graphtrip/medusa_grail/'
-python posthoc.py --grail_dir $GRAIL_DIR -s 0
-
-# Run post-hoc analysis for cate model
-GRAIL_DIR='outputs/x_graphtrip/grail/'
-python posthoc.py --grail_dir $GRAIL_DIR -s 0
+CORE_MODEL_DIR='outputs/graphtrip/'
+MEDUSA_MODEL_DIR='outputs/medusa_graphtrip/'
+python posthoc.py --core_model_dir $CORE_MODEL_DIR --medusa_model_dir $MEDUSA_MODEL_DIR

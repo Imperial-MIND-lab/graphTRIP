@@ -604,7 +604,7 @@ def main(core_model_dir, medusa_model_dir, overwrite=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--core_model_dir', type=str, default='outputs/graphtrip/')
-    parser.add_argument('--medusa_model_dir', type=str, default='outputs/x_graphtrip/')
+    parser.add_argument('--medusa_model_dir', type=str, default='outputs/medusa_graphtrip/')
     parser.add_argument('--overwrite', action='store_true', default=False)
     args = parser.parse_args()
     main(args.core_model_dir, args.medusa_model_dir, args.overwrite)
