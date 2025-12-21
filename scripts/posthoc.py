@@ -589,7 +589,8 @@ def main(core_model_dir, medusa_model_dir, overwrite=False):
         posthoc_dir = os.path.join(grail_dir, 'posthoc_analysis')
         alignment_fdrs = pd.read_csv(os.path.join(posthoc_dir, 'fdr_corrected_alignment_pvalues.csv'))
         all_fdrs[model_name] = alignment_fdrs
-        alignment_weights = pd.read_csv(os.path.join(posthoc_dir, 'weighted_mean_alignments.csv')) 
+        alignment_weights = pd.read_csv(os.path.join(posthoc_dir, 'weighted_mean_alignments.csv'))
+        all_alignments[model_name] = alignment_weights
 
     # Assign biomarkers to categories
     output_dir = os.path.join('outputs', 'biomarker_categories')
