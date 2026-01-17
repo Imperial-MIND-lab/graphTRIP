@@ -133,15 +133,15 @@ def compute_features(adj,
     rsn_modularity = compute_modularity_torch(adj, rsn_mapping)
     process_feature('modularity_rsn', rsn_modularity)
 
-    # Compute Louvain communities (no gradients)
-    adj_np = adj.detach().cpu().numpy()
-    np.fill_diagonal(adj_np, 0) # no self-loops
-    G = nx.from_numpy_array(adj_np)
-    louvain_communities = nx.community.louvain_communities(G, seed=seed)
+    # # Compute Louvain communities (no gradients)
+    # adj_np = adj.detach().cpu().numpy()
+    # np.fill_diagonal(adj_np, 0) # no self-loops
+    # G = nx.from_numpy_array(adj_np)
+    # louvain_communities = nx.community.louvain_communities(G, seed=seed)
     
-    # Compute modularity with Louvain communities
-    louvain_modularity = compute_modularity_torch(adj, louvain_communities)
-    process_feature('modularity', louvain_modularity)
+    # # Compute modularity with Louvain communities
+    # louvain_modularity = compute_modularity_torch(adj, louvain_communities)
+    # process_feature('modularity', louvain_modularity)
 
     # RSN connectivity
     if all_rsn_conns:
@@ -183,16 +183,9 @@ def compute_features(adj,
         
         # Correlations between node attributes and receptor densities
         for receptor, density in receptor_maps.items():
-            if receptor.upper() not in node_attrs:
-                for attr_idx, attr in enumerate(node_attrs):
-                    feat = compute_correlation(x[:, attr_idx], density)
-                    process_feature(f'x{attr}_corr_{receptor}', feat)
-        
-        # Correlations between pairs of node attributes
-        for i in range(len(node_attrs)):
-            for j in range(i+1, len(node_attrs)):
-                feat = compute_correlation(x[:, i], x[:, j])
-                process_feature(f'x{node_attrs[i]}_corr_x{node_attrs[j]}', feat)
+            for attr_idx, attr in enumerate(node_attrs):
+                feat = compute_correlation(x[:, attr_idx], density)
+                process_feature(f'x{attr}_corr_{receptor}', feat)
     
     return feature_values
 

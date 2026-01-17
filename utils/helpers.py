@@ -283,7 +283,6 @@ def load_optimised_original_adj(results_dir: str) -> tuple:
 # Sort GRAIL feature names ---------------------------------------------------
 def get_groups(features):
     node_feature_corrs = ['x5-HT1A_corr_x5-HT2A', 'x5-HT1A_corr_x5-HTT', 'x5-HT2A_corr_x5-HTT']
-    last_features = ['fc_corr_5-HT1A', 'fc_corr_5-HT2A', 'fc_corr_5-HTT']
     groups = [
         [f for f in features if f.startswith('modularity')],
         [f for f in features if f.endswith('VIS')],
@@ -297,10 +296,12 @@ def get_groups(features):
         [f for f in features if f.endswith('D2')],
         [f for f in features if f.endswith('DAT')],
         [f for f in features if f.endswith('NAT')],
-        [f for f in features if f.endswith('VAChT')],
+        [f for f in features if f.endswith('VAChT')],        
+        [f for f in features if f.endswith('5-HT1A')],
         [f for f in features if f.endswith('5-HT1B')],
+        [f for f in features if f.endswith('5-HT2A')],
         [f for f in features if f.endswith('5-HT4')],
-        [f for f in features if f in last_features],
+        [f for f in features if f.endswith('5-HTT')],
         [f for f in features if f in node_feature_corrs]
     ] 
     # Sort each group alphabetically
@@ -314,6 +315,9 @@ def sort_features(features):
     sorted_features = []
     for group in groups:
         sorted_features.extend(group)
+    # Add un-assigned features at the end
+    unassigned_features = [f for f in features if f not in sorted_features]
+    sorted_features.extend(unassigned_features)
     return sorted_features
 
 # Results aggregation functions -----------------------------------------------
