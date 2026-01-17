@@ -851,8 +851,13 @@ def regression_scatter(ypreds, marker_col=None, style=None, title=None,
     
     # Add title
     if title is None:
-        title = f'r={r_value:.4f}, p={p_value:.4e}'
-    ax.set_title(title)
+        title = ''
+    full_title = title + f'\nr={r_value:.4f}, p={p_value:.4e}'
+    # Make title red if p < 0.05
+    if p_value < 0.05:
+        ax.set_title(full_title, color='red')
+    else:
+        ax.set_title(full_title)
 
     # Scatter plot limits
     if equal_aspect and xlim is None and ylim is None:
@@ -1810,6 +1815,208 @@ def plot_diverging_bars(df, yline=0, cmap=COOLWARM, vmax=None, alpha=0.5,
     
     return fig, ax
 
+def plot_diverging_bars_multi(
+    df_list,
+    yline=0,
+    cmap=COOLWARM,
+    vmax=None,
+    alpha=0.5,
+    add_scatter=False,
+    scatter_alpha=0.3,
+    scatter_size=20,
+    figsize=None,
+    save_path=None,
+    add_colorbar=True,
+    bar_orientation: str = "horizontal",
+    bar_width: float = 0.8
+):
+    """
+    Creates multiple diverging bar charts (one for each df in df_list) aligned for comparison.
+    All dfs must have the same columns (feature names and order).
+
+    Parameters:
+    ----------
+    df_list : list of pandas.DataFrame
+        List of DataFrames to plot. Each DataFrame should have the same columns (features).
+    yline : float, optional
+        The y-value at which the bars diverge (default: 0)
+    cmap : str or matplotlib colormap, optional
+        Colormap to use for coloring the scatter points (default: 'coolwarm')
+    vmax : float, optional
+        Maximum absolute value for scaling the colormap. If None, uses max absolute value across all input dataframes
+    alpha : float, optional
+        Alpha (transparency) value for the bars
+    add_scatter : bool, optional
+        If True, adds scatter points showing individual data points
+    scatter_alpha : float, optional
+        Alpha value for scatter points (default: 0.3)
+    scatter_size : float, optional
+        Size of scatter points (default: 20)
+    figsize : tuple, optional
+        Size of the overall figure
+    save_path : str, optional
+        If provided, saves the figure to this path
+    add_colorbar : bool, optional
+        Whether to add a colorbar (default: True)
+    bar_orientation : str, optional
+        "horizontal" (default): make a row of horizontal bar plots (one per df)
+        "vertical": make a column of bar plots (one per df, bars vertical)
+    bar_width : float, optional
+        Absolute bar width to use for bars. Same as 'width' (or 'height') in matplotlib's bar/barh (default: 0.8)
+    """
+    # Validate input
+    if not isinstance(df_list, (list, tuple)):
+        raise ValueError("df_list must be a list of pandas DataFrames")
+    if len(df_list) == 0:
+        raise ValueError("df_list is empty")
+    n_dfs = len(df_list)
+    # Check all columns are the same (same order)
+    colnames = df_list[0].columns
+    for df in df_list:
+        if not all(df.columns == colnames):
+            raise ValueError("All DataFrames in df_list must have the same columns and order")
+    num_features = len(colnames)
+
+    if not (bar_width > 0):
+        raise ValueError("bar_width must be positive")
+
+    # Figure and subplot arrangement
+    if bar_orientation == "horizontal":
+        nrows, ncols = 1, n_dfs
+        # default figsize heuristic: (width per df, height)
+        if figsize is None:
+            figsize = (5*n_dfs, max(3, num_features*0.7))
+    elif bar_orientation == "vertical":
+        nrows, ncols = n_dfs, 1
+        if figsize is None:
+            figsize = (max(num_features*0.75, 5), 5*n_dfs)
+    else:
+        raise ValueError("bar_orientation must be either 'horizontal' or 'vertical'")
+
+    fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize, squeeze=False)
+
+    # Compute global vmax if not provided, across all values in all dfs
+    if vmax is None:
+        all_vals = np.concatenate([df.values.flatten() for df in df_list])
+        vmax = max(abs(np.min(all_vals)), abs(np.max(all_vals)))
+
+    # Colormap and normalization (shared across all)
+    norm = Normalize(vmin=-vmax, vmax=vmax)
+    cmap_inst = plt.get_cmap(cmap)
+
+    bars_list = []
+
+    # For row ordering: always use the left-most/top-most plot's feature order
+    ordered_cols = list(colnames)
+
+    # Plot each DataFrame on its own axes
+    for idx, df in enumerate(df_list):
+        # Get subplot axes
+        ax = axs[0, idx] if bar_orientation == "horizontal" else axs[idx, 0]
+
+        # Compute means and standard errors for each column (feature)
+        means = df[ordered_cols].mean()
+        std_errors = df[ordered_cols].sem()
+
+        bars = []
+
+        if bar_orientation == "horizontal":
+            # Horizontal bar plotting
+            y_pos = np.arange(num_features)
+            bar_colors = ['lightgray' if add_scatter else cmap_inst(norm(means[feature])) for feature in ordered_cols]
+            bar_widths = means - yline
+
+            # Set the bar height directly according to bar_width kwarg
+            bars_obj = ax.barh(
+                y_pos, bar_widths,
+                xerr=std_errors, color=bar_colors, alpha=alpha, capsize=0, left=yline,
+                height=bar_width
+            )
+            bars.append(bars_obj)
+            # Scatter overlay (jitter in y for each group)
+            if add_scatter:
+                for i, feature in enumerate(ordered_cols):
+                    y_jitter = np.random.normal(0, 0.15, len(df[feature]))
+                    scatter_colors = [cmap_inst(norm(val)) for val in df[feature]]
+                    ax.scatter(
+                        df[feature], i + y_jitter,
+                        c=scatter_colors,
+                        alpha=scatter_alpha,
+                        s=scatter_size, zorder=3
+                    )
+            # Dashed vertical line at yline (instead of horizontal)
+            ax.axvline(x=yline, color='gray', linestyle='--', alpha=0.7)
+
+            # Y-ticks/labels: Only the left-most plot gets y-tick labels
+            ax.set_yticks(y_pos)
+            if idx == 0:
+                ax.set_yticklabels(ordered_cols)
+                ax.set_ylabel('')
+            else:
+                ax.set_yticklabels([])
+                ax.set_ylabel('')
+            ax.set_xlabel('Value')
+        else:
+            # Vertical bar plotting
+            for i, feature in enumerate(ordered_cols):
+                mean = means[feature]
+                bar_color = 'lightgray' if add_scatter else cmap_inst(norm(mean))
+                # Always align to yline for zero crossing
+                bar = ax.bar(
+                    i, mean - yline, bottom=yline,
+                    yerr=std_errors[feature],
+                    color=bar_color, alpha=alpha, capsize=0,
+                    width=bar_width
+                )
+                bars.append(bar)
+                # Scatter overlay (jitter for each group)
+                if add_scatter:
+                    x_jitter = np.random.normal(0, 0.1, len(df[feature]))
+                    scatter_colors = [cmap_inst(norm(val)) for val in df[feature]]
+                    ax.scatter(
+                        i + x_jitter, df[feature],
+                        c=scatter_colors, alpha=scatter_alpha,
+                        s=scatter_size, zorder=3
+                    )
+            ax.axhline(y=yline, color='gray', linestyle='--', alpha=0.7)
+            ax.set_ylabel('Value')
+            ax.set_xticks(range(num_features))
+            if idx == n_dfs - 1:
+                ax.set_xticklabels(ordered_cols, rotation=90)
+            else:
+                ax.set_xticklabels([])
+        # Grid, axis below
+        if bar_orientation == "horizontal":
+            ax.xaxis.grid(True, linestyle='--', color='gray', alpha=0.5)
+        else:
+            ax.yaxis.grid(True, linestyle='--', color='gray', alpha=0.5)
+        ax.set_axisbelow(True)
+        bars_list.append(bars)
+
+    # Remove unwanted y-ticklabels for horizontal arrangement (all but first column)
+    if bar_orientation == "horizontal":
+        for idx in range(1, n_dfs):
+            axs[0, idx].set_yticklabels([])
+            axs[0, idx].set_ylabel('')
+    # Remove unwanted xticklabels for vertical arrangement (all but last row)
+    if bar_orientation == "vertical":
+        for idx in range(0, n_dfs-1):
+            axs[idx, 0].set_xticklabels([])
+
+    # Colorbar (just one, aligned with the whole figure, not each axes)
+    if add_colorbar:
+        sm = ScalarMappable(cmap=cmap_inst, norm=norm)
+        sm.set_array([])
+        # Attach colorbar to the right or bottom depending on orientation
+        if bar_orientation == "horizontal":
+            cbar = fig.colorbar(sm, ax=axs[0, :], orientation='vertical', fraction=0.03, pad=0.03)
+        else:
+            cbar = fig.colorbar(sm, ax=axs[:, 0], orientation='horizontal', fraction=0.04, pad=0.08)
+        cbar.set_label('Value')
+    if save_path:
+        plt.savefig(save_path)
+    return fig, axs
+
 def plot_simple_bars(values, feature_names=None, yline=0, cmap=COOLWARM, vmax=None, 
                             alpha=0.5, figsize=None, save_path=None, add_colorbar=True):
     """
@@ -2595,10 +2802,8 @@ def plot_biomarker_heatmap(df, palette_dict, save_path=None):
 
     if save_path:
         plt.savefig(save_path, bbox_inches='tight')
-        plt.close()
-    else:
-        plt.tight_layout()
-        plt.show()
+    plt.tight_layout()
+    plt.show()
 
 # VGAE plotting -----------------------------------------------------------------
 
