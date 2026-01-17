@@ -138,6 +138,7 @@ data/
 
    ```bash
    qsub job_scripts/secondary_jobs.sh
+   qsub job_scripts/short_secondary_jobs.sh
    ```
 
 5. Post-hoc analysis:
