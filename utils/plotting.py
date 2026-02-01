@@ -1240,6 +1240,89 @@ def plot_stacked_percentages_v(df, percentage_col, save_path=None, palette=None,
     if save_path:
         plt.savefig(save_path)
 
+def plot_piechart(
+    df,
+    percentage_col,
+    save_path=None,
+    palette=None,
+    figsize=(5, 5),
+    top_k: int = 4,
+    alpha: float = 1.0
+):
+    """
+    Plots a pie chart showing relative percentages for each receptor.
+    Only the top_k segments are labeled with both the receptor name and percentage. No legend.
+    An alpha (transparency) value can be applied to the pie pieces.
+
+    Args:
+        df (pd.DataFrame): DataFrame with receptor names as index and percentage column
+        percentage_col (str): Name of column containing percentage values
+        save_path (str, optional): Path to save the figure. Defaults to None.
+        palette (list/dict, optional): Colors for each receptor. Defaults to None.
+        figsize (tuple, optional): Figure size (width, height). Defaults to (5, 5).
+        top_k (int, optional): Number of largest slices to label with receptor name and percent. Defaults to 4.
+        alpha (float, optional): Transparency for the pie chart wedges (0.0 transparent - 1.0 opaque). Defaults to 1.0.
+
+    Returns:
+        matplotlib.figure.Figure: The created figure
+    """
+
+    # Sort values descending for top_k labeling
+    df_sorted = df.sort_values(percentage_col, ascending=False)
+    values = df_sorted[percentage_col].values
+    labels = df_sorted.index
+
+    # Handle palette
+    if palette is None:
+        base_colors = sns.color_palette("mako", len(df))
+    elif isinstance(palette, str):
+        base_colors = sns.color_palette(palette, len(df))
+    elif isinstance(palette, dict):
+        base_colors = [palette[label] for label in labels]
+    else:
+        base_colors = palette
+
+    # Convert base_colors to RGBA with alpha, if needed
+    colors_with_alpha = []
+    for c in base_colors:
+        if len(c) == 4:
+            # Already RGBA
+            color = list(c)
+            color[3] = alpha  # replace alpha channel
+            colors_with_alpha.append(tuple(color))
+        else:
+            # Assume RGB tuple
+            colors_with_alpha.append(tuple(list(c) + [alpha]))
+
+    # Build labels for pie chart: label only the top_k pieces with "label: percent%", rest are empty
+    pie_labels = []
+    for i, (label, value) in enumerate(zip(labels, values)):
+        if i < top_k:
+            pie_labels.append(f"{label}: {value:.1f}%")
+        else:
+            pie_labels.append("")
+
+    # No autopct; we're encoding both label and percent in the label
+    fig, ax = plt.subplots(figsize=figsize)
+    wedges, texts = ax.pie(
+        values,
+        labels=pie_labels,
+        colors=colors_with_alpha,
+        startangle=90,
+        textprops={'color': 'black'},
+    )
+
+    # No legend
+
+    ax.set(aspect="equal")
+    plt.tight_layout()
+
+    # Save if path provided
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight')
+
+    return fig
+
 # Distribution plots ------------------------------------------------------------
 
 def plot_raincloud(distributions, palette=None, alpha=ALPHA_SCATTER, box_alpha=0.5, 
