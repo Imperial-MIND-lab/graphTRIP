@@ -162,6 +162,8 @@ def get_categorical_annotations(study: str = 'psilodep2'):
         return ['Condition', 'Gender']
     elif study == 'psilodep1':
         return ['Gender']
+    elif study == 'mock_study':
+        return []
     else:
         raise ValueError("Unknown study. \n"
                          "Edit utils.annotations.get_categorical_annotations() to add your study.")

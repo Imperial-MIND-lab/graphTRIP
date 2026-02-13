@@ -63,7 +63,7 @@ I recommend including all candidate node, edge and graph features upon first ini
 
 #### Step 2: Train a Model
 
-To train a graphTRIP model:
+To train a graphTRIP model with specific configurations, specified in `experiments/configs/my_config.json`:
 
 ```bash
 python -m experiments.run_experiment train_jointly FileStorageObserver --config_json=my_config.json
@@ -78,6 +78,10 @@ outputs/runs/{config_json}/
 unless overridden via the `--output_dir` argument or by setting the `output_dir` field in your JSON config.
 
 Note: training on fully connected graphs increases training time and often leads to oversmoothing. You want to use a sparsely connected yet sufficiently informative graph structure.
+
+## Demo with synthetic data
+
+The notebook [`notebooks/demo.ipynb`](notebooks/demo.ipynb) demonstrates how to set up the data and train a model on synthetic data. It walks through creating mock node/edge files and annotations, loading a `BrainGraphDataset`, and running the `train_jointly` experiment with the demo config—no real neuroimaging data required.
 
 ## Reproducing Our Results
 
@@ -111,6 +115,8 @@ data/
 │       └── Schaefer100_SA_Axis.csv
 ```
 
+Note: The "processed" directory contains files created by `torch_geometric` upon dataset creation. Do not place any files there. The "raw" directory should contain your pre-processed fMRI data. See `preprocessing/preprocess.py` for how the files in `data/raw/` are created (instructions below).
+
 #### Replication Steps
 
 1. Download the 5-HT PET data and compute REACT maps as described in
@@ -122,7 +128,7 @@ data/
    data/raw/{study}/{session}/MNI_2mm/
    ```
 
-2. Run preprocessing for each dataset. For example:
+2. Run preprocessing for each dataset, session, and atlas. For example:
 
    ```bash
    python -m preprocessing.preprocess psilodep2 before schaefer100

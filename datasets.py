@@ -39,6 +39,8 @@ class Attrs:
             self.graph += ['QIDS_Before', 'BDI_Before', 'Condition', 'Gender', 'Stop_SSRI']
         elif study=='psilodep1':
             self.graph += ['Gender', 'Age', 'HAMD_Before', 'QIDS_Before', 'LOTR_Before', 'BDI_Before', 'Condition', 'Stop_SSRI']
+        elif study == 'mock_study':
+            self.graph += ['Baseline', 'Condition']
         else:
             print(f'Clinical features for {study} unknown. \n'
                   'Edit datasets.Attrs.add_clinical_graph_attrs() to add your study.')
@@ -482,6 +484,8 @@ def get_default_prefilter(study: str) -> Dict[str, Any]:
         return {'Exclusion': 0}
     elif study == 'psilodep1':
         return {'Exclusion': 0, 'missing_raw_before': 0}
+    elif study == 'mock_study':
+        return {}
     else:
         raise ValueError(f'Prefilter not specified for study {study}. \n'
                          'Edit datasets.get_default_prefilter() to add your prefilter.')

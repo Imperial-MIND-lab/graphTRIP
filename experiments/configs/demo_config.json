@@ -1,0 +1,95 @@
+{
+  "output_dir": ["outputs/demo_run/"],
+  "save_weights": [true],
+  "lr": [0.001],
+  "num_epochs": [30],
+  "num_z_samples": [1],
+  "alpha": [0.5],
+  "balance_attrs": [[]],
+  "dataset": {
+    "study": ["mock_study"],
+    "session": ["mock_session"],
+    "atlas": ["schaefer100"],
+    "target": ["Outcome"],
+    "batch_size": [5],
+    "num_folds": [2],
+    "val_split": [0],
+    "graph_attrs": [["Baseline", "Condition"]],
+    "context_attrs": [[]],
+    "node_attrs": [["X1", "X2", "X3"]],
+    "edge_attrs": [["random_corrs"]],
+    "edge_tfm_type": ["DensityThresholdAdjacency"],
+    "edge_tfm_params": {
+      "edge_info": ["random_corrs"],
+      "density": [0.2]
+    },
+    "add_3Dcoords": [true],
+    "self_loop_fill_value": [1],
+    "max_spd_dist": [10],
+    "standardise_x": [false]
+  },
+ "mlp_model": {
+      "model_type": ["RegressionMLP"],
+      "params": {
+        "dropout": [0.25],
+        "hidden_dim": [64],
+        "layernorm": [false],
+        "mse_reduction": ["sum"],
+        "num_layers": [3],
+        "output_dim": [1],
+        "reg_strength": [0.01]
+      }
+    },
+    "vgae_model": {
+      "model_type": ["NodeLevelVGAE"],
+      "params": {
+        "dropout": [0.25],
+        "latent_dim": [32],
+        "node_emb_dim": [32],
+        "reg_strength": [0.01]
+      },
+      "node_emb_model_cfg": {
+        "model_type": ["NodeEmbeddingGraphormer"],
+        "params": {
+          "hidden_dim": [16],
+          "layernorm": [true],
+          "num_heads": [2],
+          "num_layers": [3]
+        }
+      },
+      "encoder_cfg": {
+        "model_type": ["DenseOneLayerEncoder"]
+      },
+      "edge_decoder_cfg": {
+        "model_type": ["MLPEdgeDecoder"],
+        "params": {
+          "act": ["tanh"],
+          "hidden_dim": [32],
+          "num_layers": [3]
+        }
+      },
+      "edge_idx_decoder_cfg": {
+        "model_type": ["MLPEdgeDecoder"],
+        "params": {
+          "act": ["sigmoid"],
+          "hidden_dim": [32],
+          "num_layers": [3]
+        }
+      },
+      "node_decoder_cfg": {
+        "model_type": ["MLPNodeDecoder"],
+        "params": {
+          "hidden_dim": [32],
+          "num_layers": [3]
+        }
+      },
+      "pooling_cfg": {
+        "model_type": ["GraphTransformerPooling"],
+        "params": {
+          "reduce": ["mean"],
+          "num_heads": [4],
+          "ff_hidden_dim": [32]
+        }
+      }
+    }
+  }
