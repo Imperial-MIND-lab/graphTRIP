@@ -89,7 +89,7 @@ Note: training on fully connected graphs increases training time and often leads
 
 ## Demo with synthetic data
 
-The notebook [`notebooks/demo.ipynb`](notebooks/demo.ipynb) demonstrates how to set up the data and train a model on synthetic data. It walks through creating mock node/edge files and annotations, loading a `BrainGraphDataset`, and running the `train_jointly` experiment with the demo config—no real neuroimaging data required.
+The notebook [`notebooks/demo.ipynb`](notebooks/demo.ipynb) demonstrates how to set up the data and train a model on a small synthetic dataset (*n* = 10). It walks through creating mock node/edge files and annotations, loading a `BrainGraphDataset`, and running the `train_jointly` experiment with the demo config [`experiments/configs/demo_config.json`](experiments/configs/demo_config.json) (no real neuroimaging data required). On a typical desktop, the full demo takes about 10–30 seconds.
 
 ## Approximate training time
 
