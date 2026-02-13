@@ -4,12 +4,20 @@ This repository contains the full codebase for reproducing results from our stud
 
 ## Installation
 
+**System requirements**
+
+- **Operating systems:** Developed and tested on Linux (Ubuntu 22.04 and CentOS/RHEL, including HPC clusters). The code will likely run on other operating systems as well.
+- **Dependencies:** Python 3.12.4, PyTorch 2.2.2, PyTorch Geometric 2.6.1, and the packages listed in [`environment.yml`](environment.yml).
+- **Hardware:** A standard machine with at least 8 GB RAM. A GPU is not required; the code runs on CPU as well. If you have a CUDA-capable GPU, training can use it automatically—see the note in [`environment.yml`](environment.yml) about choosing the PyTorch/CUDA version that matches your system.
+
 Clone the repository and install all dependencies via Conda:
 
 ```bash
 conda env create -f environment.yml
 conda activate graphtrip
 ```
+
+Typical installation time is about 15–20 minutes on a standard desktop, depending on internet speed and disk I/O.
 
 Experiments are optionally integrated with [Neptune.ai](https://neptune.ai/) for logging configurations and outputs. If you wish to use Neptune, set up an account and export your API token. Alternatively, you can bypass Neptune entirely using the `FileStorageObserver`.
 
@@ -82,6 +90,12 @@ Note: training on fully connected graphs increases training time and often leads
 ## Demo with synthetic data
 
 The notebook [`notebooks/demo.ipynb`](notebooks/demo.ipynb) demonstrates how to set up the data and train a model on synthetic data. It walks through creating mock node/edge files and annotations, loading a `BrainGraphDataset`, and running the `train_jointly` experiment with the demo config—no real neuroimaging data required.
+
+## Approximate training time
+
+Training a graphTRIP model with the standard pipeline (`train_jointly.py`) and configurations ([`experiments/configs/graphtrip.json`](experiments/configs/graphtrip.json); i.e., 7-fold cross-validation, 42 samples, 300 epochs per fold, 1 random seed) takes about **27 minutes**.
+
+This benchmark was run on a single node with an **AMD EPYC 7742 64-Core Processor** (Linux, Python 3.12). The same run can be launched via [`scripts/graphtrip.py`](scripts/graphtrip.py), which calls the `train_jointly` experiment and writes weights to `outputs/graphtrip/weights/seed_<seed>/`. Actual runtimes will vary with hardware, dataset size, and config (e.g. `num_folds`, `num_epochs`).
 
 ## Reproducing Our Results
 

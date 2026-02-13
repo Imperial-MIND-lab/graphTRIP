@@ -18,6 +18,8 @@ dependencies:
   - nibabel=5.2.1
   - statsmodels=0.14.2
   - scikit-learn=1.4.2
+  # Select the pytorch-cuda version that matches your system (e.g. 12.1, 11.8, or omit for CPU-only).
+  # If you change it, adjust the pip PyG wheel URL and package suffixes (e.g. pt22cu121 -> pt22cu118) below.
   - pytorch=2.2.2
   - pytorch-cuda=12.1
   - torch-geometric=2.6.1
