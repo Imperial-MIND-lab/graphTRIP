@@ -1,7 +1,11 @@
 """
-Visualizes overfitting behaviour for a single-fold (num_folds_to_run=1) train_jointly run.
+Visualizes overfitting behaviour for a train_jointly run with one or more folds.
 Produces a single figure with two panels: MLP loss curves (left) and true-vs-predicted
 scatter coloured by train/test split (right).
+
+For multi-fold runs the loss panel shows mean ± SE across folds (shaded area), and
+the scatter shows per-subject mean predictions averaged over all folds in which each
+subject appeared in the train or test set.
 
 Usage (from project root):
     python scripts/visualize_overfitting.py <run_dir> [--output_dir <dir>] [--fmt <ext>]
@@ -25,6 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import json
 import argparse
 import copy
+from collections import defaultdict
 import numpy as np
 import pandas as pd
 import torch
@@ -98,21 +103,55 @@ def _count_params(model: torch.nn.Module) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
+def _detect_num_folds(run_dir: str) -> int:
+    """Count trained folds by checking for k{i}_mlp_weights.pth files."""
+    k = 0
+    while os.path.exists(os.path.join(run_dir, f'k{k}_mlp_weights.pth')):
+        k += 1
+    if k == 0:
+        raise FileNotFoundError(f"No fold weight files found in {run_dir}")
+    return k
+
+
 # ── Plotting ──────────────────────────────────────────────────────────────────
 
-def _plot_overfitting_figure(train_mlp_loss, test_mlp_loss,
+def _plot_overfitting_figure(train_losses, test_losses,
                              train_df, test_df,
                              target_name: str,
                              save_path: str,
                              log_every: int = 1):
-    """Single figure with two panels: MLP loss curves (left) and scatter (right)."""
+    """Single figure with two panels: MLP loss curves (left) and scatter (right).
+
+    Args:
+        train_losses: np.ndarray of shape [num_folds, num_epochs]
+        test_losses:  np.ndarray of shape [num_folds, num_epochs]
+        train_df:     DataFrame with columns label, prediction (mean over train folds)
+        test_df:      DataFrame with columns label, prediction
+    """
+    num_folds = train_losses.shape[0]
     _, axes = plt.subplots(1, 2, figsize=FIGSIZE)
 
     # ── Left: MLP loss curves ─────────────────────────────────────────────────
     ax = axes[0]
-    epochs = range(0, len(train_mlp_loss), log_every)
-    ax.plot(epochs, train_mlp_loss[::log_every], color='blue', label='train', linewidth=2)
-    ax.plot(epochs, test_mlp_loss[::log_every],  color='red',  label='test', linewidth=2)
+    num_epochs = train_losses.shape[1]
+    epochs = np.arange(0, num_epochs, log_every)
+
+    train_mean = train_losses[:, ::log_every].mean(axis=0)
+    test_mean  = test_losses[:, ::log_every].mean(axis=0)
+
+    if num_folds == 1:
+        ax.plot(epochs, train_mean, color='blue', label='train', linewidth=2)
+        ax.plot(epochs, test_mean,  color='red',  label='test',  linewidth=2)
+    else:
+        train_se = train_losses[:, ::log_every].std(axis=0) / np.sqrt(num_folds)
+        test_se  = test_losses[:, ::log_every].std(axis=0)  / np.sqrt(num_folds)
+        ax.plot(epochs, train_mean, color='blue', label='train', linewidth=2)
+        ax.fill_between(epochs, train_mean - train_se, train_mean + train_se,
+                        color='blue', alpha=0.2)
+        ax.plot(epochs, test_mean, color='red', label='test', linewidth=2)
+        ax.fill_between(epochs, test_mean - test_se, test_mean + test_se,
+                        color='red', alpha=0.2)
+
     ax.set_title('MLP loss', fontsize=SUBPLOT_TITLE_FONTSIZE)
     ax.set_xlabel('Epoch',   fontsize=AXIS_LABEL_FONTSIZE)
     ax.set_ylabel('Loss',    fontsize=AXIS_LABEL_FONTSIZE)
@@ -138,7 +177,6 @@ def _plot_overfitting_figure(train_mlp_loss, test_mlp_loss,
         x_line = np.array([lo, hi])
         ax.plot(x_line, m * x_line + b, '-', color=color, alpha=0.5, linewidth=1.5)
         r, _ = pearsonr(df['label'], df['prediction'])
-        # Place annotation near the regression line midpoint
         x_mid = (lo + hi) / 2
         y_mid = m * x_mid + b
         ax.text(x_mid, y_mid, f'r={r:.3f}', color=color,
@@ -165,61 +203,84 @@ def main(run_dir: str, output_dir: str, fmt: str, log_every: int = 1):
     os.makedirs(output_dir, exist_ok=True)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # ── 1. Load config ────────────────────────────────────────────────────────
+    # ── 1. Detect number of trained folds ────────────────────────────────────
+    num_folds = _detect_num_folds(run_dir)
+    print(f"Detected {num_folds} trained fold(s).")
+
+    # ── 2. Load config ────────────────────────────────────────────────────────
     print("Loading configs...")
     config = load_ingredient_configs(run_dir, ingredients=['dataset', 'vgae_model', 'mlp_model'])
     target_name = config['dataset'].get('target', 'target')
 
-    # ── 2. Load models and dataset ────────────────────────────────────────────
+    # ── 3. Load dataset ───────────────────────────────────────────────────────
     print("Loading dataset...")
     data = _load_dataset(config['dataset'])
 
-    print("Loading VGAE...")
-    vgae = _load_vgae(config['vgae_model'],
-                      os.path.join(run_dir, 'k0_vgae_weights.pth'),
-                      device)
-
-    print("Loading MLP...")
-    mlp = _load_mlp(config['mlp_model'], vgae.readout_dim,
-                    os.path.join(run_dir, 'k0_mlp_weights.pth'),
-                    device)
-
-    # ── 3. Load fold assignments ──────────────────────────────────────────────
+    # ── 4. Load fold assignments ──────────────────────────────────────────────
     fold_assignments = np.loadtxt(os.path.join(run_dir, 'test_fold_indices.csv'), dtype=int)
-    test_indices  = np.where(fold_assignments == 0)[0]
-    train_indices = np.where(fold_assignments != 0)[0]
-    print(f"Subjects — train: {len(train_indices)}, test: {len(test_indices)}")
 
-    # ── 4. Load MLP loss curves ───────────────────────────────────────────────
+    # ── 5. Load all fold models ───────────────────────────────────────────────
+    print("Loading models...")
+    vgaes, mlps = [], []
+    for k in range(num_folds):
+        vgae = _load_vgae(config['vgae_model'],
+                          os.path.join(run_dir, f'k{k}_vgae_weights.pth'),
+                          device)
+        mlp  = _load_mlp(config['mlp_model'], vgae.readout_dim,
+                         os.path.join(run_dir, f'k{k}_mlp_weights.pth'),
+                         device)
+        vgaes.append(vgae)
+        mlps.append(mlp)
+
+    # ── 6. Load MLP loss curves ───────────────────────────────────────────────
     print("Loading metrics...")
     with open(os.path.join(run_dir, 'metrics.json')) as f:
         metrics = json.load(f)
-    train_mlp_loss = np.array(metrics['training/fold0/epoch/mlp_loss']['values'])
-    test_mlp_loss  = np.array(metrics['test/fold0/epoch/mlp_loss']['values'])
 
-    # ── 5. Predictions ────────────────────────────────────────────────────────
-    # Test predictions already saved by train_jointly
+    train_losses = np.array([
+        metrics[f'training/fold{k}/epoch/mlp_loss']['values'] for k in range(num_folds)
+    ])  # [num_folds, num_epochs]
+    test_losses = np.array([
+        metrics[f'test/fold{k}/epoch/mlp_loss']['values'] for k in range(num_folds)
+    ])
+
+    # ── 7. Test predictions (one per subject from prediction_results.csv) ─────
     test_df = pd.read_csv(os.path.join(run_dir, 'prediction_results.csv'))
 
-    # Train predictions: forward pass through VGAE + MLP
+    # ── 8. Train predictions: average over folds where subject was in train ───
     print("Computing train predictions...")
-    train_dataset = data[train_indices]
-    train_loader  = DataLoader(train_dataset, batch_size=len(train_indices), shuffle=False)
-    train_outputs = get_mlp_outputs_nograd(mlp, train_loader, device,
-                                           get_x=get_x_with_vgae,
-                                           vgae=vgae, num_z_samples=0)
+    # Accumulate per-subject predictions across all folds where they were in train
+    pred_accum  = defaultdict(list)
+    label_store = {}
+
+    for k in range(num_folds):
+        train_indices = np.where(fold_assignments != k)[0]
+        n_train = len(train_indices)
+        print(f"  Fold {k}: {n_train} train subjects")
+        train_dataset = data[train_indices]
+        train_loader  = DataLoader(train_dataset, batch_size=n_train, shuffle=False)
+        outputs = get_mlp_outputs_nograd(mlps[k], train_loader, device,
+                                         get_x=get_x_with_vgae,
+                                         vgae=vgaes[k], num_z_samples=0)
+        for sid, pred, lbl in zip(outputs['subject_id'],
+                                  outputs['prediction'],
+                                  outputs['label']):
+            pred_accum[sid].append(pred)
+            label_store[sid] = lbl
+
     train_df = pd.DataFrame({
-        'label':      train_outputs['label'],
-        'prediction': train_outputs['prediction'],
-        'subject_id': train_outputs['subject_id'],
+        'subject_id': list(pred_accum.keys()),
+        'label':      [label_store[s] for s in pred_accum],
+        'prediction': [np.mean(preds) for preds in pred_accum.values()],
     })
 
-    # ── 6. Save stats CSV ─────────────────────────────────────────────────────
+    # ── 9. Save stats CSV ─────────────────────────────────────────────────────
     train_corr, train_p = pearsonr(train_df['label'], train_df['prediction'])
     test_corr,  test_p  = pearsonr(test_df['label'],  test_df['prediction'])
-    mlp_params  = _count_params(mlp)
-    vae_params  = _count_params(vgae)
+    mlp_params  = _count_params(mlps[0])
+    vae_params  = _count_params(vgaes[0])
     stats_df = pd.DataFrame([{
+        'num_folds':         num_folds,
         'mlp_param_count':   mlp_params,
         'vae_param_count':   vae_params,
         'total_param_count': mlp_params + vae_params,
@@ -230,11 +291,11 @@ def main(run_dir: str, output_dir: str, fmt: str, log_every: int = 1):
     }])
     stats_df.to_csv(os.path.join(output_dir, 'stats.csv'), index=False)
 
-    # ── 7. Plot ───────────────────────────────────────────────────────────────
+    # ── 10. Plot ──────────────────────────────────────────────────────────────
     save_path = os.path.join(output_dir, f'overfitting.{fmt}')
     print(f"Saving figure to {save_path}...")
     _plot_overfitting_figure(
-        train_mlp_loss, test_mlp_loss,
+        train_losses, test_losses,
         train_df, test_df,
         target_name=target_name,
         save_path=save_path,
@@ -245,7 +306,7 @@ def main(run_dir: str, output_dir: str, fmt: str, log_every: int = 1):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Visualize overfitting for a single-fold train_jointly run.')
+        description='Visualize overfitting for a train_jointly run.')
     parser.add_argument('run_dir', type=str,
                         help='Directory with run outputs (e.g. outputs/flatvae_mlp/job_0/seed_1)')
     parser.add_argument('--output_dir', type=str, default=None,
