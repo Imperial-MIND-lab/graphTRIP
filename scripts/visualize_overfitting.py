@@ -369,6 +369,16 @@ def main(run_dir: str, parent_dir: str, output_dir: str, fmt: str, log_every: in
     # ── Stats CSV ─────────────────────────────────────────────────────────────
     train_corr, train_p = pearsonr(agg_train_df['label'], agg_train_df['prediction'])
     test_corr,  test_p  = pearsonr(agg_test_df['label'],  agg_test_df['prediction'])
+
+    # Per-seed corr difference (train - test)
+    seed_diffs = []
+    for r in seed_results:
+        tc, _ = pearsonr(r['train_df']['label'], r['train_df']['prediction'])
+        ec, _ = pearsonr(r['test_df']['label'],  r['test_df']['prediction'])
+        seed_diffs.append(tc - ec)
+    mean_corr_diff = float(np.mean(seed_diffs))
+    se_corr_diff   = float(np.std(seed_diffs, ddof=1) / np.sqrt(num_seeds)) if num_seeds > 1 else float('nan')
+
     mlp_params = seed_results[0]['mlp_params']
     vae_params = seed_results[0]['vae_params']
     stats_df = pd.DataFrame([{
@@ -377,10 +387,12 @@ def main(run_dir: str, parent_dir: str, output_dir: str, fmt: str, log_every: in
         'mlp_param_count':   mlp_params,
         'vae_param_count':   vae_params,
         'total_param_count': mlp_params + vae_params,
-        'train_corr': train_corr,
-        'train_p':    train_p,
-        'test_corr':  test_corr,
-        'test_p':     test_p,
+        'train_corr':    train_corr,
+        'train_p':       train_p,
+        'test_corr':     test_corr,
+        'test_p':        test_p,
+        'mean_corr_diff': mean_corr_diff,
+        'se_corr_diff':   se_corr_diff,
     }])
     stats_df.to_csv(os.path.join(output_dir, 'stats.csv'), index=False)
 
