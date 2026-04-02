@@ -1,6 +1,6 @@
 from models.models import (
     # Main models
-    GraphLevelVGAE, NodeLevelVGAE,
+    GraphLevelVGAE, NodeLevelVGAE, FlatVAE,
     # MLP models
     StandardMLP, RegressionMLP, LogisticRegressionMLP, NonNegativeRegressionMLP, CFRHead,
     SklearnLinearModelWrapper,
@@ -18,7 +18,7 @@ from models.models import (
     MLPNodeDecoder, InnerProductEdgeDecoder, MLPEdgeDecoder
 )
 
-__all__ = ['GraphLevelVGAE', 'NodeLevelVGAE', 
+__all__ = ['GraphLevelVGAE', 'NodeLevelVGAE', 'FlatVAE',
            'StandardMLP', 'RegressionMLP', 'LogisticRegressionMLP', 'NonNegativeRegressionMLP', 'CFRHead',
            'SklearnLinearModelWrapper',
            'NodeEmbeddingMLP', 'NodeEmbeddingGATv2Conv', 'NodeEmbeddingGATv2Conv_withSkip',

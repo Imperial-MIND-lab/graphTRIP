@@ -174,5 +174,21 @@
             "reg_strength": 0.01,
             "max_spd_dist": null
         }
+    },
+    "FlatVAE": {
+        "required_params": ["num_nodes", "num_node_attr", "num_edge_attr"],
+        "optional_params": {
+            "latent_dim": 32,
+            "hidden_dim": 512,
+            "num_layers": 3,
+            "kl_weight": 0.0,
+            "num_context_attrs": 0,
+            "num_graph_attr": null,
+            "num_cond_attrs": null,
+            "node_emb_dim": null,
+            "max_spd_dist": null,
+            "dropout": 0.0,
+            "reg_strength": 0.0
+        }
     }
 }

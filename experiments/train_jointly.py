@@ -7,6 +7,9 @@ Date: 2025-01-08
 License: BSD 3-Clause
 '''
 
+import matplotlib
+matplotlib.use('Agg')
+
 import sys
 sys.path.append('graphTRIP/')
 
@@ -60,6 +63,7 @@ def cfg():
     num_z_samples = 1     # 0 for training MLP on the means of VGAE latent variables.
     alpha = 0.5           # Loss = alpha*vgae_loss + (1-alpha)*mlp_loss
     balance_attrs = None  # attrs to balance on for k-fold CV. If None, no balancing.
+    num_folds_to_run = None  # If set, only run this many folds (e.g. 1 for a quick overfit demo).
 
 # Match configs function -------------------------------------------------------
 def match_config(config: Dict) -> Dict:
@@ -105,6 +109,7 @@ def run(_config):
     seed = _config['seed']
     alpha = _config['alpha']
     num_folds = _config['dataset']['num_folds']
+    num_folds_to_run = _config.get('num_folds_to_run') or num_folds
 
     # Create output directories, fix seed
     os.makedirs(output_dir, exist_ok=True)
@@ -126,7 +131,7 @@ def run(_config):
     mlp_train_loss, mlp_test_loss, mlp_val_loss = {}, {}, {}
     best_vgae_states, best_mlp_states = [], []
 
-    for k in tqdm(range(num_folds), desc='Folds', disable=not verbose):
+    for k in tqdm(range(num_folds_to_run), desc='Folds', disable=not verbose):
 
         # Initialise losses
         mlp_train_loss[k], mlp_test_loss[k], mlp_val_loss[k] = [], [], []
@@ -142,7 +147,7 @@ def run(_config):
         best_vgae_state = None
         best_mlp_state = None
 
-        for epoch in range(_config['num_epochs']):
+        for epoch in tqdm(range(_config['num_epochs']), desc='Epochs', disable=not verbose):
             # Train VGAE and MLP
             _ = train_vgae_mlp(vgae, mlp, train_loaders[k], optimizer, device)
             

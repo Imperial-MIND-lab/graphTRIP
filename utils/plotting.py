@@ -3070,6 +3070,8 @@ def plot_metric_boxplot(df, conditions=None, short_names=True, ylabel='MAE', sav
         x_jitter = np.random.normal(i, 0.05, size=len(df))
         if conditions is not None:
             for sub, val in enumerate(df[col]):
+                if np.isnan(val):
+                    continue
                 if conditions[sub] == -1:
                     marker, color = 'o', ESCIT
                 elif conditions[sub] == 1:

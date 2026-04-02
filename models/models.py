@@ -1800,11 +1800,11 @@ class NodeLevelVGAE(torch.nn.Module):
         # Update readout dimension and modules list
         self.readout_dim = self.pooling.output_dim
         self.modules[2] = self.pooling
-    
+
     def penalty(self):
-        reg_loss = sum(m.penalty() for m in self.modules if m is not None)     
+        reg_loss = sum(m.penalty() for m in self.modules if m is not None)
         return reg_loss
-    
+
     def loss(self, out):
         # Reconstruction loss
         rcn_loss = 0.
@@ -1823,4 +1823,118 @@ class NodeLevelVGAE(torch.nn.Module):
         reg_loss = self.penalty()
 
         return rcn_loss + kl_loss + reg_loss
-    
+
+
+# Flat VAE (no graph structure, prone to overfitting) --------------------------
+
+class FlatVAE(torch.nn.Module):
+    '''
+    A non-graph VAE that flattens the brain graph before encoding.
+    Edges are converted to a dense adjacency matrix and the upper triangular
+    is flattened. Node features are concatenated and also flattened.
+    This model does not share parameters across nodes/edges (unlike GNNs)
+    and is intentionally prone to overfitting on small datasets.
+
+    Exposes the same interface as NodeLevelVGAE so it can be used as a
+    drop-in replacement in train_jointly.py.
+
+    Parameters:
+    ----------
+    params (dict): must contain num_nodes, num_node_attr, num_edge_attr,
+                   latent_dim; optionally hidden_dim, num_layers, kl_weight.
+    **kwargs: absorbs node_emb_model_cfg, pooling_cfg, encoder_cfg, etc.
+              passed by build_vgae() — all ignored.
+    '''
+    def __init__(self, params: dict, **kwargs):
+        super().__init__()
+        self.num_nodes = params['num_nodes']
+        self.num_node_attr = params['num_node_attr']
+        self.num_edge_attr = params['num_edge_attr']
+        self.latent_dim = params['latent_dim']
+        self.num_context_attrs = params.get('num_context_attrs', 0)
+        self.kl_weight = params.get('kl_weight', 0.0)
+
+        hidden_dim = params.get('hidden_dim', 512)
+        num_layers = params.get('num_layers', 3)  # number of hidden layers in encoder/decoder
+
+        N = self.num_nodes
+        self.n_triu = N * (N - 1) // 2
+        flat_edge_dim = self.n_triu * self.num_edge_attr
+        flat_node_dim = N * self.num_node_attr
+        self.flat_dim = flat_edge_dim + flat_node_dim
+
+        # Encoder: flat_dim → [hidden]*num_layers → 2*latent_dim (μ and log σ²)
+        enc_dims = [self.flat_dim] + [hidden_dim] * num_layers + [2 * self.latent_dim]
+        self.encoder_net = StandardMLP(enc_dims, dropout=0.0, layernorm=False)
+
+        # Decoder: latent_dim → [hidden]*num_layers → flat_dim
+        dec_dims = [self.latent_dim] + [hidden_dim] * num_layers + [self.flat_dim]
+        self.decoder_net = StandardMLP(dec_dims, dropout=0.0, layernorm=False)
+
+        self.readout_dim = self.latent_dim + self.num_context_attrs
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def _flatten(self, batch) -> torch.Tensor:
+        '''Returns flat input [B, flat_dim] from a batch.'''
+        B = batch.num_graphs
+        N = self.num_nodes
+        dense_adj = to_dense_adj(batch.edge_index, batch.batch, batch.edge_attr)
+        triu_i, triu_j = torch.triu_indices(N, N, offset=1, device=batch.edge_index.device)
+        triu_flat = dense_adj[:, triu_i, triu_j].reshape(B, -1)  # [B, n_triu * num_edge_attr]
+
+        parts = [triu_flat]
+        if self.num_node_attr > 0:
+            parts.append(batch.x.reshape(B, -1))                  # [B, N * num_node_attr]
+        return torch.cat(parts, dim=1)
+
+    def _get_decoder_labels(self, batch):
+        '''Returns triu edges [B*n_triu, num_edge_attr] and node features [B*N, num_node_attr].'''
+        N = self.num_nodes
+        dense_adj = to_dense_adj(batch.edge_index, batch.batch, batch.edge_attr)
+        triu_i, triu_j = torch.triu_indices(N, N, offset=1, device=batch.edge_index.device)
+        edges = dense_adj[:, triu_i, triu_j].reshape(-1, self.num_edge_attr)  # [B*n_triu, E]
+        x = batch.x.clone() if self.num_node_attr > 0 else None
+        return edges, x
+
+    def forward(self, batch):
+        B = batch.num_graphs
+        N = self.num_nodes
+
+        # Encode
+        flat = self._flatten(batch)                          # [B, flat_dim]
+        encoded = self.encoder_net(flat)                     # [B, 2*latent_dim]
+        mu = encoded[:, :self.latent_dim]
+        logvar = encoded[:, self.latent_dim:]
+        z = self.reparameterize(mu, logvar)                  # [B, latent_dim]
+
+        # Decode and split output back into edges and node features
+        rcn_flat = self.decoder_net(z)                       # [B, flat_dim]
+        n_edge_vals = self.n_triu * self.num_edge_attr
+        rcn_edges = rcn_flat[:, :n_edge_vals].reshape(-1, self.num_edge_attr)  # [B*n_triu, E]
+        rcn_x = None
+        if self.num_node_attr > 0:
+            rcn_x = rcn_flat[:, n_edge_vals:].reshape(B * N, self.num_node_attr)
+
+        edges, x = self._get_decoder_labels(batch)
+        return Outputs(x=x, rcn_x=rcn_x, edges=edges, rcn_edges=rcn_edges, z=z, mu=mu, logvar=logvar)
+
+    def readout(self, z, context, batch_idx):
+        '''z is already graph-level [B, latent_dim]; concat context mean if present.'''
+        if context is not None and context.shape[1] > 0:
+            context_graph = scatter(context, batch_idx, dim=0, reduce='mean')
+            return torch.cat([z, context_graph], dim=1)
+        return z
+
+    def penalty(self):
+        return 0.0
+
+    def loss(self, out):
+        rcn_loss = torch.nn.functional.mse_loss(out.rcn_edges, out.edges, reduction='sum')
+        if out.rcn_x is not None:
+            rcn_loss += torch.nn.functional.mse_loss(out.rcn_x, out.x, reduction='sum')
+        kl_loss = torch.mean(-0.5 * torch.sum(1 + out.logvar - out.mu.pow(2) - out.logvar.exp(), dim=1))
+        return rcn_loss + self.kl_weight * kl_loss
