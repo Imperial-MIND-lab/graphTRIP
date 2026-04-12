@@ -1,0 +1,9 @@
+{
+  "data_dir": "data/raw/psilodep2/before/schaefer100",
+  "annotations_file": "data/raw/psilodep2/annotations.csv",
+  "target": "QIDS_Final_Integration",
+  "num_folds": 7,
+  "lambda_reg": 5.0,
+  "num_filters": 5,
+  "graph_attrs": ["QIDS_Before", "BDI_Before", "Stop_SSRI"]
+}
