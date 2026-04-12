@@ -1,36 +1,27 @@
 """
-Visualizes overfitting behaviour for a train_jointly run with one or more folds,
-and optionally across multiple seeds.
+Compares overfitting behaviour between two models (e.g. FlatVAE baseline vs graphTRIP),
+each run with multiple seeds.
 
-Produces a single figure with two panels: MLP loss curves (left) and true-vs-predicted
-scatter coloured by train/test split (right).
+Produces a single figure with three panels:
+  - True-vs-predicted scatter for model 1 (left)
+  - True-vs-predicted scatter for model 2 (center)
+  - Split violin comparing the train-test Pearson r gap (right):
+      y-axis: train_r - test_r (per seed)
+      x-axis: three condition subsets — Both, Escitalopram (Condition=-1), Psilocybin (Condition=1)
+      A red asterisk (*) is shown if a Wilcoxon signed-rank test (or Mann-Whitney U when
+      seed counts differ) finds p < 0.05 between the two models.
 
-Single-seed mode (--run_dir):
-  For multi-fold runs the loss panel shows mean ± SE across folds (shaded area), and
-  the scatter shows per-subject mean predictions averaged over all folds in which each
-  subject appeared in the train or test set.
-
-Multi-seed mode (--parent_dir):
-  Loss curves show mean ± SE across seeds (each seed's fold-mean is one observation).
-  Scatter shows per-subject predictions averaged first across folds within each seed,
-  then across seeds.
+Scatter predictions are averaged per subject across seeds and folds.
 
 Usage (from project root):
-    # Single seed
-    python scripts/visualize_overfitting.py --run_dir <run_dir> [--output_dir <dir>] [--fmt <ext>]
-
-    # Multiple seeds
-    python scripts/visualize_overfitting.py --parent_dir <parent_dir> [--output_dir <dir>] [--fmt <ext>]
-
-Example:
-    python scripts/visualize_overfitting.py --run_dir outputs/flatvae_mlp/job_0/seed_1 \
-        --output_dir outputs/overfitting/flatvae --fmt png
-
-    python scripts/visualize_overfitting.py --parent_dir outputs/flatvae_mlp \
-        --output_dir outputs/overfitting/flatvae_multiseed --fmt png
+    python scripts/visualize_overfitting.py \
+        --model1_dir outputs/flatvae_mlp \
+        --model2_dir outputs/graphtrip \
+        [--model1_name baseline] [--model2_name graphTRIP] \
+        [--output_dir outputs/comparison] [--fmt png]
 
 Author: Hanna M. Tolle
-Date: 2026-03-29
+Date: 2026-04-12
 License: BSD 3-Clause
 """
 import matplotlib
@@ -41,7 +32,6 @@ import os
 # Ensure project root is on the path regardless of where the script is invoked from
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import json
 import argparse
 import copy
 import glob
@@ -50,7 +40,8 @@ import numpy as np
 import pandas as pd
 import torch
 import matplotlib.pyplot as plt
-from scipy.stats import pearsonr
+import matplotlib.patches as mpatches
+from scipy.stats import pearsonr, wilcoxon, mannwhitneyu
 from torch_geometric.loader import DataLoader
 
 from utils.configs import load_ingredient_configs, fill_missing_configs
@@ -61,9 +52,17 @@ from experiments.ingredients.mlp_ingredient import get_x_with_vgae, get_mlp_outp
 
 # ── Figure constants ──────────────────────────────────────────────────────────
 
-FIGSIZE = (6.5, 2.75)            # (width, height) of the combined figure in inches
-SUBPLOT_TITLE_FONTSIZE = 10  # font size for panel titles ("MLP loss", "MLP Predictions")
+FIGSIZE = (9.5, 3.0)         # (width, height) of the combined figure in inches
+SUBPLOT_TITLE_FONTSIZE = 10  # font size for panel titles
 AXIS_LABEL_FONTSIZE = 9      # font size for axis labels and legend text
+
+# ── Color palette ─────────────────────────────────────────────────────────────
+
+COLOR_TRAIN     = '#377eb8'  # blue  — train scatter points
+COLOR_TEST      = '#e41a1c'  # red   — test scatter points
+COLOR_MODEL1    = '#4daf4a'  # green — violin for model 1
+COLOR_MODEL2    = '#984ea3'  # purple — violin for model 2
+VIOLIN_ALPHA    = 0.6        # transparency of violin bodies
 
 
 # ── Model loading helpers ─────────────────────────────────────────────────────
@@ -113,7 +112,7 @@ def _load_dataset(config: dict):
     return load_dataset_from_configs(config)
 
 
-# ── Utilities ────────────────────────────────────────────────────────────────
+# ── Utilities ─────────────────────────────────────────────────────────────────
 
 def _count_params(model: torch.nn.Module) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -138,108 +137,32 @@ def _find_seed_dirs(parent_dir: str) -> list:
     return dirs
 
 
-# ── Plotting ──────────────────────────────────────────────────────────────────
+# ── Correlation helpers ───────────────────────────────────────────────────────
 
-def _plot_overfitting_figure(train_losses, test_losses,
-                             train_df, test_df,
-                             target_name: str,
-                             save_path: str,
-                             log_every: int = 1,
-                             log_scale: bool = False):
-    """Single figure with two panels: MLP loss curves (left) and scatter (right).
+def _corr_diff(train_df: pd.DataFrame, test_df: pd.DataFrame) -> float:
+    """Compute train_r - test_r across all subjects.
 
-    Args:
-        train_losses: np.ndarray of shape [N, num_epochs], where N is num_folds
-                      (single-seed) or num_seeds (multi-seed, each row is fold-mean)
-        test_losses:  np.ndarray of shape [N, num_epochs]
-        train_df:     DataFrame with columns label, prediction (mean over folds/seeds)
-        test_df:      DataFrame with columns label, prediction
+    Returns np.nan if either split has fewer than 3 samples.
     """
-    N = train_losses.shape[0]
-    _, axes = plt.subplots(1, 2, figsize=FIGSIZE)
-
-    # ── Left: MLP loss curves ─────────────────────────────────────────────────
-    ax = axes[0]
-    num_epochs = train_losses.shape[1]
-    epochs = np.arange(0, num_epochs, log_every)
-
-    train_mean = train_losses[:, ::log_every].mean(axis=0)
-    test_mean  = test_losses[:, ::log_every].mean(axis=0)
-
-    if N == 1:
-        ax.plot(epochs, train_mean, color='blue', label='train', linewidth=2)
-        ax.plot(epochs, test_mean,  color='red',  label='test',  linewidth=2)
-    else:
-        train_se = train_losses[:, ::log_every].std(axis=0) / np.sqrt(N)
-        test_se  = test_losses[:, ::log_every].std(axis=0)  / np.sqrt(N)
-        ax.plot(epochs, train_mean, color='blue', label='train', linewidth=2)
-        ax.fill_between(epochs, train_mean - train_se, train_mean + train_se,
-                        color='blue', alpha=0.2)
-        ax.plot(epochs, test_mean, color='red', label='test', linewidth=2)
-        ax.fill_between(epochs, test_mean - test_se, test_mean + test_se,
-                        color='red', alpha=0.2)
-
-    if log_scale:
-        ax.set_yscale('log')
-    ax.set_title('MLP loss', fontsize=SUBPLOT_TITLE_FONTSIZE)
-    ax.set_xlabel('Epoch',   fontsize=AXIS_LABEL_FONTSIZE)
-    ax.set_ylabel('Loss',    fontsize=AXIS_LABEL_FONTSIZE)
-    ax.legend(fontsize=AXIS_LABEL_FONTSIZE)
-    ax.tick_params(labelsize=AXIS_LABEL_FONTSIZE)
-    ax.grid(True)
-
-    # ── Right: true-vs-predicted scatter ─────────────────────────────────────
-    ax = axes[1]
-    ax.scatter(train_df['label'], train_df['prediction'],
-               color='blue', edgecolors='blue', alpha=0.7, label='train', marker='o', s=15)
-    ax.scatter(test_df['label'], test_df['prediction'],
-               color='red',  edgecolors='red',  alpha=0.7, label='test',  marker='o', s=15)
-
-    all_vals = pd.concat([train_df[['label', 'prediction']], test_df[['label', 'prediction']]])
-    lo = min(all_vals.min()) - 2
-    hi = max(all_vals.max()) + 2
-    ax.plot([lo, hi], [lo, hi], '--', color='gray', alpha=0.6)
-
-    # Regression lines + r annotations
-    for df, color in [(train_df, 'blue'), (test_df, 'red')]:
-        m, b = np.polyfit(df['label'], df['prediction'], 1)
-        x_line = np.array([lo, hi])
-        ax.plot(x_line, m * x_line + b, '-', color=color, alpha=0.5, linewidth=1.5)
-        r, _ = pearsonr(df['label'], df['prediction'])
-        x_mid = (lo + hi) / 2
-        y_mid = m * x_mid + b
-        ax.text(x_mid, y_mid, f'r={r:.3f}', color=color,
-                fontsize=AXIS_LABEL_FONTSIZE, ha='center', va='bottom')
-
-    ax.set_xlim(lo, hi)
-    ax.set_ylim(lo, hi)
-    ax.set_aspect('equal', adjustable='box')
-    ax.set_xlabel(f'True {target_name.split("_")[0]}',      fontsize=AXIS_LABEL_FONTSIZE)
-    ax.set_ylabel(f'Predicted {target_name.split("_")[0]}', fontsize=AXIS_LABEL_FONTSIZE)
-    ax.tick_params(labelsize=AXIS_LABEL_FONTSIZE)
-    ax.legend(fontsize=AXIS_LABEL_FONTSIZE)
-    ax.set_title('MLP Predictions', fontsize=SUBPLOT_TITLE_FONTSIZE)
-    ax.grid(True)
-
-    plt.tight_layout()
-    plt.savefig(save_path, format=save_path.split('.')[-1])
-    plt.close()
+    if len(train_df) < 3 or len(test_df) < 3:
+        return np.nan
+    train_r, _ = pearsonr(train_df['label'], train_df['prediction'])
+    test_r,  _ = pearsonr(test_df['label'],  test_df['prediction'])
+    return train_r - test_r
 
 
 # ── Per-run data collection ───────────────────────────────────────────────────
 
 def collect_run_data(run_dir: str, data, config: dict, device) -> dict:
-    """Collect loss curves and predictions for one seed directory.
+    """Collect predictions for one seed directory.
 
     Returns a dict with:
-        train_losses:  np.ndarray [num_folds, num_epochs]
-        test_losses:   np.ndarray [num_folds, num_epochs]
-        train_losses_mean: np.ndarray [num_epochs]  (fold-mean, used for multi-seed)
-        test_losses_mean:  np.ndarray [num_epochs]
-        train_df:      pd.DataFrame  subject_id, label, prediction (fold-mean per subject)
-        test_df:       pd.DataFrame  subject_id, label, prediction
-        mlp_params:    int
-        vae_params:    int
+        train_df:   pd.DataFrame  subject_id, label, prediction, Condition
+                    (fold-mean predictions per subject)
+        test_df:    pd.DataFrame  subject_id, label, prediction, Condition
+                    (from prediction_results.csv — one row per subject)
+        mlp_params: int
+        vae_params: int
     """
     num_folds = _detect_num_folds(run_dir)
     print(f"  {run_dir}: {num_folds} fold(s)")
@@ -256,22 +179,15 @@ def collect_run_data(run_dir: str, data, config: dict, device) -> dict:
         vgaes.append(vgae)
         mlps.append(mlp)
 
-    # Load MLP loss curves
-    with open(os.path.join(run_dir, 'metrics.json')) as f:
-        metrics = json.load(f)
-    train_losses = np.array([
-        metrics[f'training/fold{k}/epoch/mlp_loss']['values'] for k in range(num_folds)
-    ])
-    test_losses = np.array([
-        metrics[f'test/fold{k}/epoch/mlp_loss']['values'] for k in range(num_folds)
-    ])
-
     # Load fold assignments for this seed
     fold_assignments = np.loadtxt(
         os.path.join(run_dir, 'test_fold_indices.csv'), dtype=int)
 
-    # Test predictions
+    # Test predictions (covers all subjects via k-fold — one test fold each)
     test_df = pd.read_csv(os.path.join(run_dir, 'prediction_results.csv'))
+
+    # Build Condition lookup from test_df (all subjects appear exactly once)
+    condition_map = dict(zip(test_df['subject_id'], test_df['Condition']))
 
     # Train predictions: average per subject over folds where they were in train
     pred_accum  = defaultdict(list)
@@ -293,143 +209,253 @@ def collect_run_data(run_dir: str, data, config: dict, device) -> dict:
         'subject_id': list(pred_accum.keys()),
         'label':      [label_store[s] for s in pred_accum],
         'prediction': [np.mean(preds) for preds in pred_accum.values()],
+        'Condition':  [condition_map.get(s, np.nan) for s in pred_accum],
     })
 
     return {
-        'train_losses':      train_losses,
-        'test_losses':       test_losses,
-        'train_losses_mean': train_losses.mean(axis=0),
-        'test_losses_mean':  test_losses.mean(axis=0),
-        'train_df':          train_df,
-        'test_df':           test_df,
-        'mlp_params':        _count_params(mlps[0]),
-        'vae_params':        _count_params(vgaes[0]),
+        'train_df':   train_df,
+        'test_df':    test_df,
+        'mlp_params': _count_params(mlps[0]),
+        'vae_params': _count_params(vgaes[0]),
     }
+
+
+# ── Plotting ──────────────────────────────────────────────────────────────────
+
+def _plot_scatter_panel(ax, train_df: pd.DataFrame, test_df: pd.DataFrame,
+                        target_name: str, model_name: str):
+    """True-vs-predicted scatter on ax, coloured by train/test split."""
+    ax.scatter(train_df['label'], train_df['prediction'],
+               color=COLOR_TRAIN, edgecolors=COLOR_TRAIN, alpha=0.7, label='train', marker='o', s=15)
+    ax.scatter(test_df['label'], test_df['prediction'],
+               color=COLOR_TEST,  edgecolors=COLOR_TEST,  alpha=0.7, label='test',  marker='o', s=15)
+
+    all_vals = pd.concat([train_df[['label', 'prediction']], test_df[['label', 'prediction']]])
+    lo = min(all_vals.min()) - 2
+    hi = max(all_vals.max()) + 2
+    ax.plot([lo, hi], [lo, hi], '--', color='gray', alpha=0.6)
+
+    for df, color in [(train_df, COLOR_TRAIN), (test_df, COLOR_TEST)]:
+        m, b = np.polyfit(df['label'], df['prediction'], 1)
+        x_line = np.array([lo, hi])
+        ax.plot(x_line, m * x_line + b, '-', color=color, alpha=0.5, linewidth=1.5)
+        r, _ = pearsonr(df['label'], df['prediction'])
+        x_mid = (lo + hi) / 2
+        y_mid = m * x_mid + b
+        ax.text(x_mid, y_mid, f'r={r:.3f}', color=color,
+                fontsize=AXIS_LABEL_FONTSIZE, ha='center', va='bottom')
+
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.set_aspect('equal', adjustable='box')
+    ax.set_xlabel(f'True {target_name.split("_")[0]}',      fontsize=AXIS_LABEL_FONTSIZE)
+    ax.set_ylabel(f'Predicted {target_name.split("_")[0]}', fontsize=AXIS_LABEL_FONTSIZE)
+    ax.tick_params(labelsize=AXIS_LABEL_FONTSIZE)
+    ax.legend(fontsize=AXIS_LABEL_FONTSIZE)
+    ax.set_title(model_name, fontsize=SUBPLOT_TITLE_FONTSIZE)
+    ax.grid(True)
+
+
+def _plot_violin_panel(ax, seed_results1: list, seed_results2: list,
+                       model1_name: str, model2_name: str):
+    """Two violins of per-seed (train_r - test_r), one per model."""
+    colors = [COLOR_MODEL1, COLOR_MODEL2]
+    model_names = [model1_name, model2_name]
+    all_seed_results = [seed_results1, seed_results2]
+
+    # Collect per-seed values and draw violins via matplotlib
+    data_per_model = []
+    for seed_results in all_seed_results:
+        vals = [_corr_diff(r['train_df'], r['test_df']) for r in seed_results]
+        data_per_model.append([v for v in vals if not np.isnan(v)])
+
+    for x_pos, (vals, color) in enumerate(zip(data_per_model, colors)):
+        if len(vals) < 2:
+            continue
+        parts = ax.violinplot(vals, positions=[x_pos], widths=0.6,
+                              showmedians=True, showextrema=False)
+        for pc in parts['bodies']:
+            pc.set_facecolor(color)
+            pc.set_edgecolor(color)
+            pc.set_alpha(VIOLIN_ALPHA)
+        parts['cmedians'].set_color(color)
+        parts['cmedians'].set_linewidth(2)
+
+    # Scatter points on top (one per seed, with jitter)
+    rng = np.random.default_rng(seed=0)
+    for x_pos, (seed_results, color) in enumerate(zip(all_seed_results, colors)):
+        for r in seed_results:
+            val = _corr_diff(r['train_df'], r['test_df'])
+            if np.isnan(val):
+                continue
+            jitter = rng.uniform(-0.06, 0.06)
+            ax.scatter(x_pos + jitter, val,
+                       color=color, edgecolors='black',
+                       s=20, zorder=5, alpha=0.85, linewidths=0.5)
+
+    # Non-parametric test — red asterisk if p < 0.05
+    d1 = np.array(data_per_model[0])
+    d2 = np.array(data_per_model[1])
+    p = 1.0
+    if len(d1) >= 3 and len(d2) >= 3:
+        if len(d1) == len(d2):
+            try:
+                _, p = wilcoxon(d1, d2, alternative='two-sided')
+            except ValueError:
+                _, p = mannwhitneyu(d1, d2, alternative='two-sided')
+        else:
+            _, p = mannwhitneyu(d1, d2, alternative='two-sided')
+
+    all_vals = d1.tolist() + d2.tolist()
+    if all_vals:
+        y_top = max(all_vals)
+        y_bot = min(all_vals)
+        y_range = y_top - y_bot
+        ax.set_ylim(y_bot - 0.05 * y_range, y_top + 0.15 * y_range)
+
+    if p < 0.05 and all_vals:
+        asterisk_y = y_top + 0.04 * y_range
+        # x=0.5 in axes-fraction coordinates, y in data coordinates
+        ax.text(0.5, asterisk_y, '*', color='red',
+                ha='center', va='bottom', fontsize=13, fontweight='bold',
+                transform=ax.get_yaxis_transform())
+
+    # Legend patches
+    patches = [mpatches.Patch(facecolor=c, alpha=VIOLIN_ALPHA, label=n)
+               for c, n in zip(colors, model_names)]
+    ax.legend(handles=patches, fontsize=AXIS_LABEL_FONTSIZE)
+
+    ax.set_xticks([0, 1])
+    ax.set_xticklabels(model_names, fontsize=AXIS_LABEL_FONTSIZE)
+    ax.set_xlabel('',               fontsize=AXIS_LABEL_FONTSIZE)
+    ax.set_ylabel('Train r - Test r', fontsize=AXIS_LABEL_FONTSIZE)
+    ax.set_title('Train-Test Gap',  fontsize=SUBPLOT_TITLE_FONTSIZE)
+    ax.tick_params(labelsize=AXIS_LABEL_FONTSIZE)
+    ax.grid(True, axis='y', alpha=0.5)
+
+
+def _plot_comparison_figure(agg_train_df1, agg_test_df1,
+                             agg_train_df2, agg_test_df2,
+                             seed_results1, seed_results2,
+                             model1_name: str, model2_name: str,
+                             target_name: str, save_path: str):
+    """Three-panel figure: scatter model1 | scatter model2 | split violin."""
+    _, axes = plt.subplots(1, 3, figsize=FIGSIZE)
+
+    _plot_scatter_panel(axes[0], agg_train_df1, agg_test_df1, target_name, model1_name)
+    _plot_scatter_panel(axes[1], agg_train_df2, agg_test_df2, target_name, model2_name)
+    _plot_violin_panel(axes[2], seed_results1, seed_results2, model1_name, model2_name)
+
+    plt.tight_layout()
+    plt.savefig(save_path, format=save_path.split('.')[-1])
+    plt.close()
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def main(run_dir: str, parent_dir: str, output_dir: str, fmt: str, log_every: int = 1, log_scale: bool = False):
+def _aggregate_scatter(seed_results: list):
+    """Average per-subject predictions and labels across seeds."""
+    all_train = pd.concat([r['train_df'] for r in seed_results], ignore_index=True)
+    agg_train = (all_train.groupby('subject_id')
+                 .mean(numeric_only=True)
+                 .reset_index())
+
+    all_test = pd.concat([r['test_df'] for r in seed_results], ignore_index=True)
+    agg_test = (all_test.groupby('subject_id')
+                .mean(numeric_only=True)
+                .reset_index())
+
+    return agg_train, agg_test
+
+
+def main(model1_dir: str, model2_dir: str,
+         model1_name: str, model2_name: str,
+         output_dir: str, fmt: str):
     os.makedirs(output_dir, exist_ok=True)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # Determine mode and collect seed dirs
-    if parent_dir is not None:
-        seed_dirs = _find_seed_dirs(parent_dir)
-        print(f"Multi-seed mode: found {len(seed_dirs)} seed dir(s) in {parent_dir}")
-        ref_dir = seed_dirs[0]
-    else:
-        seed_dirs = [run_dir]
-        ref_dir = run_dir
+    # Find seed directories
+    seed_dirs1 = _find_seed_dirs(model1_dir)
+    seed_dirs2 = _find_seed_dirs(model2_dir)
+    print(f"{model1_name}: {len(seed_dirs1)} seed dir(s) in {model1_dir}")
+    print(f"{model2_name}: {len(seed_dirs2)} seed dir(s) in {model2_dir}")
 
-    # Load config (shared across seeds)
+    # Load configs (one per model, from their respective first seed)
     print("Loading configs...")
-    config = load_ingredient_configs(ref_dir, ingredients=['dataset', 'vgae_model', 'mlp_model'])
-    target_name = config['dataset'].get('target', 'target')
+    config1 = load_ingredient_configs(seed_dirs1[0],
+                                      ingredients=['dataset', 'vgae_model', 'mlp_model'])
+    config2 = load_ingredient_configs(seed_dirs2[0],
+                                      ingredients=['dataset', 'vgae_model', 'mlp_model'])
+    target_name = config1['dataset'].get('target', 'target')
 
-    # Load dataset (shared across seeds)
-    print("Loading dataset...")
-    data = _load_dataset(config['dataset'])
+    # Load datasets
+    print("Loading datasets...")
+    data1 = _load_dataset(config1['dataset'])
+    data2 = _load_dataset(config2['dataset'])
 
     # Collect per-seed data
-    print("Collecting data per seed...")
-    seed_results = []
-    for sd in seed_dirs:
-        result = collect_run_data(sd, data, config, device)
-        seed_results.append(result)
+    print(f"Collecting data for {model1_name}...")
+    seed_results1 = [collect_run_data(sd, data1, config1, device) for sd in seed_dirs1]
 
-    num_seeds = len(seed_results)
+    print(f"Collecting data for {model2_name}...")
+    seed_results2 = [collect_run_data(sd, data2, config2, device) for sd in seed_dirs2]
 
-    # ── Aggregate ────────────────────────────────────────────────────────────
-    if num_seeds == 1:
-        # Single-seed: pass raw fold arrays directly (existing behaviour)
-        r = seed_results[0]
-        agg_train_losses = r['train_losses']   # [num_folds, num_epochs]
-        agg_test_losses  = r['test_losses']
-        agg_train_df     = r['train_df']
-        agg_test_df      = r['test_df']
-    else:
-        # Multi-seed: each row = per-seed fold-mean → [num_seeds, num_epochs]
-        agg_train_losses = np.stack(
-            [r['train_losses_mean'] for r in seed_results], axis=0)
-        agg_test_losses  = np.stack(
-            [r['test_losses_mean']  for r in seed_results], axis=0)
-
-        # Predictions: average per-subject across seeds
-        all_train = pd.concat([r['train_df'] for r in seed_results], ignore_index=True)
-        agg_train_df = (all_train.groupby('subject_id')
-                        .mean(numeric_only=True)
-                        .reset_index())
-
-        all_test = pd.concat([r['test_df'] for r in seed_results], ignore_index=True)
-        agg_test_df = (all_test.groupby('subject_id')
-                       .mean(numeric_only=True)
-                       .reset_index())
+    # Aggregate scatter predictions (per-subject mean across seeds)
+    agg_train1, agg_test1 = _aggregate_scatter(seed_results1)
+    agg_train2, agg_test2 = _aggregate_scatter(seed_results2)
 
     # ── Stats CSV ─────────────────────────────────────────────────────────────
-    train_corr, train_p = pearsonr(agg_train_df['label'], agg_train_df['prediction'])
-    test_corr,  test_p  = pearsonr(agg_test_df['label'],  agg_test_df['prediction'])
+    rows = []
+    for model_name, seed_results in [(model1_name, seed_results1),
+                                     (model2_name, seed_results2)]:
+        vals = [_corr_diff(r['train_df'], r['test_df']) for r in seed_results]
+        vals = [v for v in vals if not np.isnan(v)]
+        n = len(vals)
+        rows.append({
+            'model':           model_name,
+            'num_seeds':       len(seed_results),
+            'mlp_params':      seed_results[0]['mlp_params'],
+            'vae_params':      seed_results[0]['vae_params'],
+            'mean_corr_diff':  float(np.mean(vals)) if n > 0 else np.nan,
+            'se_corr_diff':    float(np.std(vals, ddof=1) / np.sqrt(n)) if n > 1 else np.nan,
+        })
 
-    # Per-seed corr difference (train - test)
-    seed_diffs = []
-    for r in seed_results:
-        tc, _ = pearsonr(r['train_df']['label'], r['train_df']['prediction'])
-        ec, _ = pearsonr(r['test_df']['label'],  r['test_df']['prediction'])
-        seed_diffs.append(tc - ec)
-    mean_corr_diff = float(np.mean(seed_diffs))
-    se_corr_diff   = float(np.std(seed_diffs, ddof=1) / np.sqrt(num_seeds)) if num_seeds > 1 else float('nan')
-
-    mlp_params = seed_results[0]['mlp_params']
-    vae_params = seed_results[0]['vae_params']
-    stats_df = pd.DataFrame([{
-        'num_seeds':         num_seeds,
-        'num_folds':         seed_results[0]['train_losses'].shape[0],
-        'mlp_param_count':   mlp_params,
-        'vae_param_count':   vae_params,
-        'total_param_count': mlp_params + vae_params,
-        'train_corr':    train_corr,
-        'train_p':       train_p,
-        'test_corr':     test_corr,
-        'test_p':        test_p,
-        'mean_corr_diff': mean_corr_diff,
-        'se_corr_diff':   se_corr_diff,
-    }])
-    stats_df.to_csv(os.path.join(output_dir, 'stats.csv'), index=False)
+    pd.DataFrame(rows).to_csv(os.path.join(output_dir, 'stats.csv'), index=False)
 
     # ── Plot ──────────────────────────────────────────────────────────────────
-    save_path = os.path.join(output_dir, f'overfitting.{fmt}')
+    save_path = os.path.join(output_dir, f'comparison.{fmt}')
     print(f"Saving figure to {save_path}...")
-    _plot_overfitting_figure(
-        agg_train_losses, agg_test_losses,
-        agg_train_df, agg_test_df,
+    _plot_comparison_figure(
+        agg_train1, agg_test1,
+        agg_train2, agg_test2,
+        seed_results1, seed_results2,
+        model1_name=model1_name,
+        model2_name=model2_name,
         target_name=target_name,
         save_path=save_path,
-        log_every=log_every,
-        log_scale=log_scale,
     )
     print("Done.")
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Visualize overfitting for a train_jointly run.')
+        description='Compare overfitting between two multi-seed model runs.')
 
-    mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument('--run_dir', type=str,
-                      help='Single seed directory with run outputs')
-    mode.add_argument('--parent_dir', type=str,
-                      help='Parent directory containing seed_* subdirectories')
-
+    parser.add_argument('--model1_dir', type=str, required=True,
+                        help='Parent directory (with seed_* subdirs) for model 1')
+    parser.add_argument('--model2_dir', type=str, required=True,
+                        help='Parent directory (with seed_* subdirs) for model 2')
+    parser.add_argument('--model1_name', type=str, default='baseline',
+                        help='Display name for model 1 (default: baseline)')
+    parser.add_argument('--model2_name', type=str, default='graphTRIP',
+                        help='Display name for model 2 (default: graphTRIP)')
     parser.add_argument('--output_dir', type=str, default=None,
-                        help='Where to save the figure (default: <run_dir|parent_dir>/overfitting_plots/)')
+                        help='Where to save outputs (default: <model1_dir>/comparison/)')
     parser.add_argument('--fmt', type=str, default='png',
                         help='Plot file format (default: png)')
-    parser.add_argument('--log_every', type=int, default=1,
-                        help='Plot every N-th epoch in loss curves (default: 1)')
-    parser.add_argument('--log_scale', action='store_true', default=False,
-                        help='Use log scale for the loss y-axis (default: False)')
     args = parser.parse_args()
 
-    base = args.run_dir or args.parent_dir
-    output_dir = args.output_dir or os.path.join(base, 'overfitting_plots')
-    main(args.run_dir, args.parent_dir, output_dir, args.fmt, log_every=args.log_every, log_scale=args.log_scale)
+    output_dir = args.output_dir or os.path.join(args.model1_dir, 'comparison')
+    main(args.model1_dir, args.model2_dir,
+         args.model1_name, args.model2_name,
+         output_dir, args.fmt)
