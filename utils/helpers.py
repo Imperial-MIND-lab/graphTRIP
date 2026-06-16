@@ -11,6 +11,7 @@ import torch
 import pandas as pd
 import random
 import numpy as np
+from scipy import stats
 from torch_geometric.seed import seed_everything
 import importlib
 import logging
@@ -508,6 +509,73 @@ def load_test_fold_indices(weights_base_dir, subdir_name_pattern='seed_*'):
         else:
             print(f"Warning: {test_indices_path} not found, skipping {subdir_name}")
     return test_indices_dict, subdirs
+
+def summarise_seed_metrics(
+    base_dir: str,
+    subdir_name_pattern: str = 'seed_*',
+    prediction_file: str = 'prediction_results.csv',
+    pred_col: str = 'prediction',
+    label_col: str = 'label',
+) -> pd.DataFrame:
+    """
+    For each seed subdirectory in base_dir, loads prediction_results.csv and
+    computes per-seed prediction metrics. Saves and returns a summary CSV at
+    base_dir/seed_metrics_summary.csv where each row is one seed.
+
+    Args:
+        base_dir: Directory containing seed_* subdirectories.
+        subdir_name_pattern: Glob pattern to identify seed subdirectories.
+        prediction_file: Name of the prediction CSV in each seed subdirectory.
+        pred_col: Column name for model predictions.
+        label_col: Column name for ground truth labels.
+
+    Returns:
+        pd.DataFrame with columns [seed, r, p_value, r2, mae, mse, rmse].
+    """
+    output_file = os.path.join(base_dir, 'seed_metrics_summary.csv')
+    if os.path.exists(output_file):
+        print(f"Output file found at {output_file}. Loading existing results.")
+        return pd.read_csv(output_file)
+
+    subdirs = sorted([
+        d for d in glob.glob(os.path.join(base_dir, subdir_name_pattern))
+        if os.path.isdir(d)
+    ])
+
+    rows = []
+    for subdir in subdirs:
+        file_path = os.path.join(subdir, prediction_file)
+        if not os.path.exists(file_path):
+            print(f"Warning: {file_path} not found, skipping.")
+            continue
+        df = pd.read_csv(file_path)
+        y_true = df[label_col].values
+        y_pred = df[pred_col].values
+        r, p_value = stats.pearsonr(y_true, y_pred)
+        ss_res = np.sum((y_true - y_pred) ** 2)
+        ss_tot = np.sum((y_true - y_true.mean()) ** 2)
+        r2 = 1 - ss_res / ss_tot
+        mae = np.mean(np.abs(y_true - y_pred))
+        mse = np.mean((y_true - y_pred) ** 2)
+        rmse = np.sqrt(mse)
+        rows.append({
+            'seed': os.path.basename(subdir),
+            'r': r,
+            'p_value': p_value,
+            'r2': r2,
+            'mae': mae,
+            'mse': mse,
+            'rmse': rmse,
+        })
+
+    if not rows:
+        raise ValueError(f"No valid prediction files found in {base_dir}.")
+
+    summary_df = pd.DataFrame(rows)
+    summary_df.to_csv(output_file, index=False)
+    print(f"Seed metrics summary saved to {output_file}")
+    return summary_df
+
 
 def aggregate_attention_results(results_base_dir, subdir_name_pattern: str = 'seed_*'):
     """
