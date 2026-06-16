@@ -5,7 +5,7 @@ experiments/.neptune/
 
 # Outputs and weights
 outputs/
-notebooks/figures/
+notebooks/figures*/
 notebooks/config_tables/
 
 # Unused code
