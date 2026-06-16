@@ -329,7 +329,8 @@ def aggregate_prediction_results(
 ) -> pd.DataFrame:
     """
     Aggregates prediction CSVs from subdirectories by averaging numeric columns
-    aligned by a specific merge column (e.g., subject_id). 
+    aligned by a specific merge column (e.g., subject_id). Adds prediction_sem and prediction_std columns
+    for the standard error and standard deviation of the mean predictions, respectively.
     
     Args:
         results_file: Output CSV file to read from or write to.
@@ -337,7 +338,7 @@ def aggregate_prediction_results(
         subdir_name_pattern: Pattern to identify subdirectories containing results.
     
     Returns:
-        pd.DataFrame: The aggregated and averaged DataFrame.
+        pd.DataFrame: The aggregated and averaged DataFrame with std and sem columns.
     """
     # If the results_file exists, just load and return it
     if os.path.exists(results_file):
@@ -371,9 +372,41 @@ def aggregate_prediction_results(
     if not dataframes:
         raise ValueError("No valid DataFrames were loaded. Check your paths and filenames.")
 
-    # Aggregate and average
+    # Combine the DataFrames
     combined_df = pd.concat(dataframes, ignore_index=True)
-    aggregated_df = combined_df.groupby(merge_column).mean(numeric_only=True).reset_index()
+    # Get all numeric prediction columns except the merge_column
+    prediction_columns = [col for col in combined_df.columns if col != merge_column and np.issubdtype(combined_df[col].dtype, np.number)]
+    # If there's only one numeric column other than the merge_column, treat it as the main prediction column
+    if len(prediction_columns) == 1:
+        main_pred_col = prediction_columns[0]
+        grouped = combined_df.groupby(merge_column)[main_pred_col]
+        means = grouped.mean()
+        std = grouped.std(ddof=1)
+        sem = grouped.sem(ddof=1)
+        aggregated_df = means.reset_index()
+        aggregated_df["prediction_std"] = std.values
+        aggregated_df["prediction_sem"] = sem.values
+    else:
+        grouped = combined_df.groupby(merge_column)
+        # Retain mean columns as before
+        aggregated_df = grouped.mean(numeric_only=True).reset_index()
+        # If "prediction" column exists, also compute its std/sem, otherwise just use the first available numeric column
+        pred_col = None
+        for col in prediction_columns:
+            if "pred" in col.lower():
+                pred_col = col
+                break
+        if pred_col is None and prediction_columns:
+            pred_col = prediction_columns[0]
+        if pred_col is not None:
+            std = grouped[pred_col].std(ddof=1)
+            sem = grouped[pred_col].sem(ddof=1)
+            aggregated_df["prediction_std"] = std.values
+            aggregated_df["prediction_sem"] = sem.values
+        else:
+            # No prediction column found, fill with NaN
+            aggregated_df["prediction_std"] = np.nan
+            aggregated_df["prediction_sem"] = np.nan
 
     # Save to results_file
     output_dir = os.path.dirname(results_file)
