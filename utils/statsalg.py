@@ -821,6 +821,36 @@ def get_cohen_d_label(cohen_d: float) -> str:
     else:
         return "very large"
 
+def compare_reconstruction_performance(primary: dict, validation: dict) -> dict[str, pd.DataFrame]:
+    from scipy.stats import mannwhitneyu
+    results = {}
+
+    for metric in ("corr", "mae"):
+        a = primary[metric]
+        b = validation[metric]
+        rows = []
+
+        for feat in a.columns:
+            x = a[feat].dropna().values
+            y = b[feat].dropna().values
+
+            U, p = mannwhitneyu(x, y, alternative="two-sided")
+
+            nx, ny = len(x), len(y)
+            pooled_std = np.sqrt(((nx - 1) * x.std(ddof=1) ** 2 + (ny - 1) * y.std(ddof=1) ** 2) / (nx + ny - 2))
+            d = (x.mean() - y.mean()) / pooled_std if pooled_std > 0 else np.nan
+
+            rows.append({"feature": feat, "U_stat": U, "p_uncorrected": p, "cohens_d": d})
+
+        df = pd.DataFrame(rows)
+        _, p_fdr = fdrcorrection(df["p_uncorrected"])
+        df["p_fdr"] = p_fdr
+        df = df[["feature", "U_stat", "p_uncorrected", "p_fdr", "cohens_d"]]
+
+        results[metric] = df
+
+    return results
+
 # Regression model evaluation ---------------------------------------------------
 
 def analyze_coefficient_sparsity(pred_models: Dict, 
