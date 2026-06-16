@@ -112,6 +112,23 @@ def main(config_file, output_dir, verbose, debug, seed, config_id=0):
         else:
             print(f"Transfer to {atlas} experiment already exists in {ex_dir}.")
 
+    # Ridge regression on z only (no clinical features) -----------------------
+    exname = 'train_linreg_on_z'
+    ex_dir = os.path.join(output_dir, 'linreg_on_z', f'seed_{seed}')
+    if not os.path.exists(ex_dir):
+        config_updates = {}
+        config_updates['dataset'] = copy.deepcopy(ingredient_config['dataset'])
+        config_updates['dataset']['graph_attrs'] = []
+        config_updates['vgae_model'] = copy.deepcopy(ingredient_config['vgae_model'])
+        config_updates['output_dir'] = ex_dir
+        config_updates['weights_dir'] = weights_dir
+        config_updates['seed'] = seed
+        config_updates['verbose'] = verbose
+        config_updates['save_weights'] = False
+        run(exname, observer, config_updates)
+    else:
+        print(f"Ridge regression on z experiment already exists in {ex_dir}.")
+
     # Generate counterfactual predictions for each drug -----------------------
     exname = 'test_and_finetune'
     drugs = ['escitalopram', 'psilocybin']
