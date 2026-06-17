@@ -2,7 +2,7 @@
 #PBS -l select=1:ncpus=4:mem=8gb
 #PBS -l walltime=08:00:00
 #PBS -N rebuttals
-#PBS -J 0-31
+#PBS -J 0-21
 
 # Load environment
 module load miniforge/3
@@ -17,7 +17,6 @@ cd $PBS_O_WORKDIR
 # 1:     medusa leakage test (seed 0)
 # 2-11:  ablation job 5 (no node features), seeds 0-9
 # 12-21: ablation job 6 (no clinical features), seeds 0-9
-# 22-31: permutation test, 10 jobs × 100 permutations = 1000 total
 
 if [ "$PBS_ARRAY_INDEX" -eq 0 ]; then
     python scripts/graphtrip_leakage_test.py -s 0
@@ -29,10 +28,4 @@ elif [ "$PBS_ARRAY_INDEX" -ge 2 ] && [ "$PBS_ARRAY_INDEX" -le 11 ]; then
 elif [ "$PBS_ARRAY_INDEX" -ge 12 ] && [ "$PBS_ARRAY_INDEX" -le 21 ]; then
     SEED=$((PBS_ARRAY_INDEX - 12))
     python scripts/ablation.py -j 6 -s $SEED
-elif [ "$PBS_ARRAY_INDEX" -ge 22 ] && [ "$PBS_ARRAY_INDEX" -le 31 ]; then
-    JOBID=$((PBS_ARRAY_INDEX - 22))
-    python -m experiments.run_experiment permutation_test FileStorageObserver \
-        --config_json=permutation_test.json \
-        --jobid=$JOBID \
-        --seed=$JOBID
 fi
