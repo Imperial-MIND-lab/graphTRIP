@@ -2,7 +2,7 @@
 #PBS -l select=1:ncpus=4:mem=8gb
 #PBS -l walltime=08:00:00
 #PBS -N rebuttals
-#PBS -J 0-21
+#PBS -J 0-39
 
 # Load environment
 module load miniforge/3
@@ -13,19 +13,21 @@ conda activate graphtrip
 cd $PBS_O_WORKDIR
 
 # Array indices:
-# 0:     graphtrip leakage test (seed 0)
-# 1:     medusa leakage test (seed 0)
-# 2-11:  ablation job 5 (no node features), seeds 0-9
-# 12-21: ablation job 6 (no clinical features), seeds 0-9
+# 0-9:   graphtrip leakage test, seeds 0-9
+# 10-19: medusa leakage test, seeds 0-9
+# 20-29: ablation job 5 (no node features), seeds 0-9
+# 30-39: ablation job 6 (no clinical features), seeds 0-9
 
-if [ "$PBS_ARRAY_INDEX" -eq 0 ]; then
-    python scripts/graphtrip_leakage_test.py -s 0
-elif [ "$PBS_ARRAY_INDEX" -eq 1 ]; then
-    python scripts/medusa_leakage_test.py -s 0
-elif [ "$PBS_ARRAY_INDEX" -ge 2 ] && [ "$PBS_ARRAY_INDEX" -le 11 ]; then
-    SEED=$((PBS_ARRAY_INDEX - 2))
-    python scripts/ablation.py -j 5 -s $SEED
-elif [ "$PBS_ARRAY_INDEX" -ge 12 ] && [ "$PBS_ARRAY_INDEX" -le 21 ]; then
-    SEED=$((PBS_ARRAY_INDEX - 12))
-    python scripts/ablation.py -j 6 -s $SEED
+if [ "$PBS_ARRAY_INDEX" -ge 0 ] && [ "$PBS_ARRAY_INDEX" -le 9 ]; then
+    SEED=$((PBS_ARRAY_INDEX))
+    python -m scripts.graphtrip_leakage_test -s $SEED
+elif [ "$PBS_ARRAY_INDEX" -ge 10 ] && [ "$PBS_ARRAY_INDEX" -le 19 ]; then
+    SEED=$((PBS_ARRAY_INDEX - 10))
+    python -m scripts.medusa_leakage_test -s $SEED
+elif [ "$PBS_ARRAY_INDEX" -ge 20 ] && [ "$PBS_ARRAY_INDEX" -le 29 ]; then
+    SEED=$((PBS_ARRAY_INDEX - 20))
+    python -m scripts.ablation -j 5 -s $SEED
+elif [ "$PBS_ARRAY_INDEX" -ge 30 ] && [ "$PBS_ARRAY_INDEX" -le 39 ]; then
+    SEED=$((PBS_ARRAY_INDEX - 30))
+    python -m scripts.ablation -j 6 -s $SEED
 fi
