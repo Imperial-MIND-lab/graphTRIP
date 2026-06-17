@@ -77,8 +77,12 @@ def build_vgae(model_type, params,
     # If node_emb_model is NodeEmbeddingGraphormer, max_spd_dist must be provided
     if node_emb_model_cfg['model_type'] == 'NodeEmbeddingGraphormer' \
         and params['max_spd_dist'] is None:
-        raise ValueError("max_spd_dist must be provided for NodeEmbeddingGraphormer")    
-    
+        raise ValueError("max_spd_dist must be provided for NodeEmbeddingGraphormer")
+
+    # Don't build a node decoder when there are no node features to reconstruct
+    if params.get('num_node_attr', 0) == 0:
+        node_decoder_cfg = {}
+
     # Combine all config dictionaries
     updated_params = copy.deepcopy(params)
     combined_params = {'params': updated_params,

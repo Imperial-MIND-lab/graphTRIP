@@ -1,9 +1,10 @@
 """
-This scripts trains four ablation models:
+This scripts trains five ablation models:
 - Ablate neuroimaging features: train an MLP on clinical data only
 - Ablate VGAE: train a MLP on PCA-reduced neuroimaging features
 - Ablate VGAE: train a MLP on t-SNE-reduced neuroimaging features
 - Ablate MLP: train a VGAE with a linear regression head
+- Ablate node features: train graphTRIP without node attributes
 
 Dependencies:
 - experiments/configs/graphtrip.json
@@ -14,6 +15,7 @@ Outputs:
 - outputs/ablation/tsne_mlp/
 - outputs/ablation/vgae_linreg_head//
 - outputs/ablation/linreg_on_clinical_data/
+- outputs/ablation/no_node_features/
 
 Author: Hanna M. Tolle
 Date: 2025-12-04
@@ -53,8 +55,8 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
         config['num_epochs'] = 2
 
     # Check valid job ID input
-    if jobid not in [0, 1, 2, 3, 4, -1]:
-        raise ValueError(f"Invalid job ID: {jobid}. Must be one of [0, 1, 2, 3, 4, -1].")
+    if jobid not in [0, 1, 2, 3, 4, 5, 6, -1]:
+        raise ValueError(f"Invalid job ID: {jobid}. Must be one of [0, 1, 2, 3, 4, 5, 6, -1].")
 
     # 1. Control MLP benchmark -----------------------------------------------
     # Train MLP on clinical data only, without neuroimaging features
@@ -207,6 +209,37 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
             run(exname, observer, config_updates)
         else:
             print(f"Train linear regression on clinical data experiment already exists in {ex_dir}.")
+
+    # 6. graphTRIP without node features ----------------------------------------
+    # Train graphTRIP without node features (only conditional node feats)
+    if jobid == 5 or jobid == -1:
+        exname = 'train_jointly'
+        ex_dir = os.path.join(output_dir, 'no_node_features', f'seed_{seed}')
+        if not os.path.exists(add_project_root(ex_dir)):
+            config_updates = copy.deepcopy(config)
+            config_updates['dataset']['node_attrs'] = []
+            config_updates['output_dir'] = ex_dir
+            config_updates['seed'] = seed
+            config_updates['verbose'] = verbose
+            config_updates['save_weights'] = False
+            run(exname, observer, config_updates)
+        else:
+            print(f"graphTRIP without node features experiment already exists in {ex_dir}.")
+
+    # 7. graphTRIP without clinical features ------------------------------------
+    if jobid == 6 or jobid == -1:
+        exname = 'train_jointly'
+        ex_dir = os.path.join(output_dir, 'no_clinical_features', f'seed_{seed}')
+        if not os.path.exists(add_project_root(ex_dir)):
+            config_updates = copy.deepcopy(config)
+            config_updates['dataset']['graph_attrs'] = ['Condition']
+            config_updates['output_dir'] = ex_dir
+            config_updates['seed'] = seed
+            config_updates['verbose'] = verbose
+            config_updates['save_weights'] = False
+            run(exname, observer, config_updates)
+        else:
+            print(f"graphTRIP without clinical features experiment already exists in {ex_dir}.")
 
 if __name__ == "__main__":
     """
