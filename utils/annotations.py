@@ -129,7 +129,7 @@ def convert_to_numerical(df: pd.DataFrame, categories: List[str]) -> pd.DataFram
     pd.DataFrame: The DataFrame with the specified columns converted to numerical labels.
     '''
     for category in categories:
-        df[category] = df[category].replace(get_cat2num_dict(category))
+        df.loc[:, category] = df[category].replace(get_cat2num_dict(category))
     
     return df
 

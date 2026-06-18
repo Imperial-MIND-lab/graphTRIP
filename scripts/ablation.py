@@ -36,6 +36,10 @@ from utils.configs import load_configs_from_json, fetch_job_config
 from experiments.run_experiment import run
 
 
+MEDUSA_CONFIG_FILE = 'experiments/configs/medusa_graphtrip.json'
+MEDUSA_OUTPUT_BASE = 'outputs/medusa_ablation'
+
+
 def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
     # Add project root to paths
     config_file = add_project_root(config_file)
@@ -44,19 +48,28 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
     # Make sure the config files exist
     if not os.path.exists(config_file):
         raise FileNotFoundError(f"{config_file} not found")
-    
+
     # Load the config
     config = load_configs_from_json(config_file)
     config = fetch_job_config(config, config_id)
+
+    # Load medusa config (used for jobs 7 and 8)
+    medusa_config_file = add_project_root(MEDUSA_CONFIG_FILE)
+    if not os.path.exists(medusa_config_file):
+        raise FileNotFoundError(f"{medusa_config_file} not found")
+    medusa_config = load_configs_from_json(medusa_config_file)
+    medusa_config = fetch_job_config(medusa_config, 0)
+    medusa_output_base = add_project_root(MEDUSA_OUTPUT_BASE)
         
     # Experiment settings
     observer = 'FileStorageObserver'
     if debug:
         config['num_epochs'] = 2
+        medusa_config['num_epochs'] = 2
 
     # Check valid job ID input
-    if jobid not in [0, 1, 2, 3, 4, 5, 6, -1]:
-        raise ValueError(f"Invalid job ID: {jobid}. Must be one of [0, 1, 2, 3, 4, 5, 6, -1].")
+    if jobid not in [0, 1, 2, 3, 4, 5, 6, 7, 8, -1]:
+        raise ValueError(f"Invalid job ID: {jobid}. Must be one of [0, 1, 2, 3, 4, 5, 6, 7, 8, -1].")
 
     # 1. Control MLP benchmark -----------------------------------------------
     # Train MLP on clinical data only, without neuroimaging features
@@ -240,6 +253,36 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
             run(exname, observer, config_updates)
         else:
             print(f"graphTRIP without clinical features experiment already exists in {ex_dir}.")
+
+    # 8. medusa_graphTRIP without node features ---------------------------------
+    if jobid == 7 or jobid == -1:
+        exname = 'train_cfrnet'
+        ex_dir = os.path.join(medusa_output_base, 'no_node_features', f'seed_{seed}')
+        if not os.path.exists(ex_dir):
+            config_updates = copy.deepcopy(medusa_config)
+            config_updates['dataset']['node_attrs'] = []
+            config_updates['output_dir'] = ex_dir
+            config_updates['seed'] = seed
+            config_updates['verbose'] = verbose
+            config_updates['save_weights'] = False
+            run(exname, observer, config_updates)
+        else:
+            print(f"medusa_graphTRIP without node features experiment already exists in {ex_dir}.")
+
+    # 9. medusa_graphTRIP without clinical features -----------------------------
+    if jobid == 8 or jobid == -1:
+        exname = 'train_cfrnet'
+        ex_dir = os.path.join(medusa_output_base, 'no_clinical_features', f'seed_{seed}')
+        if not os.path.exists(ex_dir):
+            config_updates = copy.deepcopy(medusa_config)
+            config_updates['dataset']['graph_attrs'] = [] # Medusa never takes condition; separate heads per condtion
+            config_updates['output_dir'] = ex_dir
+            config_updates['seed'] = seed
+            config_updates['verbose'] = verbose
+            config_updates['save_weights'] = False
+            run(exname, observer, config_updates)
+        else:
+            print(f"medusa_graphTRIP without clinical features experiment already exists in {ex_dir}.")
 
 if __name__ == "__main__":
     """
