@@ -47,6 +47,8 @@ def raw_data_dir():
 def get_raw_filename(study='psilodep2', session='before'):
     if study=='psilodep2' or study=='psilodep1':
         return f'{session}_rest_rdsmffms6FWHM_bd_M_V_DV_WMlocal2_modecorr.nii.gz'
+    elif study=='ds005917':
+        return f'{session}_rest_preproc.nii.gz'
     else:
         raise ValueError("Unknown study. \n"
                          "Edit utils.files.get_raw_filename() to add your study.")

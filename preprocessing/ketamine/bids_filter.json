@@ -1,0 +1,16 @@
+{
+    "bold": {
+        "datatype": "func",
+        "session": "b0",
+        "task": "rest",
+        "suffix": "bold"
+    },
+    "t1w": {
+        "datatype": "anat",
+        "suffix": "T1w"
+    },
+    "t2w": {
+        "datatype": "anat",
+        "suffix": "T2w"
+    }
+}
