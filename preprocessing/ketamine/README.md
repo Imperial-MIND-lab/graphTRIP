@@ -114,7 +114,7 @@ each `--include` pattern requires a `sub-*/`, `phenotype/`, or `participants*` p
 fMRIPrep will not start without them:
 
 ```bash
-for f in dataset_description.json task-rest_bold.json task-rest_physio.json .bidsignore; do
+for f in dataset_description.json task-rest_bold.json task-rest_physio.json .bidsignore README; do
     aws s3 cp --no-sign-request "s3://openneuro.org/ds005917/${f}" "./data/raw/ds005917/${f}"
 done
 
@@ -123,6 +123,34 @@ aws s3 cp --no-sign-request --recursive \
     s3://openneuro.org/ds005917/sub-MOA136/ses-d2/anat/ \
     ./data/raw/ds005917/sub-MOA136/ses-d2/anat/
 ```
+
+`task-rest_bold.json` is the one that carries `TaskName`; the per-run sidecars do not have
+it and inherit it from the root. `README` only silences a validator warning.
+
+### `.bidsignore` must cover graphTRIP's own outputs
+
+fMRIPrep runs the BIDS validator before doing any work and **aborts on any error**. Two
+graphTRIP paths live inside the BIDS root and are not BIDS files:
+
+| Path | Written by |
+|---|---|
+| `annotations.csv` | `create_annotations.py` |
+| `before/` | REACT masks (stage 3), REACT (stage 4), features (stage 5) |
+
+So `.bidsignore` must read:
+
+```
+phenotype/
+annotations.csv
+before/
+```
+
+`create_annotations.py` appends the two graphTRIP entries automatically and idempotently,
+so re-running it repairs the file if a fresh `.bidsignore` is ever re-downloaded from
+OpenNeuro. `qc bids` verifies the coverage and exits non-zero if anything is unignored.
+
+The `before/` entry matters on **re-runs**: it does not exist until stage 3, so a first
+attempt passes validation without it and only fails on the next one.
 
 ---
 

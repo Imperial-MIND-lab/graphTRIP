@@ -13,6 +13,25 @@ import os
 import pandas as pd
 from utils.files import project_root
 
+# graphTRIP writes these into the BIDS root, where the BIDS validator rejects them and
+# fMRIPrep refuses to start. See README.md.
+BIDSIGNORE_PATTERNS = ['annotations.csv', 'before/']
+
+
+def update_bidsignore(data_dir):
+    """Ensure graphTRIP's own outputs are excluded from BIDS validation."""
+    path = os.path.join(data_dir, '.bidsignore')
+    existing = []
+    if os.path.exists(path):
+        with open(path) as fh:
+            existing = [line.strip() for line in fh if line.strip()]
+
+    missing = [p for p in BIDSIGNORE_PATTERNS if p not in existing]
+    if missing:
+        with open(path, 'w') as fh:
+            fh.write('\n'.join(existing + missing) + '\n')
+        print(f'Added to .bidsignore: {missing}')
+
 
 def main():
     data_dir = os.path.join(project_root(), 'data', 'raw', 'ds005917')
@@ -87,6 +106,7 @@ def main():
 
     output_file = os.path.join(data_dir, 'annotations.csv')
     merged.to_csv(output_file, index=False)
+    update_bidsignore(data_dir)
     print(f'Saved {len(merged)} subjects to {output_file}')
     print(merged[['Patient', 'bids_id', 's_id', 'Group', 'Exclusion',
                    'MADRS_b0', 'MADRS_d2', 'MADRS_response_ket']].to_string(index=False))

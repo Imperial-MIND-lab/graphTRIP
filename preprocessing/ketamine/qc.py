@@ -162,6 +162,25 @@ def check_bids():
         print(f'  [{"OK " if has_taskname else "MISSING"}] '
               f'{"-> TaskName field":28s} mandatory for BIDS func runs')
 
+    # graphTRIP writes annotations.csv and before/ into the BIDS root; the validator
+    # rejects both and fMRIPrep aborts before doing any work.
+    print('\nNon-BIDS files in the BIDS root (must be listed in .bidsignore):')
+    ignore_path = os.path.join(bids_dir, '.bidsignore')
+    ignored = []
+    if os.path.exists(ignore_path):
+        with open(ignore_path) as fh:
+            ignored = [line.strip() for line in fh if line.strip()]
+
+    for entry, pattern in [('annotations.csv', 'annotations.csv'),
+                           (SESSION, f'{SESSION}/'),
+                           ('phenotype', 'phenotype/')]:
+        if not os.path.exists(os.path.join(bids_dir, entry)):
+            continue
+        covered = pattern in ignored or entry in ignored
+        ok &= covered
+        print(f'  [{"OK " if covered else "MISSING"}] {entry:28s} '
+              f'{"covered by .bidsignore" if covered else f"add `{pattern}` to .bidsignore"}')
+
     print('\nPer-subject inputs (from subject_map.csv):')
     smap = subject_map()
     problems = []
