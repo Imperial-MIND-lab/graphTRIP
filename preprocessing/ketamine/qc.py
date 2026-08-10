@@ -497,7 +497,7 @@ def qc_cohort(atlas='schaefer100'):
     csv_out = os.path.join(qc_dir(), 'cohort_qc.csv')
     df.to_csv(csv_out, index=False)
 
-    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    fig, axes = plt.subplots(3, 2, figsize=(15, 15))
     fig.subplots_adjust(hspace=0.45, wspace=0.25)
 
     # Mean FD per subject, ranked, with the exclusion line.
@@ -542,6 +542,7 @@ def qc_cohort(atlas='schaefer100'):
 
     # Mean FC matrix vs psilodep1 -- the transfer sanity check.
     ax = axes[1, 1]
+    ref_edges = None
     try:
         ref_files = sorted(glob.glob(os.path.join(project_root(), 'data', 'raw',
                                                   'psilodep1', 'before', atlas,
@@ -549,6 +550,7 @@ def qc_cohort(atlas='schaefer100'):
         ref = np.vstack([pd.read_csv(f)['functional_connectivity'].values for f in ref_files])
         n = int(np.sqrt(ref.shape[1]))
         iu = np.triu_indices(n, k=1)
+        ref_edges = np.vstack([row.reshape(n, n)[iu] for row in ref])
         ref_mean = ref.mean(axis=0).reshape(n, n)[iu]
         ket_mean = np.vstack(fcs).mean(axis=0)
         rr = np.corrcoef(ref_mean, ket_mean)[0, 1]
@@ -564,11 +566,54 @@ def qc_cohort(atlas='schaefer100'):
         ax.text(0.5, 0.5, f'unavailable:\n{e}', ha='center', fontsize=8,
                 transform=ax.transAxes); ax.set_axis_off()
 
+    # Edge-weight distributions. A shift here is the covariate shift that breaks
+    # transfer, and is the signature of a mismatched confound strategy.
+    ax = axes[2, 0]
+    if ref_edges is not None and fcs:
+        ket_edges = np.vstack(fcs)
+        for edges, lab, c in [(ref_edges, f'psilodep1 (n={len(ref_edges)})', '#9aa5ab'),
+                              (ket_edges, f'ds005917 (n={len(ket_edges)})', ACCENT)]:
+            ax.hist(edges.ravel(), bins=120, density=True, histtype='step',
+                    lw=1.8, label=lab, color=c)
+        ax.axvline(0, lw=1.0, color=INK, alpha=0.4)
+        ax.set_xlabel('edge weight (r)'); ax.set_ylabel('density')
+        ax.set_title('Pooled edge-weight distribution', loc='left', color=INK)
+        ax.legend(frameon=False)
+    else:
+        ax.text(0.5, 0.5, 'needs both cohorts', ha='center',
+                transform=ax.transAxes); ax.set_axis_off()
+
+    # Per-subject summary stats -- separates a genuine cohort shift from a few outliers.
+    ax = axes[2, 1]
+    stats_rows = []
+    if ref_edges is not None and fcs:
+        ket_edges = np.vstack(fcs)
+        for edges, lab, c in [(ref_edges, 'psilodep1', '#9aa5ab'),
+                              (ket_edges, 'ds005917', ACCENT)]:
+            m = edges.mean(axis=1)
+            fneg = (edges < 0).mean(axis=1)
+            ax.scatter(m, fneg, s=28, alpha=0.75, color=c, label=lab,
+                       edgecolor='white', linewidth=0.8)
+            stats_rows.append({'cohort': lab, 'n': len(edges),
+                               'mean': m.mean(), 'sd': edges.std(axis=1).mean(),
+                               'frac_neg': fneg.mean()})
+        ax.set_xlabel('subject mean edge weight'); ax.set_ylabel('fraction of negative edges')
+        ax.set_title('Per-subject FC summary', loc='left', color=INK)
+        ax.legend(frameon=False)
+    else:
+        ax.text(0.5, 0.5, 'needs both cohorts', ha='center',
+                transform=ax.transAxes); ax.set_axis_off()
+
     out = os.path.join(qc_dir(), f'qc_cohort_{atlas}.png')
     fig.savefig(out, dpi=110, bbox_inches='tight')
     plt.close(fig)
     print(f'Saved {out}')
     print(f'Saved {csv_out}')
+
+    if stats_rows:
+        print('\nFC edge-weight comparison (subject-level means):')
+        print(pd.DataFrame(stats_rows).to_string(index=False,
+                                                 float_format=lambda v: f'{v:.4f}'))
 
     print('\nSubjects with no features produced:')
     miss = df[~df['has_features']]['s_id'].tolist()

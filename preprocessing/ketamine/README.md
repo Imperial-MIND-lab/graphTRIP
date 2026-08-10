@@ -229,35 +229,97 @@ MNI normalisation. The key choices:
 
 Output lands in `data/preprocessed/ds005917/` (project root on HPC).
 
-**No slice-timing correction is performed.** No `SliceTiming` field exists in the root
-`task-rest_bold.json` or in any per-run sidecar, despite the dataset `CHANGES` file
-claiming v1.0.1 added it. Guessing a slice order for a GE 2D EPI is a coin flip, and at
-TR = 2.5 s with a 0.01–0.08 Hz band-pass the correction buys little.
+**No slice-timing correction is performed — this is a divergence from psilodep, not a
+free choice.** fMRIPrep 24.1.1 performs STC by default, but only when `SliceTiming` is
+present in the metadata. It is absent from the root `task-rest_bold.json` and from every
+per-run sidecar (verified across `ses-b0` and `ses-d2`), despite the dataset `CHANGES`
+file claiming v1.0.1 added it — the v1.1.0 "Add resting-state fMRI data" entry appears to
+have overwritten them. fMRIPrep therefore skips STC silently. Guessing a slice order for
+a GE 2D EPI is a coin flip and a wrong guess is worse than none. At TR = 2.5 s with a
+0.01–0.08 Hz band-pass the cost is modest, but it must be stated in the methods.
 
 ### Stage 2 — Post-processing (`postprocess.sh` / `postprocess.py`)
 
 **Resources:** 4 CPUs, 16 GB RAM, 30 min · PBS array 1–36
 
-Applies the cleaning steps that fMRIPrep intentionally omits, matching the
-psilodep pipeline (Daws et al. 2022):
+Applies the cleaning steps that fMRIPrep intentionally omits, in this order:
 
-1. **Nuisance regression** — 6 rigid-body motion parameters + white matter signal +
-   CSF signal, plus the `non_steady_state_outlierXX` and `motion_outlierXX` one-hot
-   regressors fMRIPrep emits. Including the one-hot columns removes those volumes'
-   contribution while keeping the series continuous, which the band-pass filter depends
-   on — censoring *before* filtering corrupts the frequency content.
-2. **Band-pass filtering** — 0.01–0.08 Hz (via nilearn `NiftiMasker`).
-3. **Spatial smoothing** — 6 mm FWHM Gaussian kernel.
+1. **Non-steady-state trimming** — leading T1-saturation volumes, flagged by fMRIPrep as
+   `non_steady_state_outlierXX`, are dropped outright.
+2. **Nuisance regression** — 6 rigid-body motion parameters + whole-mask mean WM and CSF
+   signals + `motion_outlierXX` spike regressors.
+3. **Band-pass filtering** — 0.01–0.08 Hz (via nilearn `NiftiMasker`).
+4. **Spatial smoothing** — 6 mm FWHM Gaussian kernel.
 
-The confound set stays deliberately close to psilodep's `M_V_WMlocal2` stage rather than
-being maximally aggressive. The goal is transfer *from* psilodep, which needs
-**comparably** preprocessed features, not maximally cleaned ones. No global signal
-regression: psilodep did not use it, and Kraus et al. 2020 (PMC7162890) showed GSR
-materially changes conclusions on this exact dataset.
+No global signal regression: psilodep did not use it, and Kraus et al. 2020
+(PMC7162890) showed GSR materially changes conclusions on this exact dataset.
+
+#### Why non-steady-state volumes are trimmed rather than regressed
+
+nilearn's `clean()` applies operations in a fixed order (verified against nilearn 0.10.3,
+`nilearn/signal.py`):
+
+```
+interpolate/censor → detrend → band-pass (signals AND confounds) → confound regression → standardize
+```
+
+Confound regression comes **last**. A `non_steady_state_outlier` regressor therefore
+cannot stop the saturated volumes from contaminating the linear detrend and the
+Butterworth filter, and those volumes sit at the very start of the series where filter
+edge effects are worst. Trimming them up front is the only ordering that works, and it
+matches what the psilodep pipeline did (the leading `r` in its filename).
+
+nilearn's `sample_mask` is deliberately *not* used for this. `clean()`'s `extrapolate`
+argument defaults to `True`, so leading out-of-bounds volumes would be spline-*extrapolated*
+rather than dropped — the opposite of what saturated data needs — and reaching
+`extrapolate=False` through `NiftiMasker` requires an untyped `**kwargs` passthrough that
+is fragile across versions. Non-steady-state volumes are always leading, so there is
+nothing to interpolate across anyway.
+
+Motion spikes stay as regressors: with the same Butterworth applied to signal and
+regressor alike, a scaled delta is removed exactly. Any spike regressor that flagged only
+trimmed volumes becomes all-zero after trimming and is dropped — otherwise the design
+matrix is rank-deficient at nilearn's QR step.
+
+#### Degrees of freedom
+
+The band-pass discards most of the spectrum, so the raw volume count badly overstates the
+DoF available for nuisance regression. At TR = 2.5 s the Nyquist frequency is 0.2 Hz, and
+the 0.07 Hz passband retains ~35 % of it — roughly **67 effective DoF from 192 volumes**.
+`load_confounds()` warns when regressors exceed 25 % of *effective* DoF (~17 regressors),
+not 25 % of the volume count.
+
+#### Confound set vs psilodep
+
+The psilodep input file is `..._rdsmffms6FWHM_bd_M_V_DV_WMlocal2_modecorr.nii.gz`. Its
+`WMlocal2` term is a *local* white-matter estimate (a spherical neighbourhood per voxel,
+AFNI `3dLocalstat`), and `V`/`DV` are separate ventricle and vessel terms.
+
+This pipeline uses fMRIPrep's `white_matter` and `csf`, which are **whole-mask mean**
+signals. That is not equivalent. A whole-mask WM mean carries more of the global signal
+than a local WM estimate does, so this is a partial step toward GSR — the exact axis the
+no-GSR choice is meant to protect — and it can shift the FC edge distribution toward more
+negative edges relative to psilodep. That shift is precisely the covariate shift that
+hurts transfer.
+
+This is left as-is pending measurement rather than changed pre-emptively, because the
+`qc cohort` report tests it directly: the pooled edge-weight distribution and the
+per-subject mean/SD/fraction-negative panels compare ds005917 against psilodep1. Decide
+from those numbers. If they diverge materially, the options are fMRIPrep's `a_comp_cor_*`
+components or replicating the local-WM regression in AFNI — both are themselves
+deviations from psilodep, in a different direction, so neither is automatically better.
+
+*Note: the expansion of the `DV` term above is inferred from the filename; it is not
+documented anywhere in this repository. Confirm against the Methods write-up before it
+goes into the paper.*
+
+#### Run selection
 
 `sub-MOA101` (S01) and `sub-MOA201` (S34) each have two complete 192-volume baseline
 runs with no metadata indicating a preference. Both are preprocessed by fMRIPrep;
 `select_run()` picks the one with lower mean framewise displacement and logs the choice.
+The criterion is outcome-independent and affects only these two subjects — record it in
+the methods.
 
 Cleaned NIfTIs are saved to `~/data/ds005917/before/S{N}/before_rest_preproc.nii.gz`,
 the path pattern expected by both the REACT scripts and `preprocessing/preprocess.py`
@@ -312,6 +374,40 @@ data/raw/ds005917/before/{atlas}/S{N}/
 
 ---
 
+## Relationship to the psilodep pipeline
+
+The goal for this dataset is transfer *from* psilodep, which requires comparably
+preprocessed features. 
+
+### Matches psilodep
+
+| Choice | Note |
+|---|---|
+| No GSR | Consistent with psilodep and with the paper's framing |
+| Band-pass 0.01–0.08 Hz | Same as Daws et al. 2022 |
+| 6 mm FWHM smoothing | Same as Daws |
+| Confounds band-pass filtered with the same Butterworth as the data | nilearn applies the filter to the confound matrix too (Lindquist et al. 2018 orthogonalisation), avoiding the Hallquist 2013 noise-reintroduction problem. **State this explicitly — reviewers ask.** |
+| FD > 0.5 mm spike criterion | `--fd-spike-threshold 0.5` |
+| Non-steady-state volumes dropped before filtering | Equivalent to psilodep's leading `r` |
+
+### Diverges from psilodep
+
+| Divergence | Impact | Status |
+|---|---|---|
+| **No slice-timing correction** | `SliceTiming` absent from all sidecars, so fMRIPrep skips STC. psilodep did correct. Modest at TR = 2.5 s with this passband | Unfixable — dataset metadata gap |
+| **Whole-mask WM/CSF instead of local WM + ventricle/vessel terms** | May shift the FC edge distribution; see Stage 2 | Measure via `qc cohort`, then decide |
+| **No despiking** | psilodep ran AFNI `3dDespike`; fMRIPrep has no equivalent | Accepted |
+| **Linear detrend only** | nilearn `detrend=True` is linear; psilodep detrended linear + quadratic. Low impact — the 0.01 Hz high-pass removes most low-order drift | Accepted |
+| **No intensity mode normalisation** | psilodep files end in `modecorr` (mode-1000 scaling); fMRIPrep `desc-preproc_bold` is in arbitrary scanner units | Accepted, with the caveat below |
+
+**The mode-normalisation caveat matters for transfer.** It mostly washes out because node
+attributes are re-standardised per training fold
+([data_ingredient.py](../../experiments/ingredients/data_ingredient.py)) and FC is computed
+from z-scored parcel series. But it does mean REACT betas are **not on the psilodep
+scale**, so do not apply a psilodep-pretrained model zero-shot without re-standardising.
+
+---
+
 ## Utility extensions
 
 The following functions were extended to support `ds005917`:
@@ -355,9 +451,24 @@ a T1w in some session. Its expected output flags exactly three subjects: `S01` a
 Figures land in `outputs/qc_ds005917/`. The per-subject report covers motion, carpet
 plots before and after cleaning, the power spectrum (proving the band-pass fired),
 registration against the REACT GM mask, REACT stage-2 beta distributions, per-parcel
-signal, the FC matrix, and node features overlaid on psilodep1's. The cohort report adds
-ranked mean FD, QC-FC, and group-mean FC agreement with psilodep1 — that last panel is
-the real go/no-go for transfer.
+signal, the FC matrix, and node features overlaid on psilodep1's.
+
+The cohort report has six panels: ranked mean FD, volume-level motion burden, QC-FC,
+group-mean FC agreement with psilodep1, the pooled edge-weight distribution of both
+cohorts, and per-subject FC summaries (mean edge weight vs fraction of negative edges).
+It also prints a subject-level statistics table:
+
+```
+FC edge-weight comparison (subject-level means):
+   cohort  n   mean     sd  frac_neg
+psilodep1 16 0.1981 0.2335    0.2173
+ds005917  29 ...    ...       ...
+```
+
+The last three panels plus that table are the go/no-go for transfer, and the evidence for
+the confound-set decision described under Stage 2. A group-mean FC correlation below ~0.7,
+or a clear separation in mean edge weight / fraction-negative, indicates a covariate shift
+that will hurt transfer.
 
 **Pilot before the full run.** Process `S01` (which exercises the two-run selection path)
 and `S32` (the cross-session T1w path) end-to-end first.

@@ -2,11 +2,11 @@
 Post-fMRIPrep cleaning for ds005917 (NIMH Ketamine dataset).
 
 Applies nuisance regression, band-pass filtering, and spatial smoothing to
-fMRIPrep output, matching the preprocessing pipeline in Daws et al. 2022.
-Saves the cleaned NIfTI to the raw data directory used by react.sh and preprocess.py.
+fMRIPrep output. Saves the cleaned NIfTI to the raw data directory used by
+react.sh and preprocess.py.
 
-The confound set stays close to the psilodep pipeline (6 motion
-parameters + WM + CSF, mirroring its M_V_WMlocal2 stage)
+Confounds: 6 rigid-body motion parameters + whole-mask mean WM and CSF signals,
+plus motion spike regressors. See README.md for how this relates to psilodep.
 
 Usage (run from project root):
     python -m preprocessing.ketamine.postprocess --bids-id sub-MOA101 --s-id S01
@@ -18,6 +18,7 @@ import glob
 import numpy as np
 import pandas as pd
 import nibabel as nib
+from nilearn import image
 from nilearn.maskers import NiftiMasker
 from utils.files import project_root, raw_data_dir
 
@@ -37,10 +38,9 @@ CONFOUND_COLS = [
     'white_matter', 'csf',
 ]
 
-# One-hot regressor families emitted by fMRIPrep. 
-#   non_steady_state_outlierXX : auto-detected T1-saturation volumes at scan onset
-#   motion_outlierXX           : volumes over --fd-spike-threshold 0.5
-CONFOUND_PREFIXES = ['non_steady_state_outlier', 'motion_outlier']
+# One-hot spike regressors from --fd-spike-threshold 0.5. Non-steady-state volumes are
+# trimmed instead (see count_nonsteady), so their columns are deliberately not here.
+CONFOUND_PREFIXES = ['motion_outlier']
 
 
 def find_runs(fmriprep_dir, bids_id):
@@ -90,33 +90,49 @@ def select_run(runs):
     return best
 
 
-def load_confounds(confounds_file):
-    """Load and clean the confounds matrix from the fMRIPrep TSV."""
-    df = pd.read_csv(confounds_file, sep='\t')
+def count_nonsteady(df):
+    """Number of leading volumes flagged as non-steady-state by fMRIPrep."""
+    cols = [c for c in df.columns if c.startswith('non_steady_state_outlier')]
+    if not cols:
+        return 0
 
+    flagged = df[cols].to_numpy().astype(bool).any(axis=1)
+    n_lead = len(flagged) if flagged.all() else int(np.argmin(flagged))
+    if int(flagged.sum()) != n_lead:
+        print(f'  WARNING: {int(flagged.sum())} non-steady-state volumes flagged but only '
+              f'{n_lead} are leading; the rest remain in the series')
+    return n_lead
+
+
+def effective_dof(n_vols):
+    """DoF surviving the band-pass, not the raw volume count."""
+    return n_vols * (LOW_PASS - HIGH_PASS) / (0.5 / TR)
+
+
+def load_confounds(df, n_drop=0):
+    """Build the confound matrix, discarding the first n_drop volumes."""
     missing = [c for c in CONFOUND_COLS if c not in df.columns]
     if missing:
         raise ValueError(f'Missing confound columns: {missing}')
 
-    # Expand the one-hot regressor families actually present for this run.
-    outlier_cols = sorted(
+    spike_cols = sorted(
         c for c in df.columns if any(c.startswith(p) for p in CONFOUND_PREFIXES)
     )
-    cols = CONFOUND_COLS + outlier_cols
+    confounds = df[CONFOUND_COLS + spike_cols].iloc[n_drop:].fillna(0.0)
 
-    n_nss = len([c for c in outlier_cols if c.startswith('non_steady_state_outlier')])
-    n_spike = len([c for c in outlier_cols if c.startswith('motion_outlier')])
-    print(f'  Confounds: {len(CONFOUND_COLS)} nuisance + {n_nss} non-steady-state '
-          f'+ {n_spike} motion-spike = {len(cols)} regressors')
+    # Spike regressors flagging only trimmed volumes are now all-zero and would make
+    # the design rank-deficient.
+    confounds = confounds.loc[:, (confounds != 0).any(axis=0)]
 
-    if len(cols) > 0.25 * len(df):
-        print(f'  WARNING: {len(cols)} regressors for {len(df)} volumes '
-              f'({100 * len(cols) / len(df):.0f}% of DoF) -- this run is heavily censored')
+    n_vols = len(confounds)
+    n_reg = confounds.shape[1]
+    eff = effective_dof(n_vols)
+    print(f'  Confounds: {n_reg} regressors ({n_reg - len(CONFOUND_COLS)} motion spikes) '
+          f'for {n_vols} volumes, {eff:.0f} effective DoF')
 
-    confounds = df[cols].copy()
-
-    # fMRIPrep puts NaN in the first row of derivative columns; fill with 0
-    confounds = confounds.fillna(0.0)
+    if n_reg > 0.25 * eff:
+        print(f'  WARNING: {n_reg} regressors consume {100 * n_reg / eff:.0f}% of '
+              f'effective DoF -- this run is heavily censored')
 
     return confounds.values
 
@@ -128,7 +144,16 @@ def postprocess(bids_id, s_id, fmriprep_dir, output_base_dir):
     print(f'  Confounds: {run["confounds"]}')
     print(f'  Mask:      {run["mask"]}')
 
-    confounds = load_confounds(run['confounds'])
+    df = pd.read_csv(run['confounds'], sep='\t')
+
+    # Trim non-steady-state volumes before masking: nilearn detrends and band-passes
+    # before applying confounds, so regressing them out would come too late.
+    n_drop = count_nonsteady(df)
+    confounds = load_confounds(df, n_drop)
+    bold = run['bold']
+    if n_drop:
+        print(f'  Dropping {n_drop} non-steady-state volume(s)')
+        bold = image.index_img(bold, slice(n_drop, None))
 
     masker = NiftiMasker(
         mask_img=run['mask'],
@@ -140,7 +165,7 @@ def postprocess(bids_id, s_id, fmriprep_dir, output_base_dir):
         detrend=True,
     )
 
-    signals = masker.fit_transform(run['bold'], confounds=confounds)
+    signals = masker.fit_transform(bold, confounds=confounds)
     cleaned_img = masker.inverse_transform(signals)
 
     out_dir = os.path.join(output_base_dir, STUDY, SESSION, s_id)
