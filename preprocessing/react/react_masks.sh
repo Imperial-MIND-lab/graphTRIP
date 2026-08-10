@@ -4,8 +4,12 @@
 #PBS -l walltime=01:00:00
 #PBS -N react_masks
 
-module load anaconda3/personal
-source activate graphtrp
+# conda's shell hook references unset variables, so relax `set -u` around it.
+set +u
+module load miniforge/3
+eval "$(~/miniforge3/bin/conda shell.bash hook)"
+conda activate graphtrip
+set -u
 
 # Parameters
 study="psilodep1"
@@ -14,7 +18,7 @@ dataset="5-HT_atlas_2mm"
 receptor_set="Believeau-5"
 
 # Move into the output parent directory (where out_masks/ is created)
-project_dir="/rds/general/user/hmt23/home/projects/graphTRP"
+project_dir="${PBS_O_WORKDIR:-$(pwd)}"
 output_parent_dir="${project_dir}/data/raw/${study}/${session}/MNI_2mm/REACT_${receptor_set}"
 mkdir -p $output_parent_dir
 cd $output_parent_dir

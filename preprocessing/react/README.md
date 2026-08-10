@@ -107,7 +107,7 @@ python concat_5HT_atlases.py \
 
 The Phase B scripts assume this layout on the HPC:
 ```
-$project_dir = /rds/general/user/hmt23/home/projects/graphTRP
+$project_dir = ~/projects/graphTRIP
   data/raw/react_data/<dataset>/concatenated/<receptor_set>/pet_atlas.nii.gz   # from Phase A
   data/raw/react_data/<dataset>/concatenated/<receptor_set>/input_maps.txt
   data/raw/react_data/masks/gm_mask.nii.gz                                     # grey-matter mask (2mm MNI152)

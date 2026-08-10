@@ -23,7 +23,7 @@ def add_project_root(dir_name=None):
     return os.path.join(project_root(), dir_name)
 
 def rm_project_root(dir_name=None):
-    '''Removes everything in the file path before /graphTRP/ (inclusive).'''
+    '''Removes everything in the file path before /graphTRIP/ (inclusive).'''
     if dir_name is None:
         return None
     # Find index of graphTRIP in path and remove everything before it (inclusive)

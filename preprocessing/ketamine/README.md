@@ -135,18 +135,17 @@ The HPC runs **Apptainer 1.5.1** (available system-wide at `/usr/bin/apptainer`;
 #   qsub -I -l select=1:ncpus=2:mem=8gb -l walltime=1:00:00
 
 # 1. Redirect Apptainer's build cache off your home quota
-export APPTAINER_CACHEDIR=/rds/general/user/hmt23/home/.apptainer_cache
+export APPTAINER_CACHEDIR=${HOME}/.apptainer_cache
 mkdir -p $APPTAINER_CACHEDIR
 
 # 2. Pull the fMRIPrep image (Docker → SIF conversion, takes ~15 min)
-mkdir -p /rds/general/user/hmt23/home/projects/graphTRP/containers
-apptainer pull \
-    /rds/general/user/hmt23/home/projects/graphTRP/containers/fmriprep.sif \
+#    Paths are relative to the project root; the scripts resolve it from $PBS_O_WORKDIR.
+mkdir -p ~/projects/graphTRIP/containers
+apptainer pull ~/projects/graphTRIP/containers/fmriprep.sif \
     docker://nipreps/fmriprep:24.1.1
 
 # 3. Verify
-apptainer run \
-    /rds/general/user/hmt23/home/projects/graphTRP/containers/fmriprep.sif \
+apptainer run ~/projects/graphTRIP/containers/fmriprep.sif \
     --version   # expected: fMRIPrep 24.1.1
 
 # 4. FreeSurfer licence (free; register at https://surfer.nmr.mgh.harvard.edu/registration.html)

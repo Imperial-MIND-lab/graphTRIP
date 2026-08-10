@@ -14,7 +14,12 @@
 
 set -euo pipefail
 
-project_dir="/rds/general/user/hmt23/home/projects/graphTRP"
+project_dir="${PBS_O_WORKDIR:-$(pwd)}"
+if [ ! -f "${project_dir}/preprocessing/ketamine/subject_map.csv" ]; then
+    echo "ERROR: ${project_dir} is not the graphTRIP project root." >&2
+    echo "       Submit from the project root, e.g. qsub preprocessing/ketamine/pilot.sh" >&2
+    exit 1
+fi
 subject_map="${project_dir}/preprocessing/ketamine/subject_map.csv"
 
 bids_dir="${project_dir}/data/raw/ds005917"

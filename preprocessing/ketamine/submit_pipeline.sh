@@ -5,15 +5,14 @@
 #
 # Prerequisites (one-time, do before running):
 #   1. Pull fMRIPrep Singularity image:
-#        singularity pull /rds/general/user/hmt23/home/projects/graphTRP/containers/fmriprep.sif \
-#            docker://nipreps/fmriprep:24.1.1
+#        apptainer pull ./containers/fmriprep.sif docker://nipreps/fmriprep:24.1.1
 #   2. Place FreeSurfer license at ${HOME}/.freesurfer/license.txt
 #   3. Run create_subject_map.py and create_annotations.py locally (already done if
 #      subject_map.csv and data/raw/ds005917/annotations.csv exist).
 
 set -e
 
-SCRIPT_DIR="/rds/general/user/hmt23/home/projects/graphTRP/preprocessing/ketamine"
+SCRIPT_DIR="${PBS_O_WORKDIR:-$(pwd)}/preprocessing/ketamine"
 
 # Stage 1: fMRIPrep (~2-4 h per subject, 36 array tasks)
 JOB1=$(qsub "${SCRIPT_DIR}/fmriprep.sh")

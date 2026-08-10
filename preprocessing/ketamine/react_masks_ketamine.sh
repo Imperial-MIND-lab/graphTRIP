@@ -6,8 +6,12 @@
 
 set -euo pipefail
 
-module load anaconda3/personal
-source activate graphtrp
+# conda's shell hook references unset variables, so relax `set -u` around it.
+set +u
+module load miniforge/3
+eval "$(~/miniforge3/bin/conda shell.bash hook)"
+conda activate graphtrip
+set -u
 
 # Parameters
 study="ds005917"
@@ -15,8 +19,13 @@ session="before"
 dataset="5-HT_atlas_2mm"
 receptor_sets=("Believeau-5" "Believeau-3")
 
-project_dir="/rds/general/user/hmt23/home/projects/graphTRP"
-data_dir="/rds/general/user/hmt23/home/data"
+project_dir="${PBS_O_WORKDIR:-$(pwd)}"
+if [ ! -f "${project_dir}/preprocessing/ketamine/subject_map.csv" ]; then
+    echo "ERROR: ${project_dir} is not the graphTRIP project root." >&2
+    echo "       Submit from the project root, e.g. qsub preprocessing/ketamine/pilot.sh" >&2
+    exit 1
+fi
+data_dir="${HOME}/data"
 react_data_dir="${project_dir}/data/raw/react_data"
 subject_map="${project_dir}/preprocessing/ketamine/subject_map.csv"
 

@@ -5,8 +5,12 @@
 #PBS -N react
 #PBS -J 1-16
 
-module load anaconda3/personal
-source activate graphtrp
+# conda's shell hook references unset variables, so relax `set -u` around it.
+set +u
+module load miniforge/3
+eval "$(~/miniforge3/bin/conda shell.bash hook)"
+conda activate graphtrip
+set -u
 
 # Parameters
 study="psilodep1"
@@ -14,20 +18,20 @@ session="before"
 receptor_set="Believeau-5"
 
 # Define project directory and output directory
-project_dir="/rds/general/user/hmt23/home/projects/graphTRP"
+project_dir="${PBS_O_WORKDIR:-$(pwd)}"
 output_parent_dir="${project_dir}/data/raw/${study}/${session}/MNI_2mm/REACT_${receptor_set}"
 
 # Move into the output directory
 cd ${output_parent_dir}
 
 # Get all subject directories and store them in an array
-mapfile -t subject_dirs < <(ls -d /rds/general/user/hmt23/home/data/${study}/${session}/S* | xargs -n 1 basename)
+mapfile -t subject_dirs < <(ls -d ${HOME}/data/${study}/${session}/S* | xargs -n 1 basename)
 
 # Get the current subject directory from the array using PBS array index
 subject_id="${subject_dirs[${PBS_ARRAY_INDEX}-1]}"
 
 # Define input file paths (for fMRI, PET atlas, and masks)
-input_file="/rds/general/user/hmt23/home/data/${study}/${session}/${subject_id}/${session}_rest_rdsmffms6FWHM_bd_M_V_DV_WMlocal2_modecorr.nii.gz"
+input_file="${HOME}/data/${study}/${session}/${subject_id}/${session}_rest_rdsmffms6FWHM_bd_M_V_DV_WMlocal2_modecorr.nii.gz"
 atlas_file="${output_parent_dir}/pet_atlas.nii.gz"
 masks_dir="${output_parent_dir}/out_masks"
 
