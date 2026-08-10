@@ -28,6 +28,21 @@ filter_dir="${project_dir}/preprocessing/ketamine"
 sif="${project_dir}/containers/fmriprep.sif"
 fs_license="${HOME}/.freesurfer/license.txt"
 
+if [ ! -f "${sif}" ]; then
+    echo "ERROR: fMRIPrep image not found at ${sif}" >&2
+    echo "       Pull it once in an interactive session (~15 min, ~14 GB):" >&2
+    echo "         export APPTAINER_CACHEDIR=\${HOME}/.apptainer_cache" >&2
+    echo "         mkdir -p \${APPTAINER_CACHEDIR} ${project_dir}/containers" >&2
+    echo "         apptainer pull ${sif} docker://nipreps/fmriprep:24.1.1" >&2
+    exit 1
+fi
+
+if [ ! -f "${fs_license}" ]; then
+    echo "ERROR: FreeSurfer licence not found at ${fs_license}" >&2
+    echo "       Register free at https://surfer.nmr.mgh.harvard.edu/registration.html" >&2
+    exit 1
+fi
+
 mkdir -p "${output_dir}"
 
 # Resolve subject for this array task (1-indexed -> CSV row, skipping the header)

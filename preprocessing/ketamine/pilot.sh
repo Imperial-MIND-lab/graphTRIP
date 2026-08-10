@@ -37,6 +37,16 @@ fi
 script_dir="${project_dir}/preprocessing/ketamine"
 subject_map="${script_dir}/subject_map.csv"
 
+# Check the one-time HPC prerequisites up front, before the (slow) python imports, so a
+# missing container fails in a second rather than minutes into step 3.
+for prereq in "${project_dir}/containers/fmriprep.sif" "${HOME}/.freesurfer/license.txt"; do
+    if [ ! -f "${prereq}" ]; then
+        echo "ERROR: missing prerequisite: ${prereq}" >&2
+        echo "       See 'One-time HPC setup' in preprocessing/ketamine/README.md" >&2
+        exit 1
+    fi
+done
+
 cd "${project_dir}"
 
 # conda's shell hook references unset variables, so relax `set -u` around it.
