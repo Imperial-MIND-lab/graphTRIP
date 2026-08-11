@@ -47,6 +47,7 @@ from nilearn.maskers import NiftiMasker
 
 from utils.files import project_root, raw_data_dir, get_subject_id
 from preprocessing.metrics import get_atlas, parcellate
+from preprocessing.ketamine.postprocess import find_runs, select_run
 
 STUDY = 'ds005917'
 SESSION = 'before'
@@ -98,22 +99,29 @@ def cleaned_nifti(s_id):
                         f'{SESSION}_rest_preproc.nii.gz')
 
 
+_RUN_CACHE = {}
+
+
+def selected_run(bids_id):
+    """
+    The run postprocess.py actually cleaned.
+
+    Must not re-derive this independently: for the two-run subjects the lowest-FD run is
+    not the alphabetically first one, so picking differently would describe a different
+    scan than the one in the pipeline's output.
+    """
+    if bids_id not in _RUN_CACHE:
+        fmriprep_dir = os.path.join(project_root(), 'data', 'preprocessed', STUDY)
+        _RUN_CACHE[bids_id] = select_run(find_runs(fmriprep_dir, bids_id))
+    return _RUN_CACHE[bids_id]
+
+
 def confounds_tsv(bids_id):
-    hits = sorted(glob.glob(os.path.join(
-        fmriprep_func_dir(bids_id),
-        f'{bids_id}_{BIDS_SESSION}_task-rest_*desc-confounds_timeseries.tsv')))
-    if not hits:
-        raise FileNotFoundError(f'No confounds TSV for {bids_id}')
-    return hits[0]
+    return selected_run(bids_id)['confounds']
 
 
 def fmriprep_bold(bids_id):
-    hits = sorted(glob.glob(os.path.join(
-        fmriprep_func_dir(bids_id),
-        f'{bids_id}_{BIDS_SESSION}_task-rest_*space-MNI152NLin*_res-2_desc-preproc_bold.nii.gz')))
-    if not hits:
-        raise FileNotFoundError(f'No MNI BOLD for {bids_id}')
-    return hits[0]
+    return selected_run(bids_id)['bold']
 
 
 def react_dir(s_id, receptor_set='Believeau-5'):
@@ -305,12 +313,21 @@ def motion_summary(bids_id):
     df = pd.read_csv(confounds_tsv(bids_id), sep='\t')
     fd = df['framewise_displacement'].fillna(0.0).values
     n_nss = len([c for c in df.columns if c.startswith('non_steady_state_outlier')])
+
+    # fMRIPrep's motion_outlier columns are the union of FD and DVARS outliers, so a
+    # subject can carry many spike regressors while its FD never crosses the threshold.
+    n_spike = len([c for c in df.columns if c.startswith('motion_outlier')])
+    n_fd_over = int(np.sum(fd > FD_THRESH))
+
     return {'fd': fd,
             'mean_fd': float(np.mean(fd)),
             'max_fd': float(np.max(fd)),
             'pct_over': float(100 * np.mean(fd > FD_THRESH)),
             'n_vols': len(fd),
             'n_nonsteady': n_nss,
+            'n_spike': n_spike,
+            'n_fd_over': n_fd_over,
+            'n_dvars_only': max(0, n_spike - n_fd_over),
             'dvars': df['std_dvars'].fillna(0.0).values if 'std_dvars' in df else None}
 
 
@@ -335,16 +352,20 @@ def qc_subject(s_id, atlas='schaefer100', receptor_set='Believeau-5'):
         ax.fill_between(t, 0, m['fd'], where=m['fd'] > FD_THRESH,
                         color=FLAG, alpha=0.35, step='mid')
         ax.set_xlabel('time (s)'); ax.set_ylabel('FD (mm)')
-        ax.set_title(f'Framewise displacement — mean {m["mean_fd"]:.3f} mm, '
-                     f'max {m["max_fd"]:.2f} mm, {m["pct_over"]:.1f}% of volumes > {FD_THRESH} mm',
+        run_tag = selected_run(bids_id)['run_tag'].replace(f'{BIDS_SESSION}_task-rest_', '')
+        ax.set_title(f'Framewise displacement, {run_tag} — mean {m["mean_fd"]:.3f} mm, '
+                     f'max {m["max_fd"]:.2f} mm, {m["pct_over"]:.1f}% of volumes > {FD_THRESH} mm'
+                     f'\n{m["n_spike"]} spike regressors '
+                     f'({m["n_fd_over"]} from FD, {m["n_dvars_only"]} from DVARS)',
                      loc='left', color=INK)
         if m['mean_fd'] > FD_MEAN_EXCLUDE:
             notes.append(f'HIGH MOTION: mean FD {m["mean_fd"]:.3f} > {FD_MEAN_EXCLUDE} mm')
         if m['pct_over'] > FD_PCT_EXCLUDE:
             notes.append(f'HIGH MOTION: {m["pct_over"]:.1f}% of volumes > {FD_THRESH} mm')
-        if m['n_nonsteady'] > 0:
-            notes.append(f'{m["n_nonsteady"]} non-steady-state volume(s) detected and '
-                         f'NOT removed by postprocess.py')
+        eff_dof = m['n_vols'] * (LOW_PASS - HIGH_PASS) / (0.5 / TR)
+        if (m['n_spike'] + 8) > 0.25 * eff_dof:
+            notes.append(f'{m["n_spike"]} spike regressors consume '
+                         f'{100 * (m["n_spike"] + 8) / eff_dof:.0f}% of effective DoF')
     except Exception as e:
         ax.text(0.5, 0.5, f'motion unavailable: {e}', ha='center', transform=ax.transAxes)
 
@@ -442,12 +463,23 @@ def qc_subject(s_id, atlas='schaefer100', receptor_set='Believeau-5'):
         bold = np.genfromtxt(os.path.join(fdir, 'bold.csv'), delimiter=',')
         n_flat = int(np.sum(np.std(bold, axis=0) < 1e-8))
         n_nan = int(np.isnan(bold).sum())
-        sd = np.std(bold, axis=0)
-        ax.bar(np.arange(len(sd)), sd, color=ACCENT, width=1.0)
-        ax.set_xlabel('parcel'); ax.set_ylabel('temporal SD')
-        ax.set_title(f'Parcel signal, {atlas} — {bold.shape[0]} vols x {bold.shape[1]} parcels\n'
+
+        # parcellate() z-scores each parcel, so temporal SD is 1 by construction and
+        # carries no information. Mean |r| to all other parcels does: a parcel with poor
+        # BOLD coverage decouples from the rest of the brain.
+        corr = np.corrcoef(bold.T)
+        np.fill_diagonal(corr, np.nan)
+        conn = np.nanmean(np.abs(corr), axis=1)
+        ax.bar(np.arange(len(conn)), conn, color=ACCENT, width=1.0)
+        ax.axhline(np.nanmedian(conn), ls='--', lw=1.0, color=FLAG)
+        ax.set_xlabel('parcel'); ax.set_ylabel('mean |r| to other parcels')
+        ax.set_title(f'Parcel coupling, {atlas} — {bold.shape[0]} vols x {bold.shape[1]} parcels\n'
                      f'{n_flat} flat parcel(s), {n_nan} NaN(s)', loc='left',
                      fontsize=10, color=INK)
+        weak = int(np.sum(conn < 0.5 * np.nanmedian(conn)))
+        if weak:
+            notes.append(f'{weak} parcel(s) couple to the rest of the brain at under half '
+                         'the median — check BOLD coverage in those regions')
         if n_flat or n_nan:
             notes.append(f'{n_flat} flat and {n_nan} NaN entries in bold.csv — '
                          'preprocess.py patches these by interpolating neighbouring '
