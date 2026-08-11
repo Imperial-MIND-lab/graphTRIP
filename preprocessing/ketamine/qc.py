@@ -212,11 +212,27 @@ def check_bids():
 
 # ------------------------------------------------------- stage 0: grids --
 
+def canonical_geometry(img):
+    """
+    Shape and affine after reordering the axes to RAS.
+
+    Compares where voxels sit in world space rather than how they are stored. FSL writes
+    the MNI152 as LAS and TemplateFlow writes it as RAS; the raw affines differ in the
+    sign of the x axis while describing the identical volume.
+    """
+    ornt = nib.orientations.io_orientation(img.affine)
+    shape3 = np.array(img.shape[:3])
+    affine = img.affine @ nib.orientations.inv_ornt_aff(ornt, shape3)
+    return tuple(int(s) for s in shape3[ornt[:, 0].astype(int)]), affine
+
+
 def describe_grid(path_or_img, label):
     img = nib.load(path_or_img) if isinstance(path_or_img, str) else path_or_img
-    return {'label': label, 'shape': tuple(img.shape[:3]),
+    shape, affine = canonical_geometry(img)
+    return {'label': label, 'shape': shape,
             'zooms': tuple(round(float(z), 3) for z in img.header.get_zooms()[:3]),
-            'affine': np.round(img.affine, 3)}
+            'affine': affine,
+            'orient': ''.join(nib.orientations.aff2axcodes(img.affine))}
 
 
 def check_grids(s_id=None, atlas='schaefer100'):
@@ -252,23 +268,33 @@ def check_grids(s_id=None, atlas='schaefer100'):
             print('  (fMRIPrep output not found yet)')
 
     ref = grids[0]
-    print(f'\n{"grid":<32} {"shape":<18} {"voxel size":<18} matches reference')
-    print('-' * 92)
+    print(f'\n{"grid":<32} {"shape":<18} {"voxel size":<18} {"stored":<8} same volume')
+    print('-' * 100)
     ok = True
+    mismatched = []
     for g in grids:
         same = (g['shape'] == ref['shape']
                 and np.allclose(g['affine'], ref['affine'], atol=1e-3))
         if g is not ref and not same:
             ok = False
+            mismatched.append(g)
         print(f'{g["label"]:<32} {str(g["shape"]):<18} {str(g["zooms"]):<18} '
-              f'{"--" if g is ref else ("YES" if same else "NO  <-- MISMATCH")}')
-    print('-' * 92)
+              f'{g["orient"]:<8} {"--" if g is ref else ("YES" if same else "NO  <-- MISMATCH")}')
+    print('-' * 100)
+
     if ok:
-        print('All grids agree. REACT and parcellation will operate on a common space.\n')
+        print('All grids describe the same volume in world space. Differences in the '
+              '"stored"\ncolumn are axis order only (FSL writes LAS, TemplateFlow RAS) '
+              'and are handled\ncorrectly by nilearn and REACT.\n')
     else:
         print('MISMATCH. Fix --output-spaces before running stages 3-5.\n'
               'Use MNI152NLin6Asym:res-2 (the FSL MNI152 template these atlases '
               'were built in), not MNI152NLin2009cAsym:res-2.\n')
+        print(f'Reference ({ref["label"]}), reoriented to RAS:')
+        print(np.round(ref['affine'], 3))
+        for g in mismatched:
+            print(f'\n{g["label"]}, reoriented to RAS:')
+            print(np.round(g['affine'], 3))
     return ok
 
 

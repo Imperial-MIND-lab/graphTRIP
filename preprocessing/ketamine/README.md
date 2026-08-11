@@ -469,6 +469,14 @@ python -m preprocessing.ketamine.qc subject --s-id S01    # per-subject report
 python -m preprocessing.ketamine.qc cohort                # motion, QC-FC, psilodep1 comparison
 ```
 
+`grid` compares **world-space geometry**, not raw affines. FSL stores the MNI152 as `LAS`
+and TemplateFlow (what fMRIPrep writes) stores it as `RAS`, so the two affines differ in
+the sign of the x axis while describing the identical volume — the `stored` column shows
+this and it is expected, not an error. Comparing raw affines reports a false mismatch;
+comparing after reorientation to RAS still catches the real failure, a
+`MNI152NLin2009cAsym` output at 97×115×97. nilearn logging "Resampling labels" during
+parcellation is it correctly handling the axis flip.
+
 `bids` and `grid` need no derivatives and exit non-zero on failure, so they are safe to
 chain ahead of a submission. `bids` confirms the four root files are present, that
 `TaskName` is reachable by inheritance, and that all 36 subjects have both a rest run and
