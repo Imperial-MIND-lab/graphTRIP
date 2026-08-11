@@ -102,6 +102,27 @@ def cleaned_nifti(s_id):
 _RUN_CACHE = {}
 
 
+def _select_run_from_confounds(fmriprep_dir, bids_id):
+    """
+    Same lowest-mean-FD rule as postprocess.select_run, but using only the confounds
+    TSVs, so the cohort report runs against a sync that omits the BOLD volumes.
+    """
+    hits = sorted(glob.glob(os.path.join(
+        fmriprep_dir, bids_id, BIDS_SESSION, 'func',
+        f'{bids_id}_{BIDS_SESSION}_task-rest_*desc-confounds_timeseries.tsv')))
+    if not hits:
+        raise FileNotFoundError(
+            f'No fMRIPrep confounds for {bids_id} under {fmriprep_dir}')
+
+    runs = []
+    for path in hits:
+        run_tag = os.path.basename(path).split('_desc-confounds')[0].split(f'{bids_id}_')[1]
+        fd = pd.read_csv(path, sep='\t')['framewise_displacement'].fillna(0.0)
+        runs.append({'bold': None, 'mask': None, 'confounds': path,
+                     'run_tag': run_tag, 'mean_fd': float(fd.mean())})
+    return min(runs, key=lambda r: r['mean_fd'])
+
+
 def selected_run(bids_id):
     """
     The run postprocess.py actually cleaned.
@@ -112,7 +133,11 @@ def selected_run(bids_id):
     """
     if bids_id not in _RUN_CACHE:
         fmriprep_dir = os.path.join(project_root(), 'data', 'preprocessed', STUDY)
-        _RUN_CACHE[bids_id] = select_run(find_runs(fmriprep_dir, bids_id))
+        try:
+            run = select_run(find_runs(fmriprep_dir, bids_id))
+        except FileNotFoundError:
+            run = _select_run_from_confounds(fmriprep_dir, bids_id)
+        _RUN_CACHE[bids_id] = run
     return _RUN_CACHE[bids_id]
 
 
@@ -555,10 +580,13 @@ def qc_cohort(atlas='schaefer100'):
             m = motion_summary(bids_id)
             rec.update(mean_fd=m['mean_fd'], max_fd=m['max_fd'],
                        pct_over=m['pct_over'], n_vols=m['n_vols'],
-                       n_nonsteady=m['n_nonsteady'])
+                       n_nonsteady=m['n_nonsteady'], n_spike=m['n_spike'],
+                       n_fd_over=m['n_fd_over'], n_dvars_only=m['n_dvars_only'],
+                       run_tag=selected_run(bids_id)['run_tag'])
         except Exception:
             rec.update(mean_fd=np.nan, max_fd=np.nan, pct_over=np.nan,
-                       n_vols=np.nan, n_nonsteady=np.nan)
+                       n_vols=np.nan, n_nonsteady=np.nan, n_spike=np.nan,
+                       n_fd_over=np.nan, n_dvars_only=np.nan, run_tag=None)
         edge_f = os.path.join(feature_dir(s_id, atlas), 'edge.csv')
         if os.path.exists(edge_f):
             e = pd.read_csv(edge_f)['functional_connectivity'].values
