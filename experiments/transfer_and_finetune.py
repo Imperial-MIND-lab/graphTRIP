@@ -1,11 +1,26 @@
 """
-Loads a pre-trained model and evaluates it on a new dataset. 
+Loads a pre-trained model and evaluates it zero-shot on a new dataset.
 Optionally, subsequent finetuning is performed on the new dataset.
-Note: Requires consistent graph_attrs and context_attrs between 
+Note: Requires consistent graph_attrs and context_attrs between
 the pretrained and new datasets.
 
+The zero-shot evaluation maps the new cohort's clinical scores into each fold model's own
+input space before predicting, under up to two conditions:
+
+    no_harmonisation   the pretrained model's own training transform, applied to the new
+                       cohort. For a model trained on raw scores this is the identity; for
+                       one trained on standardised scores it is z-scoring by the SOURCE
+                       cohort's training-fold statistics.
+    harmonised         the attributes listed in `harmonise_graph_attrs` are instead
+                       rescaled from the new cohort's own leave-one-out statistics onto the
+                       scale the model was trained on (unsupervised domain adaptation).
+
+Because the predictions use no labels from the new cohort and change no weights, they are a
+fixed function of the inputs. Permuting the labels leaves them unchanged, so the reported
+permutation null is exact.
+
 Author: Hanna Tolle
-Date: 2025-01-12 
+Date: 2025-01-12
 License: BSD-3-Clause
 """
 import matplotlib
@@ -34,6 +49,8 @@ from utils.files import add_project_root
 from utils.helpers import fix_random_seed, get_logger, save_test_indices, check_weights_exist
 from utils.plotting import plot_vgae_reconstructions, plot_loss_curves, true_vs_pred_scatter
 from utils.configs import load_ingredient_configs, match_ingredient_configs
+from utils.statsalg import correlation_permutation_test
+from utils.harmonisation import graph_attr_matrix, write_train_stats
 from preprocessing.metrics import get_rsn_mapping
 from models.utils import freeze_model
 
@@ -66,7 +83,20 @@ def cfg():
 
     # If multiple weights are given, evaluate all but finetune only the first
     weight_filenames = {'vgae': ['k0_vgae_weights.pth'],
-                        'mlp': ['k0_mlp_weights.pth']} 
+                        'mlp': ['k0_mlp_weights.pth']}
+
+    # Zero-shot evaluation configurations
+    # Clinical attributes to harmonise onto the pretrained model's training scale. If empty,
+    # only the no_harmonisation condition is evaluated. Both conditions are always computed
+    # together when this is non-empty: the VGAE never reads graph_attr, so the second
+    # condition costs one extra MLP forward pass, and the two must share a seed to be
+    # comparable.
+    harmonise_graph_attrs = []
+    # Which graph_attrs the pretrained model received in standardised form. Leave as None to
+    # read it from the pretrained model's config.json, which only works if that file stores
+    # it as a plain list.
+    source_standardised_attrs = None
+    n_permutations = 10000  # Permutation test of the mean-vote correlation.
 
     # Training configurations (only used if num_epochs > 0)
     num_epochs = 50       # Number of epochs for fine-tuning.
@@ -123,6 +153,28 @@ def match_config(config: Dict) -> Dict:
         # Make sure that vgae_lr is not 0
         assert vgae_lr != 0, "VGAE learning rate must be non-zero when alpha > 0."
     return config_updates
+
+# Zero-shot transfer helpers ---------------------------------------------------
+def get_transfer_outputs(mlp, readout, clinical, x_raw, labels, subject_ids, treatment):
+    '''
+    Predictions of one fold model on the whole new cohort, given clinical inputs that have
+    already been mapped into that model's input space.
+
+    The recorded clinical columns are the RAW scores, not the mapped ones, so that the
+    prediction CSVs stay comparable across conditions and downstream analyses that control
+    for baseline severity use the score as measured. The mapped values are recorded
+    separately by clinical_inputs_record().
+    '''
+    mlp.eval()
+    with torch.no_grad():
+        clinical = torch.tensor(clinical, dtype=readout.dtype, device=readout.device)
+        x = torch.cat([readout, clinical], dim=1)
+        ypred = mlp(x) if treatment is None else mlp(x, treatment)
+    return {'prediction': ypred.squeeze(-1).cpu().tolist(),
+            'label': labels,
+            'subject_id': subject_ids,
+            'clinical_data': [tuple(row) for row in np.asarray(x_raw).tolist()]}
+
 
 # Helper class ---------------------------------------------------------------
 class LossNormaliser:
@@ -364,9 +416,13 @@ def run(_config):
         add_treatment_transform(data)
     device = torch.device(_config['device'])
     logger.info(f'Using device: {device}')
+
+    # K-fold splits of the new dataset are only needed for fine-tuning. The zero-shot
+    # evaluation fits nothing here, so every subject is equally unseen and there is no
+    # split to respect -- harmonisation statistics are leave-one-out instead.
     train_loaders, val_loaders, test_loaders, test_indices_list, mean_std = \
-        get_kfold_dataloaders(data, seed=seed)
-    
+        get_kfold_dataloaders(data, seed=seed) if num_epochs > 0 else ([], [], [], [], None)
+
     # Load pretrained models
     pretrained_vgaes = load_trained_vgaes(weights_dir, weight_filenames['vgae'], device=device)
     pretrained_mlps = load_trained_mlps(weights_dir, weight_filenames['mlp'], device=device,
@@ -380,82 +436,149 @@ def run(_config):
         os.makedirs(pretrained_model_dir, exist_ok=True)
         output_dirs.append(pretrained_model_dir)
 
-    # Evaluate before fine-tuning -------------------------------------------------
-    # Evaluate each set of pretrained models on the whole new dataset
+    # Zero-shot evaluation --------------------------------------------------------
+    # Every pretrained model is evaluated on the whole new dataset, under each condition.
     eval_loader = DataLoader(data, batch_size=len(data), shuffle=False)
+    batch = next(iter(eval_loader)).to(device)
+    treatment = get_treatment(batch, num_z_samples=0) if is_cfrnet else None
+    labels = get_labels(batch, num_z_samples=0).squeeze(-1).cpu().tolist()
+    subject_ids = batch.subject.cpu().tolist()
+
+    # Map the clinical scores into each fold model's own input space
+    source_dataset_config = load_ingredient_configs(weights_dir, ['dataset'])['dataset']
+    transfer = build_transfer_inputs(
+        data=data,
+        weights_dir=weights_dir,
+        num_models=num_pretrained_models,
+        graph_attrs=_config['dataset']['graph_attrs'],
+        harmonise=_config['harmonise_graph_attrs'],
+        source_standardised_attrs=_config['source_standardised_attrs'],
+        source_dataset_config=source_dataset_config)
+    clinical_inputs = transfer['inputs']
+    conditions = transfer['conditions']
+    x_raw = graph_attr_matrix(data)
+    logger.info(f"Zero-shot inputs: standardised at training = {transfer['standardised_attrs']}, "
+                f"harmonised = {transfer['harmonised_attrs']} "
+                f"(leave-one-out statistics of {len(data)} subjects).")
+
+    # Save the record of what the mapping did, for the before/after distribution figure
+    if not transfer['record'].empty:
+        transfer['record'].to_csv(os.path.join(output_dir, 'clinical_inputs.csv'), index=False)
+    if transfer['train_stats']:
+        write_train_stats(transfer['train_stats'],
+                          os.path.join(output_dir, 'harmonisation_stats.csv'))
+    if transfer['source_values'] is not None:
+        # Raw source-cohort scores: the reference distribution the new cohort is mapped onto
+        source_attrs = transfer['source_attrs']
+        pd.DataFrame({a: transfer['source_values'][:, source_attrs.index(a)]
+                      for a in transfer['train_stats']}
+                     ).to_csv(os.path.join(output_dir, 'source_cohort_clinical.csv'), index=False)
+
+    # The VGAE never reads graph_attr, so each readout is computed once and shared by all
+    # conditions; only the MLP forward pass is repeated.
+    readouts = []
+    for i in range(num_pretrained_models):
+        vgae = pretrained_vgaes[i].eval()
+        with torch.no_grad():
+            out = vgae(batch)
+            readouts.append(vgae.readout(out.mu, get_context(batch), batch.batch))
 
     # Evaluate MLP predictions --------------------------------------------------
     all_results = []
-    for i in range(num_pretrained_models):
-        initial_outputs = init_outputs_dict(data)
-        outputs = get_mlp_outputs_nograd(pretrained_mlps[i], eval_loader, device, 
-                                         get_x=get_x_with_vgae, 
-                                         vgae=pretrained_vgaes[i], num_z_samples=0)
-        update_best_outputs(initial_outputs, outputs)
-    
-        # Record metrics for each pretrained model
-        initial_outputs = pd.DataFrame(initial_outputs)
-        r, p, mae, mae_std = evaluate_regression(initial_outputs)
-        results = {'pretrained_model': i, 
-                   'seed': seed, 
-                   'r': r, 
-                   'p': p, 
-                   'mae': mae, 
-                   'mae_std': mae_std}
-        all_results.append(results)
-        for k, v in results.items():
-            if k != 'pretrained_model':
-                ex.log_scalar(f'initial_prediction/{k}', v)
-        logger.info(f"Initial results for pretrained model {i}: r={r:.4f}, p={p:.4e}, mae={mae:.4f} ± {mae_std:.4f}.")
+    for condition in conditions:
+        suffix = '' if condition == NO_HARMONISATION else f'_{condition}'
+        predictions = np.zeros((len(data), num_pretrained_models))
 
-        # True vs predicted scatter plot
+        for i in range(num_pretrained_models):
+            initial_outputs = init_outputs_dict(data)
+            outputs = get_transfer_outputs(pretrained_mlps[i], readouts[i],
+                                           clinical_inputs[condition][i], x_raw,
+                                           labels, subject_ids, treatment)
+            update_best_outputs(initial_outputs, outputs)
+
+            # Record metrics for each pretrained model
+            initial_outputs = pd.DataFrame(initial_outputs)
+            predictions[:, i] = initial_outputs['prediction'].values
+            r, p, mae, mae_std = evaluate_regression(initial_outputs)
+            results = {'condition': condition,
+                       'pretrained_model': i,
+                       'seed': seed,
+                       'r': r,
+                       'p': p,
+                       'mae': mae,
+                       'mae_std': mae_std}
+            all_results.append(results)
+            for k, v in results.items():
+                if k not in ('pretrained_model', 'condition'):
+                    ex.log_scalar(f'initial_prediction{suffix}/{k}', v)
+            logger.info(f"Initial results for pretrained model {i} ({condition}): "
+                        f"r={r:.4f}, p={p:.4e}, mae={mae:.4f} ± {mae_std:.4f}.")
+
+            # True vs predicted scatter plot
+            title = f'r={r:.4f}, p={p:.4e}, MAE={mae:.4f} ± {mae_std:.4f}'
+            save_path = os.path.join(output_dirs[i],
+                                     f'initial_true_vs_predicted_model{i}{suffix}.png')
+            true_vs_pred_scatter(initial_outputs, title=title, save_path=save_path)
+            image_files.append(save_path)
+
+            # Close all plots
+            plt.close('all')
+
+            # Save & log initial prediction results
+            file = os.path.join(output_dirs[i], f'initial_prediction_results{suffix}.csv')
+            initial_outputs.to_csv(file, index=False)
+
+        # Initial predictions mean voting --------------------------------------
+        df = initial_outputs.copy()
+        df['prediction'] = np.mean(predictions, axis=1)
+        df['prediction_std'] = np.std(predictions, axis=1)
+        df.to_csv(os.path.join(output_dir,
+                               f'initial_prediction_results_mean_vote{suffix}.csv'), index=False)
+
+        # Evaluate the mean predictions
+        r, p, mae, mae_std = evaluate_regression(df)
+
+        # Permutation test of the mean-vote correlation.
+        null_path = os.path.join(output_dir, f'permutation_nulls{suffix}.png')
+        perm = correlation_permutation_test(
+            np.asarray(df['label'].values, dtype=float),
+            np.asarray(df['prediction'].values, dtype=float),
+            n_permutations=_config['n_permutations'], seed=seed,
+            make_plot=True, save_path=null_path,
+            title=f'Zero-shot on {_config["dataset"]["study"]} ({condition}), seed {seed}\n')
+        image_files.append(null_path)
+        plt.close('all')
+        pd.DataFrame({'r': perm['null_distribution']}).to_csv(
+            os.path.join(output_dir, f'permutation_null_mean_vote{suffix}.csv'), index=False)
+
+        results = {'seed': seed, 'r': r, 'p': p, 'mae': mae, 'mae_std': mae_std,
+                   'perm_p': perm['p_value'],
+                   'null_mean': perm['null_mean'],
+                   'null_sd': perm['null_std'],
+                   'n_permutations': _config['n_permutations']}
+        pd.DataFrame(results, index=[0]).to_csv(
+            os.path.join(output_dir, f'initial_metrics_mean_vote{suffix}.csv'), index=False)
+
+        # Log final metrics
+        for k, v in results.items():
+            ex.log_scalar(f'initial_prediction_mean_vote{suffix}/{k}', v)
+        logger.info(f"Initial results for mean voting ({condition}): r={r:.4f}, p={p:.4e}, "
+                    f"permutation p={perm['p_value']:.4f} "
+                    f"(null {perm['null_mean']:+.4f} ± {perm['null_std']:.4f}), "
+                    f"mae={mae:.4f} ± {mae_std:.4f}.")
+
+        # True vs predicted scatter
         title = f'r={r:.4f}, p={p:.4e}, MAE={mae:.4f} ± {mae_std:.4f}'
-        save_path = os.path.join(output_dirs[i], f'initial_true_vs_predicted_model{i}.png')
-        true_vs_pred_scatter(initial_outputs, title=title, save_path=save_path)
+        save_path = os.path.join(output_dir, f'initial_true_vs_predicted_mean_vote{suffix}.png')
+        true_vs_pred_scatter(df, title=title, save_path=save_path)
         image_files.append(save_path)
 
         # Close all plots
         plt.close('all')
 
-        # Save & log initial prediction results
-        file = os.path.join(output_dirs[i], 'initial_prediction_results.csv')
-        initial_outputs.to_csv(file, index=False)
-
     # Save initial metrics of all pretrained models
     all_results = pd.DataFrame(all_results)
     all_results.to_csv(os.path.join(output_dir, 'initial_metrics_summary.csv'), index=False)
-
-    # Initial predictions mean voting ------------------------------------------
-    # Load the initial predictions for each pretrained model
-    initial_outputs = np.zeros((len(data), num_pretrained_models))
-    for i in range(num_pretrained_models):
-        file = os.path.join(output_dirs[i], 'initial_prediction_results.csv')
-        df = pd.read_csv(file)
-        initial_outputs[:, i] = df['prediction'].values
-    
-    # Compute the mean prediction across all pretrained models
-    df['prediction'] = np.mean(initial_outputs, axis=1)
-    df['prediction_std'] = np.std(initial_outputs, axis=1)
-    df.to_csv(os.path.join(output_dir, 'initial_prediction_results_mean_vote.csv'), index=False)
-
-    # Evaluate the mean predictions
-    r, p, mae, mae_std = evaluate_regression(df)
-    results = {'seed': seed, 'r': r, 'p': p, 'mae': mae, 'mae_std': mae_std}
-    pd.DataFrame(results, index=[0]).to_csv(os.path.join(output_dir, 'initial_metrics_mean_vote.csv'), index=False)
-
-    # Log final metrics
-    for k, v in results.items():
-        ex.log_scalar(f'initial_prediction_mean_vote/{k}', v)
-    logger.info(f"Initial results for mean voting: r={r:.4f}, p={p:.4e}, mae={mae:.4f} ± {mae_std:.4f}.")
-
-    # True vs predicted scatter
-    title = f'r={r:.4f}, p={p:.4e}, MAE={mae:.4f} ± {mae_std:.4f}'
-    save_path = os.path.join(output_dir, f'initial_true_vs_predicted_mean_vote.png')
-    true_vs_pred_scatter(df, title=title, save_path=save_path)
-    image_files.append(save_path)
-
-    # Close all plots
-    plt.close('all')
 
     # Evaluate VGAE reconstructions ----------------------------------------------
     # Some details needed for plotting

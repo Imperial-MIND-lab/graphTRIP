@@ -3,7 +3,7 @@
 #PBS -l select=1:ncpus=4:mem=8gb
 #PBS -l walltime=08:00:00
 #PBS -N secondary_scripts
-#PBS -J 0-1699
+#PBS -J 0-1689
 
 # Secondary scripts do not depend on primary scripts.
 # Each base job is run with 10 different seeds (0-9).
@@ -14,30 +14,28 @@ source activate graphtrip
 cd ~/projects/graphTRIP/scripts
 
 # Define job ranges for each script (each base job has 10 seeds)
-# Validation: 2 base jobs (0-1) -> 20 jobs (PBS_ARRAY_INDEX 0-19)
-# Interpretation for graphTRIP: 42 base jobs (0-41) × 10 seeds = 420 jobs (PBS_ARRAY_INDEX 20-439)
-# Interpretation for medusa: 42 base jobs (0-41) × 10 seeds = 420 jobs (PBS_ARRAY_INDEX 440-859)
-# Interpretation for medusa escitalopram: 42 base jobs (0-41) × 10 seeds = 420 jobs (PBS_ARRAY_INDEX 860-1279)
-# Interpretation for medusa psilocybin: 42 base jobs (0-41) × 10 seeds = 420 jobs (PBS_ARRAY_INDEX 1280-1699)
+# Validation: 1 base job (0) -> 10 jobs (PBS_ARRAY_INDEX 0-9)
+# Interpretation for graphTRIP: 42 base jobs (0-41) × 10 seeds = 420 jobs (PBS_ARRAY_INDEX 10-429)
+# Interpretation for medusa: 42 base jobs (0-41) × 10 seeds = 420 jobs (PBS_ARRAY_INDEX 430-849)
+# Interpretation for medusa escitalopram: 42 base jobs (0-41) × 10 seeds = 420 jobs (PBS_ARRAY_INDEX 850-1269)
+# Interpretation for medusa psilocybin: 42 base jobs (0-41) × 10 seeds = 420 jobs (PBS_ARRAY_INDEX 1270-1689)
 
 VALIDATION_START=0
-VALIDATION_END=19
-GRAIL_GRAPHTRIP_START=20
-GRAIL_GRAPHTRIP_END=439
-GRAIL_MEDUSA_START=440
-GRAIL_MEDUSA_END=859
-GRAIL_ESCITALOPRAM_START=860
-GRAIL_ESCITALOPRAM_END=1279
-GRAIL_PSILOCYBIN_START=1280
-GRAIL_PSILOCYBIN_END=1699
+VALIDATION_END=9
+GRAIL_GRAPHTRIP_START=10
+GRAIL_GRAPHTRIP_END=429
+GRAIL_MEDUSA_START=430
+GRAIL_MEDUSA_END=849
+GRAIL_ESCITALOPRAM_START=850
+GRAIL_ESCITALOPRAM_END=1269
+GRAIL_PSILOCYBIN_START=1270
+GRAIL_PSILOCYBIN_END=1689
 
 # Run the appropriate script based on PBS_ARRAY_INDEX
 if [ $PBS_ARRAY_INDEX -ge $VALIDATION_START ] && [ $PBS_ARRAY_INDEX -le $VALIDATION_END ]; then
-    # Validation (2 base jobs × 10 seeds = 20 jobs; 0-19)
-    # Calculate base job ID (0-1) and seed (0-9) from PBS_ARRAY_INDEX
-    JOBID=$((PBS_ARRAY_INDEX / 10))
-    SEED=$((PBS_ARRAY_INDEX % 10))
-    python validation.py -s ${SEED} -j ${JOBID}
+    # Validation (1 base job × 10 seeds = 10 jobs; 0-9)
+    SEED=$((PBS_ARRAY_INDEX))
+    python validation.py -s ${SEED}
 
 elif [ $PBS_ARRAY_INDEX -ge $GRAIL_GRAPHTRIP_START ] && [ $PBS_ARRAY_INDEX -le $GRAIL_GRAPHTRIP_END ]; then
     # Interpretation for graphTRIP (42 base jobs × 10 seeds = 420 jobs; 20-439)

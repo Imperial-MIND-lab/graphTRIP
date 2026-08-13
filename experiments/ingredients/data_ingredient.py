@@ -19,10 +19,18 @@ import torch
 
 from datasets import *
 from preprocessing.metrics import load_3d_coords, compute_spd
+from utils.harmonisation import (graph_attr_matrix, read_fold_indices, loo_stats,
+                                 resolve_standardised_attrs, compute_train_stats,
+                                 target_scale, map_clinical_inputs, clinical_inputs_record)
 
 
 # Create the ingredient --------------------------------------------------------
 data_ingredient = Ingredient('dataset')
+
+# Zero-shot transfer conditions. The first is always evaluated; the second only when
+# clinical attributes are harmonised.
+NO_HARMONISATION = 'no_harmonisation'
+HARMONISED = 'harmonised'
 
 # Define configurations --------------------------------------------------------
 @data_ingredient.config
@@ -151,9 +159,111 @@ def load_data(study, session, atlas, target, prefilter,
 
     return dataset
 
+def build_transfer_inputs(data, weights_dir, num_models, graph_attrs, harmonise,
+                          source_standardised_attrs, source_dataset_config):
+    '''
+    Builds the clinical MLP inputs of every fold model for a zero-shot transfer, under
+    every condition.
+
+    Each fold model has its own input space, because the statistics it was standardised
+    with -- and the statistics it is harmonised onto -- are those of the source subjects it
+    was actually trained on. The mapping is therefore per-model and cannot be expressed as
+    a dataset transform, which is why it is applied explicitly here.
+
+    Conditions:
+        no_harmonisation    the pretrained model's own training transform, applied to the
+                            new cohort. The identity for a model trained on raw scores.
+        harmonised          `harmonise` attributes are instead rescaled from the new
+                            cohort's leave-one-out statistics onto the training scale.
+                            Only present when `harmonise` is non-empty.
+
+    Parameters:
+    ----------
+    data (BrainGraphDataset): the new cohort.
+    weights_dir (str): directory of the pretrained models.
+    num_models (int): number of pretrained fold models.
+    graph_attrs (list): clinical attribute names, in column order.
+    harmonise (list): attributes to rescale from the new cohort's own statistics.
+    source_standardised_attrs (list or None): explicit override, see resolve_standardised_attrs.
+    source_dataset_config (dict): dataset config of the pretrained model, used to reload the
+                                  source cohort and recover its training-fold statistics.
+
+    Returns:
+    -------
+    dict with keys:
+        inputs (dict): {condition: list of [n_subjects, n_graph_attrs] arrays, one per model}
+        conditions (list): the conditions present in `inputs`.
+        record (pd.DataFrame): per-subject, per-attribute account of the mapping. Empty if
+                               nothing was harmonised.
+        train_stats (dict): the source training-fold statistics that were used.
+        source_values (np.ndarray or None): raw source-cohort clinical values, i.e. the
+                               reference distribution for the before/after figure.
+        source_attrs (list or None): column names of source_values.
+        standardised_attrs (list): attributes the pretrained model received standardised.
+    '''
+    x_raw = graph_attr_matrix(data)
+    subject_ids = [int(d.subject.item()) for d in data]
+    unknown = [a for a in harmonise if a not in graph_attrs]
+    if unknown:
+        raise ValueError(f"harmonise_graph_attrs {unknown} are not in graph_attrs {graph_attrs}.")
+
+    conditions = [NO_HARMONISATION] + ([HARMONISED] if harmonise else [])
+    standardised = resolve_standardised_attrs(weights_dir, graph_attrs,
+                                              source_standardised_attrs)
+    needed = sorted(set(harmonise) | set(standardised))
+    result = {'conditions': conditions, 'standardised_attrs': standardised,
+              'harmonised_attrs': list(harmonise), 'record': pd.DataFrame(),
+              'train_stats': {}, 'source_values': None, 'source_attrs': None}
+
+    # A raw-trained model with nothing to harmonise wants the scores exactly as they come,
+    # so no source statistics are needed and the map is the identity.
+    if not needed:
+        result['inputs'] = {c: [x_raw.copy() for _ in range(num_models)] for c in conditions}
+        return result
+
+    source_data = load_dataset_from_configs(source_dataset_config)
+    source_values = graph_attr_matrix(source_data)
+    source_attrs = list(source_data[0].attr_names.graph)
+    missing = [a for a in needed if a not in source_attrs]
+    if missing:
+        raise ValueError(f"Attributes {missing} are not in the source dataset's graph_attrs "
+                         f"{source_attrs}.")
+
+    folds = read_fold_indices(weights_dir)
+    if len(folds) != len(source_values):
+        raise ValueError(f"{len(folds)} fold assignments for {len(source_values)} source "
+                         "subjects; the saved split does not match the source dataset.")
+    if int(folds.max()) + 1 != num_models:
+        raise ValueError(f"Source split has {int(folds.max()) + 1} folds but {num_models} "
+                         "pretrained models were loaded.")
+
+    train_stats = compute_train_stats(source_values, source_attrs, folds, num_models, needed)
+    target_stats = target_scale(train_stats, standardised)
+    new_stats = {a: loo_stats(x_raw[:, graph_attrs.index(a)]) for a in harmonise}
+
+    inputs = {c: [] for c in conditions}
+    records = []
+    for k in range(num_models):
+        mapped = {c: map_clinical_inputs(x_raw, graph_attrs, k, train_stats, target_stats,
+                                         harmonise=(harmonise if c == HARMONISED else ()),
+                                         new_stats=new_stats)
+                  for c in conditions}
+        for c in conditions:
+            inputs[c].append(mapped[c])
+        if harmonise:
+            records.append(clinical_inputs_record(subject_ids, graph_attrs, harmonise, x_raw,
+                                                  mapped, k, train_stats, target_stats,
+                                                  new_stats))
+
+    result.update({'inputs': inputs, 'train_stats': train_stats,
+                   'source_values': source_values, 'source_attrs': source_attrs,
+                   'record': pd.concat(records, ignore_index=True) if records
+                             else pd.DataFrame()})
+    return result
+
 def load_dataset_from_configs(config):
     '''
-    Helper function to load dataset from outside a 
+    Helper function to load dataset from outside a
     sacred experiment using configs.
     '''
     # Get all valid input arguments
