@@ -385,9 +385,15 @@ def init_outputs_dict(dataset):
 
 @data_ingredient.capture
 def get_conditions(dataset, graph_attrs):
-    '''Returns the conditions for the dataset.'''
+    '''
+    Returns the conditions for the dataset, or None for a single-arm study that has no
+    Condition at all (e.g. ds005917, where every patient receives ketamine). Callers pass
+    the result to plotting functions, which already treat None as "no condition to colour by".
+    '''
     if 'Condition' not in graph_attrs:
         annotations = load_annotations(study=dataset.study)
+        if 'Condition_numeric' not in annotations.columns:
+            return None
         # Filter annotations to only include patients in the dataset
         # Note: Patient IDs in annotations are 1-indexed, subject IDs in data are 0-indexed
         subject_ids = [sub+1 for sub in dataset.subject.tolist()]
@@ -409,11 +415,17 @@ def update_best_outputs(best_outputs, outputs, graph_attrs):
 
 @data_ingredient.capture
 def add_drug_condition_to_outputs(outputs, study):
-    '''Adds the drug condition to the outputs dataframe, if it doesn't already exist.'''
+    '''
+    Adds the drug condition to the outputs dataframe, if it doesn't already exist.
+    Single-arm studies (e.g. ds005917) have no Condition column in their annotations;
+    for those the outputs are returned unchanged rather than gaining a fictitious drug arm.
+    '''
     if 'Condition' not in outputs.columns:
         # Load annotations
         default_prefilter = get_default_prefilter(study)
         annotations = load_annotations(study=study, filter=default_prefilter)
+        if 'Condition' not in annotations.columns:
+            return outputs
         df = convert_to_numerical(annotations[['Condition', 'Patient']], ['Condition'])
         
         # Create mapping from subject_id to condition, accounting for Patient index starting at 1

@@ -49,12 +49,49 @@ REACT: per-subject receptor-enriched connectivity maps, once per receptor set
     │
     ▼  Stage 5 · preprocess_features.sh
 preprocess.py: parcellate BOLD, compute node/edge features, save node.csv / edge.csv
-              Output: data/raw/ds005917/before/{atlas}/S{N}/node.csv, edge.csv, bold.csv
+    │         Output: data/raw/ds005917/before/{atlas}/S{N}/node.csv, edge.csv, bold.csv
+    │
+    ▼  Stage 6 · rescale_node_features.py          (run locally, then rsync)
+Divide the REACT betas by 4.68 to put them on the psilodep intensity scale
+              Output: node.csv rewritten in place, originals kept as node.csv.orig
 ```
 
-All five stages are chained automatically by `submit_pipeline.sh` using PBS
-`afterokarray` / `afterok` job dependencies.
+Stages 1–5 are chained automatically by `submit_pipeline.sh` using PBS
+`afterokarray` / `afterok` job dependencies. Stage 6 is a separate local step — see below.
 
+### Stage 6 · node feature rescaling
+
+The psilodep pipeline applied mode-1000 intensity normalisation (`modecorr`); fMRIPrep does
+not, so the ds005917 functional data stay in arbitrary scanner units. FC is unaffected —
+`bold.csv` is z-scored in both cohorts (sd 1.0000 vs 1.0023), which is why edge weights and
+graph density already match psilodep2 (0.154 vs 0.158 at threshold 0.5). The REACT betas are
+not: they come from the voxelwise NIfTIs and carry the raw intensity scale into `node.csv`.
+
+Measured inflation relative to psilodep2, pooled over the Believeau-3 maps:
+
+| atlas | psilodep2 sd | ds005917 sd | ratio | per-feature ratios |
+|---|---|---|---|---|
+| schaefer100 | 0.747 | 3.498 | 4.68 | 4.51, 4.72, 4.41 |
+| schaefer200 | 0.756 | 3.542 | 4.68 | 4.49, 4.77, 4.43 |
+| aal | 0.558 | 2.539 | 4.55 | 4.60, 4.74, 4.04 |
+
+It is a single scalar — constant across atlases and receptor maps — and the *relative*
+between-subject spread already agrees (per-subject node-sd CV 0.39 vs psilodep2's 0.37), so
+dividing by it restores the psilodep distribution without flattening real variation.
+Uncorrected, the VGAE node-reconstruction MSE is ~22× larger than on psilodep, so at
+`alpha=0.5` the MLP head is drowned out and `lr`/`reg_strength` are mis-scaled.
+
+```bash
+python -m preprocessing.ketamine.rescale_node_features --dry-run   # inspect first
+python -m preprocessing.ketamine.rescale_node_features
+rm -f data/processed/data_ds005917_*.pt   # cache is keyed on study/session/atlas only
+```
+
+This cannot be folded into stage 5: `preprocessing.metrics.compute_single_metric` only
+recomputes a feature when its name is *missing* from `node.csv`, so re-running stage 5 is a
+silent no-op for these columns. The script is idempotent — it backs each file up to
+`node.csv.orig` and treats the presence of that backup as "already rescaled" — so it can
+never divide twice.
 ---
 
 ## One-time local setup
@@ -538,4 +575,9 @@ dataset = BrainGraphDataset(
 )
 ```
 
-*Authors: Hanna M. Tolle, June 2026.*
+rsync -av --exclude '*.orig' data/raw/ds005917/before/ hpc:~/projects/graphTRIP/data/raw/ds005917/before/
+rsync -av data/raw/ds005917/annotations.csv hpc:~/projects/graphTRIP/data/raw/ds005917/
+# then, on the cluster:
+rm -f data/processed/data_ds005917_*.pt
+qsub job_scripts/ketamine_jobs.sh
+

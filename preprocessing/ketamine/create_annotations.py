@@ -77,6 +77,9 @@ def main():
     merged['MADRS_response_ket'] = merged['MADRS_b0'] - merged['MADRS_d2']
     merged['MADRS_response_pbo'] = merged['MADRS_b0'] - merged['MADRS_p2']
 
+    # Crossover arm order as a numeric covariate: +1 = ketamine first, -1 = placebo first.
+    merged['infusion_order'] = merged['infusion_1'].map({'d': 1.0, 'p': -1.0})
+
     # All 36 patients (33 MDD + 3 BP) are preprocessed and loadable
     merged['Exclusion'] = 0
     merged['missing_raw_before'] = 0
@@ -96,7 +99,7 @@ def main():
     cols = [
         'Patient', 'bids_id', 's_id', 'Group', 'Exclusion',
         'missing_raw_before', 'missing_clinical',
-        'Age', 'Sex', 'BMI', 'infusion_1', 'infusion_2',
+        'Age', 'Sex', 'BMI', 'infusion_1', 'infusion_2', 'infusion_order',
         'MADRS_b0', 'MADRS_d2', 'MADRS_d10', 'MADRS_p2', 'MADRS_p10',
         'MADRS_response_ket', 'MADRS_response_pbo',
         'HAM17_b0', 'HAM17_d2', 'HAM17_d10', 'HAM17_p2', 'HAM17_p10',

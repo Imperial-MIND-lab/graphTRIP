@@ -40,7 +40,7 @@ class Attrs:
         elif study=='psilodep1':
             self.graph += ['Gender', 'Age', 'HAMD_Before', 'QIDS_Before', 'LOTR_Before', 'BDI_Before', 'Condition', 'Stop_SSRI']
         elif study == 'ds005917':
-            self.graph += ['Sex', 'Age', 'MADRS_b0', 'HAM17_b0', 'HAMD6_b0']
+            self.graph += ['Sex', 'Age', 'MADRS_b0', 'HAM17_b0', 'HAMD6_b0', 'infusion_order']
         elif study == 'mock_study':
             self.graph += ['Baseline', 'Condition']
         else:
