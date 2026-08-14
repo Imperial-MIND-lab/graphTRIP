@@ -7,8 +7,9 @@
 # Script for running the post-hoc analysis after primary and secondary scripts have been run.
 
 # Load environment
-module load anaconda3/personal
-source activate graphtrip
+module load miniforge/3
+eval "$(~/miniforge3/bin/conda shell.bash hook)"
+conda activate graphtrip
 cd ~/projects/graphTRIP/scripts
 
 # Run post-hoc analysis for graphTRIP

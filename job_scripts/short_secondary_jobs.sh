@@ -10,8 +10,9 @@
 # Total: 2 versions × 10 seeds = 20 jobs (PBS_ARRAY_INDEX 0-19)
 
 # Load environment
-module load anaconda3/personal
-source activate graphtrip
+module load miniforge/3
+eval "$(~/miniforge3/bin/conda shell.bash hook)"
+conda activate graphtrip
 cd ~/projects/graphTRIP/scripts
 
 GRAPHTRIP_START=0

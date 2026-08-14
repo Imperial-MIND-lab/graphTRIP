@@ -5,8 +5,9 @@
 #PBS -N preprocessing
 #PBS -J 1-6
  
-module load anaconda3/personal
-source activate graphtrip
+module load miniforge/3
+eval "$(~/miniforge3/bin/conda shell.bash hook)"
+conda activate graphtrip
 cd ~/projects/graphTRIP/
 
 atlases=('schaefer100' 'schaefer200' 'aal')

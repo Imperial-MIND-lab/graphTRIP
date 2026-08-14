@@ -9,8 +9,9 @@
 # Each base job is run with 10 different seeds (0-9).
 
 # Load environment
-module load anaconda3/personal
-source activate graphtrip
+module load miniforge/3
+eval "$(~/miniforge3/bin/conda shell.bash hook)"
+conda activate graphtrip
 cd ~/projects/graphTRIP/scripts
 
 # Define job ranges for each script (each base job has 10 seeds)
