@@ -575,9 +575,3 @@ dataset = BrainGraphDataset(
 )
 ```
 
-rsync -av --exclude '*.orig' data/raw/ds005917/before/ hpc:~/projects/graphTRIP/data/raw/ds005917/before/
-rsync -av data/raw/ds005917/annotations.csv hpc:~/projects/graphTRIP/data/raw/ds005917/
-# then, on the cluster:
-rm -f data/processed/data_ds005917_*.pt
-qsub job_scripts/ketamine_jobs.sh
-
