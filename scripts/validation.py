@@ -8,9 +8,6 @@ Dependencies:
 Outputs:
 - outputs/validation/evaluate_graphtrip/            zero-shot graphTRIP
 - outputs/validation/permutation_importance/        importance of its MLP inputs
-- outputs/validation/pretraining/                   MLPs re-trained on psilodep2
-- outputs/validation/evaluate_pretrained/           those MLPs, zero-shot
-- outputs/validation/permutation_importance_pretrained/
 
 Author: Hanna M. Tolle
 Date: 2025-12-07
@@ -36,10 +33,6 @@ from experiments.run_experiment import run
 HARMONISE_ATTRS = ['QIDS_Before', 'BDI_Before']
 N_PERMUTATIONS = 10000
 N_IMPORTANCE_REPEATS = 200
-
-# Clinical attributes that do not carry information in psilodep1, and are therefore dropped
-# when re-training an MLP for the zero-shot comparison
-INCOMPATIBLE_ATTRS = ['Condition', 'Stop_SSRI']
 
 
 def zeroshot_dataset_config(psilodep1_config, graph_attrs):
@@ -140,106 +133,6 @@ def main(config_file, weights_base_dir, output_dir, verbose, debug, seed, config
         run(exname, observer, config_updates)
     else:
         print(f"Permutation importance on Psilodep1 experiment already exists in {ex_dir}.")
-
-    # Pre-train new MLP on Psilodep2 --------------------------------------------
-    # Same frozen graphTRIP encoder, but only the clinical features that carry information
-    # in psilodep1, so the head can use them fully.
-    exname = 'retrain_mlp'
-    ex_dir = os.path.join(output_dir, 'pretraining', f'seed_{seed}')
-    if not os.path.exists(ex_dir):
-        config_updates = {}
-        # Set the VGAE and MLP model and dataset config as graphTRIP
-        config_updates['vgae_model'] = copy.deepcopy(graphtrip_config['vgae_model'])
-        config_updates['mlp_model'] = copy.deepcopy(graphtrip_config['mlp_model'])
-        config_updates['dataset'] = copy.deepcopy(graphtrip_config['dataset'])
-
-        # Remove graph_attrs that are not compatible with psilodep1
-        graph_attrs = config_updates['dataset']['graph_attrs']
-        new_graph_attrs = [attr for attr in graph_attrs if attr not in INCOMPATIBLE_ATTRS]
-        config_updates['dataset']['graph_attrs'] = new_graph_attrs
-
-        # Since we're not training end-to-end, we need to standardise clinical data.
-        # This must be a copy: sacred serialises config.json with jsonpickle, and two config
-        # keys sharing one list object are written as a back-reference that cannot be
-        # resolved from the saved file.
-        config_updates['dataset']['graph_attrs_to_standardise'] = list(new_graph_attrs)
-
-        # Adapt clinical data dimensions
-        config_updates['mlp_model']['extra_dim'] = len(new_graph_attrs)
-        config_updates['vgae_model']['params']['num_graph_attr'] = len(new_graph_attrs)
-
-        # Training configs
-        config_updates['num_epochs'] = 2 if debug else graphtrip_config['num_epochs']
-        config_updates['mlp_lr'] = graphtrip_config['lr']
-        config_updates['num_z_samples'] = graphtrip_config['num_z_samples']
-        config_updates['alpha'] = 0              # VGAE is frozen
-        config_updates['vgae_lr'] = 0.0          # VGAE is frozen
-        config_updates['reinit_pooling'] = False # Re-use trained, frozen pooling module
-
-        # Add output and weights directories
-        config_updates['output_dir'] = ex_dir
-        config_updates['weights_dir'] = graphtrip_weights_dir
-        config_updates['save_weights'] = True
-        config_updates['seed'] = seed
-        config_updates['verbose'] = verbose
-        run(exname, observer, config_updates)
-    else:
-        print(f"Pre-training MLP on Psilodep2 experiment already exists in {ex_dir}.")
-    pretrain_dir = ex_dir
-
-    # The pretrained MLPs were trained on standardised clinical inputs. 
-    pretrained_attrs = [a for a in graphtrip_attrs if a not in INCOMPATIBLE_ATTRS]
-
-    # Evaluate the pre-trained MLPs zero-shot on Psilodep1 -------------------------
-    exname = 'transfer_and_finetune'
-    ex_dir = os.path.join(output_dir, 'evaluate_pretrained', f'seed_{seed}')
-    if not os.path.exists(ex_dir):
-        config_updates = {}
-        config_updates['vgae_model'] = copy.deepcopy(graphtrip_config['vgae_model'])
-        config_updates['mlp_model'] = copy.deepcopy(graphtrip_config['mlp_model'])
-        config_updates['dataset'] = zeroshot_dataset_config(config, pretrained_attrs)
-
-        # Adapt clinical data dimensions
-        config_updates['mlp_model']['extra_dim'] = len(pretrained_attrs)
-        config_updates['vgae_model']['params']['num_graph_attr'] = len(pretrained_attrs)
-
-        config_updates['num_epochs'] = 0  # no finetuning
-        config_updates['harmonise_graph_attrs'] = HARMONISE_ATTRS
-        config_updates['source_standardised_attrs'] = pretrained_attrs
-        config_updates['n_permutations'] = n_permutations
-
-        config_updates['output_dir'] = ex_dir
-        config_updates['weights_dir'] = pretrain_dir
-        config_updates['save_weights'] = False
-        config_updates['seed'] = seed
-        config_updates['verbose'] = verbose
-        run(exname, observer, config_updates)
-    else:
-        print(f"Zero-shot evaluation of pre-trained MLPs already exists in {ex_dir}.")
-
-    # How much of that prediction is brain-derived ---------------------------------
-    exname = 'permutation_importance'
-    ex_dir = os.path.join(output_dir, 'permutation_importance_pretrained', f'seed_{seed}')
-    if not os.path.exists(ex_dir):
-        config_updates = {}
-        config_updates['vgae_model'] = copy.deepcopy(graphtrip_config['vgae_model'])
-        config_updates['mlp_model'] = copy.deepcopy(graphtrip_config['mlp_model'])
-        config_updates['dataset'] = zeroshot_dataset_config(config, pretrained_attrs)
-        config_updates['mlp_model']['extra_dim'] = len(pretrained_attrs)
-        config_updates['vgae_model']['params']['num_graph_attr'] = len(pretrained_attrs)
-
-        config_updates['mode'] = 'mean_vote'
-        config_updates['harmonise_graph_attrs'] = HARMONISE_ATTRS
-        config_updates['source_standardised_attrs'] = pretrained_attrs
-        config_updates['n_repeats'] = n_repeats
-
-        config_updates['output_dir'] = ex_dir
-        config_updates['weights_dir'] = pretrain_dir
-        config_updates['seed'] = seed
-        config_updates['verbose'] = verbose
-        run(exname, observer, config_updates)
-    else:
-        print(f"Permutation importance of pre-trained MLPs already exists in {ex_dir}.")
 
 
 if __name__ == "__main__":

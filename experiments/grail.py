@@ -1,7 +1,9 @@
 '''
 Computes GRAIL patterns for all patients with all fold models.
 Does not cluster results and only saves mean alignment values.
-Additionally, computes fold-wise performance of each model and saves it.
+
+Set transfer_eval to evaluate a trained model on a cohort it was not trained on (e.g.
+psilodep2 weights on psilodep1).
 
 Dependencies:
 - data/raw/receptor_maps/f{atlas}/f{atlas}_receptor_maps.csv
@@ -35,6 +37,7 @@ from utils.files import add_project_root
 from utils.helpers import get_logger, fix_random_seed, triu_vector2mat_torch
 from utils.configs import load_ingredient_configs, match_ingredient_configs
 from utils.annotations import load_receptor_maps, load_rotated_rois
+from utils.harmonisation import write_train_stats
 from utils.statsalg import test_column_significance, compute_permutation_stats
 from models.utils import freeze_model
 from preprocessing.metrics import compute_modularity_torch, get_rsn_mapping
@@ -81,6 +84,11 @@ def cfg(dataset):
     n_permutations = 1000       # Number of permutations to use for null model analysis.
     cohen_d_threshold = 0.8     # Threshold for Cohen's d to consider a feature significant.
 
+    # Cross-cohort evaluation. Defaults leave the behaviour of a same-cohort run unchanged.
+    transfer_eval = False           # Evaluating on a cohort the model was not trained on.
+    harmonise_graph_attrs = []      # Clinical attrs to rescale onto the training scale.
+    source_standardised_attrs = None  # Clinical attrs the model received standardised.
+
 # Match configs function -------------------------------------------------------
 def match_config(config: Dict) -> Dict:
     '''Matches the configs specific to this experiment.'''
@@ -97,6 +105,10 @@ def match_config(config: Dict) -> Dict:
     # Check different configs depending on the prediction head type
     ingredients = ['dataset', 'vgae_model', 'mlp_model']
     exceptions = ['num_nodes', 'drug_condition']
+    if config.get('transfer_eval', False):
+        # The caller passes the source model's own dataset config with only the cohort and
+        # the outcome column swapped, so these are the only two keys allowed to differ.
+        exceptions += ['study', 'target']
     if 'mlp_model' in config:
         mlp_model_type = config['mlp_model']['model_type']
         if mlp_model_type == 'SklearnLinearModelWrapper':
@@ -374,6 +386,37 @@ def run(_config):
     if prediction_head_type == 'CFRHead':
         # Add treatment transform to the dataset (required for CFRHead)
         add_treatment_transform(data)
+        if _config['transfer_eval']:
+            # Record which head every prediction is routed through
+            treatments = sorted({int(d.treatment.item()) for d in data})
+            logger.info(f'Treatment values in the evaluation cohort: {treatments}.')
+            if len(treatments) == 1:
+                logger.info(f'All {len(data)} patients route through the same CFRHead arm.')
+
+    # Map the clinical inputs into each fold model's own input space ------------
+    clinical_inputs = None
+    if _config['harmonise_graph_attrs']:
+        source_dataset_config = load_ingredient_configs(mlp_weights_dir, ['dataset'])['dataset']
+        transfer = build_transfer_inputs(
+            data=data,
+            weights_dir=mlp_weights_dir,
+            num_models=len(vgaes),
+            graph_attrs=_config['dataset']['graph_attrs'],
+            harmonise=_config['harmonise_graph_attrs'],
+            source_standardised_attrs=_config['source_standardised_attrs'],
+            source_dataset_config=source_dataset_config)
+        clinical_inputs = transfer['inputs'][HARMONISED]
+        logger.info(f"Harmonised {transfer['harmonised_attrs']} onto the training scale "
+                    f"(leave-one-out statistics of {len(data)} subjects); standardised at "
+                    f"training = {transfer['standardised_attrs']}.")
+
+        # Record what the mapping did, for the before/after distribution figure
+        if not transfer['record'].empty:
+            transfer['record'].to_csv(os.path.join(output_dir, 'clinical_inputs.csv'),
+                                      index=False)
+        if transfer['train_stats']:
+            write_train_stats(transfer['train_stats'],
+                              os.path.join(output_dir, 'harmonisation_stats.csv'))
 
     # Sampling for each subject --------------------------------------------
     start_time = time()
@@ -414,6 +457,10 @@ def run(_config):
         
         for sub in tqdm(subjects_to_compute, desc=f'Fold {k}', disable=not verbose):
             batch = Batch.from_data_list([data[sub]]).to(device)
+            if clinical_inputs is not None:
+                # This fold model's own view of this subject's clinical scores
+                batch.graph_attr = torch.tensor(clinical_inputs[k][sub:sub + 1],
+                                                dtype=torch.float32, device=device)
             out = vgae(batch)
             mu = out.mu.detach()
             logvar = out.logvar.detach()

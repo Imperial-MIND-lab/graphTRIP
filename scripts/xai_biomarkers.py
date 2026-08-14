@@ -25,7 +25,8 @@ from utils.configs import load_configs_from_json
 from experiments.run_experiment import run
 
 
-def main(weights_base_dir, output_dir, verbose, debug, seed, job_id=None, mlp_weights_dir=None, grail_mode='normal'):
+def main(weights_base_dir, output_dir, verbose, debug, seed, job_id=None, mlp_weights_dir=None,
+         grail_mode='normal', eval_study=None, eval_target=None, harmonise=None):
     # Add project root to paths
     weights_base_dir = add_project_root(weights_base_dir)
     output_dir = add_project_root(output_dir)
@@ -99,6 +100,19 @@ def main(weights_base_dir, output_dir, verbose, debug, seed, job_id=None, mlp_we
     else:
         raise ValueError(f'Invalid grail mode: {grail_mode}')
 
+    # Cross-cohort evaluation --------------------------------------------------
+    if eval_study is not None:
+        if eval_target is None:
+            raise ValueError('--eval_target is required when --eval_study is given.')
+        config_updates['dataset']['study'] = eval_study
+        config_updates['dataset']['target'] = eval_target
+        config_updates['transfer_eval'] = True
+
+        # Harmonise clinical scores so the MLP doesn't need to extrapolate
+        config_updates['harmonise_graph_attrs'] = list(harmonise or [])
+        config_updates['source_standardised_attrs'] = \
+            config['dataset'].get('graph_attrs_to_standardise', [])
+
     # Run the experiment ------------------------------------------------------
     run(exname, observer, config_updates)
 
@@ -122,8 +136,16 @@ if __name__ == "__main__":
     parser.add_argument('--mlp_weights_dir', type=str, default=None, 
                         help='Path to the directory with MLP weights. If None, use the same as the VGAE weights.')
     parser.add_argument('--grail_mode', type=str, default='normal', choices=['normal', 'medusa', 'escitalopram', 'psilocybin'], help='Grail mode')
+    parser.add_argument('--eval_study', type=str, default=None,
+                        help='Evaluate on this cohort instead of the one the model was '
+                             'trained on, e.g. psilodep1. Requires --eval_target.')
+    parser.add_argument('--eval_target', type=str, default=None,
+                        help='Outcome column of the evaluation cohort, e.g. QIDS_1week.')
+    parser.add_argument('--harmonise', type=str, nargs='*', default=None,
+                        help='Clinical attributes to rescale onto the training scale, '
+                             'e.g. --harmonise QIDS_Before BDI_Before.')
     args = parser.parse_args()
 
     # Run the main function
-    main(args.weights_base_dir, args.output_dir, args.verbose, args.debug, args.seed, args.job_id, 
-         args.mlp_weights_dir, args.grail_mode)
+    main(args.weights_base_dir, args.output_dir, args.verbose, args.debug, args.seed, args.job_id,
+         args.mlp_weights_dir, args.grail_mode, args.eval_study, args.eval_target, args.harmonise)
