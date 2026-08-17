@@ -1,21 +1,35 @@
 """
-This scripts trains five ablation models:
-- Ablate neuroimaging features: train an MLP on clinical data only
-- Ablate VGAE: train a MLP on PCA-reduced neuroimaging features
-- Ablate VGAE: train a MLP on t-SNE-reduced neuroimaging features
+This script trains the ablation models.
+
+Model ablations replace one component of graphTRIP and keep every input domain:
+- Ablate VGAE: train an MLP on PCA-reduced neuroimaging features
+- Ablate VGAE: train an MLP on t-SNE-reduced neuroimaging features
 - Ablate MLP: train a VGAE with a linear regression head
-- Ablate node features: train graphTRIP without node attributes
+
+Feature ablations keep the model and remove an input domain. Together with the full
+models they span clinical {in, out} x REACT node features {in, out}, plus the two
+clinical-only models, which have no neuroimaging input at all.
 
 Dependencies:
 - experiments/configs/graphtrip.json
+- experiments/configs/medusa_graphtrip.json
 
 Outputs:
-- outputs/ablation/control_mlp/
-- outputs/ablation/pca_mlp/
-- outputs/ablation/tsne_mlp/
-- outputs/ablation/vgae_linreg_head//
-- outputs/ablation/linreg_on_clinical_data/
-- outputs/ablation/no_node_features/
+- outputs/ablation/pca_benchmark/
+- outputs/ablation/tsne_benchmark/
+- outputs/ablation/vgae_linreg_head/
+- outputs/ablation/feature_ablation/control_mlp/             clinical only, standardised
+- outputs/ablation/feature_ablation/control_mlp_raw/         clinical only, raw
+- outputs/ablation/feature_ablation/linreg_on_clinical_data/ clinical only
+- outputs/ablation/feature_ablation/no_node_features/        FC + clinical
+- outputs/ablation/feature_ablation/no_clinical_features/    FC + REACT + arm
+- outputs/ablation/feature_ablation/no_react_no_clinical/    FC + arm
+- outputs/medusa_ablation/no_node_features/                  FC + clinical
+- outputs/medusa_ablation/no_clinical_features/              FC + REACT
+- outputs/medusa_ablation/no_react_no_clinical/              FC only
+
+Every model saves its weights, so that any of them can be transferred zero-shot onto
+the validation cohort.
 
 Author: Hanna M. Tolle
 Date: 2025-12-04
@@ -39,6 +53,47 @@ from experiments.run_experiment import run
 MEDUSA_CONFIG_FILE = 'experiments/configs/medusa_graphtrip.json'
 MEDUSA_OUTPUT_BASE = 'outputs/medusa_ablation'
 
+# Feature ablations are kept apart from the model ablations, because they are read
+# together as one factorial design. Every Medusa ablation is a feature ablation, so the
+# Medusa outputs stay flat.
+FEATURE_ABLATION_SUBDIR = 'feature_ablation'
+
+
+def control_mlp_config(config, standardise):
+    '''
+    Config for an MLP trained on clinical data only, without any neuroimaging input.
+
+    Parameters:
+    ----------
+    config (dict): the graphTRIP config that all ablations are derived from.
+    standardise (bool): whether the baseline severity scores are standardised with the
+        training-fold statistics. graphTRIP itself trains on raw scores, so both variants
+        are run: the standardised one is the stronger benchmark, the raw one is matched to
+        graphTRIP's own input scaling.
+    '''
+    config_updates = copy.deepcopy(config)
+
+    # Remove vgae_model and irrelevant training configs
+    del config_updates['vgae_model']
+    del config_updates['num_z_samples']
+    del config_updates['alpha']
+
+    # Make sure we don't use any transforms on data that doesn't exist
+    config_updates['dataset']['edge_tfm_type'] = None
+    config_updates['dataset']['edge_tfm_params'] = {}
+    config_updates['dataset']['add_3Dcoords'] = False
+    config_updates['dataset']['standardise_x'] = False
+
+    # Set neuroimaging and context attributes to empty lists
+    config_updates['dataset']['node_attrs'] = []
+    config_updates['dataset']['edge_attrs'] = []
+    config_updates['dataset']['context_attrs'] = []
+    numerical_attrs = ['QIDS_Before', 'BDI_Before']
+    config_updates['dataset']['graph_attrs_to_standardise'] = \
+        numerical_attrs if standardise else []
+
+    return config_updates
+
 
 def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
     # Add project root to paths
@@ -60,7 +115,10 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
     medusa_config = load_configs_from_json(medusa_config_file)
     medusa_config = fetch_job_config(medusa_config, 0)
     medusa_output_base = add_project_root(MEDUSA_OUTPUT_BASE)
-        
+
+    # Feature ablation output directory
+    feature_dir = os.path.join(output_dir, FEATURE_ABLATION_SUBDIR)
+
     # Experiment settings
     observer = 'FileStorageObserver'
     if debug:
@@ -68,40 +126,23 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
         medusa_config['num_epochs'] = 2
 
     # Check valid job ID input
-    if jobid not in [0, 1, 2, 3, 4, 5, 6, 7, 8, -1]:
-        raise ValueError(f"Invalid job ID: {jobid}. Must be one of [0, 1, 2, 3, 4, 5, 6, 7, 8, -1].")
+    valid_jobids = list(range(12)) + [-1]
+    if jobid not in valid_jobids:
+        raise ValueError(f"Invalid job ID: {jobid}. Must be one of {valid_jobids}.")
 
     # 1. Control MLP benchmark -----------------------------------------------
     # Train MLP on clinical data only, without neuroimaging features
     if jobid == 0 or jobid == -1:
         exname = 'train_mlp'
-        ex_dir = os.path.join(output_dir, 'control_mlp', f'seed_{seed}')
+        ex_dir = os.path.join(feature_dir, 'control_mlp', f'seed_{seed}')
         if os.path.exists(add_project_root(ex_dir)):
             print(f"Experiment {exname} already exists in {ex_dir}")
         else:
             # Use the same ingredient configs as the main model
-            config_updates = copy.deepcopy(config)
-            
-            # Remove vgae_model and irrelevant training configs
-            del config_updates['vgae_model']
-            del config_updates['num_z_samples']
-            del config_updates['alpha']
-
-            # Make sure we don't use any transforms on data that doesn't exist
-            config_updates['dataset']['edge_tfm_type'] = None
-            config_updates['dataset']['edge_tfm_params'] = {}
-            config_updates['dataset']['add_3Dcoords'] = False
-            config_updates['dataset']['standardise_x'] = False
-
-            # Set neuroimaging and context attributes to empty lists
-            config_updates['dataset']['node_attrs'] = []
-            config_updates['dataset']['edge_attrs'] = []
-            config_updates['dataset']['context_attrs'] = []
-            numerical_attrs = ['QIDS_Before', 'BDI_Before']
-            config_updates['dataset']['graph_attrs_to_standardise'] = numerical_attrs
+            config_updates = control_mlp_config(config, standardise=True)
 
             # Add more config to the config_updates
-            config_updates['save_weights'] = False
+            config_updates['save_weights'] = True
             config_updates['output_dir'] = ex_dir    
             config_updates['seed'] = seed
             config_updates['verbose'] = verbose
@@ -137,7 +178,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
             config_updates['num_epochs'] = config['num_epochs']
             
             # Add more config to the config_updates
-            config_updates['save_weights'] = False
+            config_updates['save_weights'] = True
             config_updates['output_dir'] = ex_dir
             config_updates['seed'] = seed
             config_updates['verbose'] = verbose
@@ -174,7 +215,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
             config_updates['num_epochs'] = config['num_epochs']
             
             # Add more config to the config_updates
-            config_updates['save_weights'] = False
+            config_updates['save_weights'] = True
             config_updates['output_dir'] = ex_dir
             config_updates['seed'] = seed
             config_updates['verbose'] = verbose
@@ -195,7 +236,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
             config_updates['output_dir'] = ex_dir
             config_updates['seed'] = seed
             config_updates['verbose'] = verbose
-            config_updates['save_weights'] = False 
+            config_updates['save_weights'] = True
             run(exname, observer, config_updates)
         else:
             print(f"Train VGAE with regression head experiment already exists in {ex_dir}.")
@@ -204,7 +245,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
     # Train a linear regression model on clinical data only
     if jobid == 4 or jobid == -1:
         exname = 'train_linreg_on_clinical'
-        ex_dir = os.path.join(output_dir, 'linreg_on_clinical_data', f'seed_{seed}')
+        ex_dir = os.path.join(feature_dir, 'linreg_on_clinical_data', f'seed_{seed}')
         if not os.path.exists(add_project_root(ex_dir)):
             config_updates = {}
 
@@ -218,7 +259,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
             config_updates['output_dir'] = ex_dir
             config_updates['seed'] = seed
             config_updates['verbose'] = verbose
-            config_updates['save_weights'] = False 
+            config_updates['save_weights'] = True
             run(exname, observer, config_updates)
         else:
             print(f"Train linear regression on clinical data experiment already exists in {ex_dir}.")
@@ -227,14 +268,14 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
     # Train graphTRIP without node features (only conditional node feats)
     if jobid == 5 or jobid == -1:
         exname = 'train_jointly'
-        ex_dir = os.path.join(output_dir, 'no_node_features', f'seed_{seed}')
+        ex_dir = os.path.join(feature_dir, 'no_node_features', f'seed_{seed}')
         if not os.path.exists(add_project_root(ex_dir)):
             config_updates = copy.deepcopy(config)
             config_updates['dataset']['node_attrs'] = []
             config_updates['output_dir'] = ex_dir
             config_updates['seed'] = seed
             config_updates['verbose'] = verbose
-            config_updates['save_weights'] = False
+            config_updates['save_weights'] = True
             run(exname, observer, config_updates)
         else:
             print(f"graphTRIP without node features experiment already exists in {ex_dir}.")
@@ -242,14 +283,14 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
     # 7. graphTRIP without clinical features ------------------------------------
     if jobid == 6 or jobid == -1:
         exname = 'train_jointly'
-        ex_dir = os.path.join(output_dir, 'no_clinical_features', f'seed_{seed}')
+        ex_dir = os.path.join(feature_dir, 'no_clinical_features', f'seed_{seed}')
         if not os.path.exists(add_project_root(ex_dir)):
             config_updates = copy.deepcopy(config)
             config_updates['dataset']['graph_attrs'] = ['Condition']
             config_updates['output_dir'] = ex_dir
             config_updates['seed'] = seed
             config_updates['verbose'] = verbose
-            config_updates['save_weights'] = False
+            config_updates['save_weights'] = True
             run(exname, observer, config_updates)
         else:
             print(f"graphTRIP without clinical features experiment already exists in {ex_dir}.")
@@ -264,7 +305,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
             config_updates['output_dir'] = ex_dir
             config_updates['seed'] = seed
             config_updates['verbose'] = verbose
-            config_updates['save_weights'] = False
+            config_updates['save_weights'] = True
             run(exname, observer, config_updates)
         else:
             print(f"medusa_graphTRIP without node features experiment already exists in {ex_dir}.")
@@ -279,10 +320,58 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
             config_updates['output_dir'] = ex_dir
             config_updates['seed'] = seed
             config_updates['verbose'] = verbose
-            config_updates['save_weights'] = False
+            config_updates['save_weights'] = True
             run(exname, observer, config_updates)
         else:
             print(f"medusa_graphTRIP without clinical features experiment already exists in {ex_dir}.")
+
+    # 10. graphTRIP with neither node nor clinical features -----------------------
+    # The FC-only cell of the feature ablation design.
+    if jobid == 9 or jobid == -1:
+        exname = 'train_jointly'
+        ex_dir = os.path.join(feature_dir, 'no_react_no_clinical', f'seed_{seed}')
+        if not os.path.exists(add_project_root(ex_dir)):
+            config_updates = copy.deepcopy(config)
+            config_updates['dataset']['node_attrs'] = []
+            config_updates['dataset']['graph_attrs'] = ['Condition']
+            config_updates['output_dir'] = ex_dir
+            config_updates['seed'] = seed
+            config_updates['verbose'] = verbose
+            config_updates['save_weights'] = True
+            run(exname, observer, config_updates)
+        else:
+            print(f"graphTRIP without node or clinical features experiment already exists in {ex_dir}.")
+
+    # 11. Control MLP benchmark, without standardisation --------------------------
+    # Same clinical-only MLP as job 0, but on raw scores, as graphTRIP is trained.
+    if jobid == 10 or jobid == -1:
+        exname = 'train_mlp'
+        ex_dir = os.path.join(feature_dir, 'control_mlp_raw', f'seed_{seed}')
+        if not os.path.exists(add_project_root(ex_dir)):
+            config_updates = control_mlp_config(config, standardise=False)
+            config_updates['output_dir'] = ex_dir
+            config_updates['seed'] = seed
+            config_updates['verbose'] = verbose
+            config_updates['save_weights'] = True
+            run(exname, observer, config_updates)
+        else:
+            print(f"Control MLP without standardisation experiment already exists in {ex_dir}.")
+
+    # 12. medusa_graphTRIP with neither node nor clinical features ----------------
+    if jobid == 11 or jobid == -1:
+        exname = 'train_cfrnet'
+        ex_dir = os.path.join(medusa_output_base, 'no_react_no_clinical', f'seed_{seed}')
+        if not os.path.exists(add_project_root(ex_dir)):
+            config_updates = copy.deepcopy(medusa_config)
+            config_updates['dataset']['node_attrs'] = []
+            config_updates['dataset']['graph_attrs'] = [] # Medusa never takes condition
+            config_updates['output_dir'] = ex_dir
+            config_updates['seed'] = seed
+            config_updates['verbose'] = verbose
+            config_updates['save_weights'] = True
+            run(exname, observer, config_updates)
+        else:
+            print(f"medusa_graphTRIP without node or clinical features experiment already exists in {ex_dir}.")
 
 if __name__ == "__main__":
     """
@@ -298,7 +387,8 @@ if __name__ == "__main__":
     parser.add_argument('-s', '--seed', type=int, default=0, help='Random seed')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode')
-    parser.add_argument('-j', '--jobid', type=int, default=-1, help='Job ID. If -1, runs all jobs sequentially.')
+    parser.add_argument('-j', '--jobid', type=int, default=-1,
+                        help='Job ID (0-11). If -1, runs all jobs sequentially.')
     parser.add_argument('-ci', '--config_id', type=int, default=None, help='Config ID')
     args = parser.parse_args()
 
