@@ -2,7 +2,8 @@
 Supplementary: model ablations and feature ablations.
 
 Model ablations replace the VGAE (PCA, t-SNE), the MLP (linear prediction head,
-post-hoc ridge regression on z), or the neuroimaging features (clinical data only).
+post-hoc ridge regression on z, retrained MLP head on z), or the neuroimaging
+features (clinical data only).
 Feature ablations retrain graphTRIP and Medusa without clinical or without REACT
 node features.
 
@@ -26,6 +27,8 @@ ABLATION_SCATTERS = [
      'VGAE, trained with linear prediction head', None),
     (('graphtrip', 'linreg_on_z'), 'linreg_on_z_true_vs_predicted',
      'Frozen graphTRIP-VGAE, with post-hoc ridge regression on z', 'psilodep2'),
+    (('graphtrip', 'retrain_mlp_on_z'), 'retrain_mlp_on_z_true_vs_predicted',
+     'Frozen graphTRIP-VGAE, with retrained MLP head on z', 'psilodep2'),
     (('ablation', 'control_mlp'), 'control_mlp_true_vs_predicted',
      'MLP, Trained on Clinical Data', None),
     (('ablation', 'linreg_on_clinical_data'), 'linreg_on_clinical_data_true_vs_pred',
@@ -40,6 +43,7 @@ ABLATION_MODELS = [
     ('pca_benchmark', ('ablation', 'pca_benchmark')),
     ('tsne_benchmark', ('ablation', 'tsne_benchmark')),
     ('linreg_on_z', ('graphtrip', 'linreg_on_z')),
+    ('retrain_mlp_on_z', ('graphtrip', 'retrain_mlp_on_z')),
 ]
 
 GRAPHTRIP_FEATURE_ABLATIONS = [

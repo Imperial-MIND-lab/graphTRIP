@@ -9,6 +9,8 @@ Outputs:
 - outputs/graphtrip/permutation_importance/
 - outputs/graphtrip/transfer_atlas/schaefer200/
 - outputs/graphtrip/transfer_atlas/aal/
+- outputs/graphtrip/linreg_on_z/
+- outputs/graphtrip/retrain_mlp_on_z/
 - outputs/graphtrip/predictions_escitalopram/
 - outputs/graphtrip/predictions_psilocybin/
 
@@ -118,7 +120,7 @@ def main(config_file, output_dir, verbose, debug, seed, config_id=0):
     if not os.path.exists(ex_dir):
         config_updates = {}
         config_updates['dataset'] = copy.deepcopy(ingredient_config['dataset'])
-        config_updates['dataset']['graph_attrs'] = []
+        config_updates['dataset']['graph_attrs'] = ['Condition']
         config_updates['vgae_model'] = copy.deepcopy(ingredient_config['vgae_model'])
         config_updates['output_dir'] = ex_dir
         config_updates['weights_dir'] = weights_dir
@@ -128,6 +130,35 @@ def main(config_file, output_dir, verbose, debug, seed, config_id=0):
         run(exname, observer, config_updates)
     else:
         print(f"Ridge regression on z experiment already exists in {ex_dir}.")
+
+    # New MLP head on z only (no clinical features) ---------------------------
+    # Same inputs as the ridge head above, but with the non-linear MLP head of graphTRIP.
+    exname = 'retrain_mlp'
+    ex_dir = os.path.join(output_dir, 'retrain_mlp_on_z', f'seed_{seed}')
+    if not os.path.exists(ex_dir):
+        config_updates = {}
+        config_updates['dataset'] = copy.deepcopy(ingredient_config['dataset'])
+        config_updates['dataset']['graph_attrs'] = ['Condition']
+        config_updates['vgae_model'] = copy.deepcopy(ingredient_config['vgae_model'])
+        config_updates['mlp_model'] = copy.deepcopy(ingredient_config['mlp_model'])
+
+        # Freeze the whole pretrained VGAE, including its pooling readout, and train
+        # only a newly initialised MLP. alpha=0 also forces vgae_lr=0 in match_config.
+        config_updates['alpha'] = 0
+        config_updates['reinit_pooling'] = False
+        config_updates['new_folds'] = False # reuse the pretrained test fold assignments
+        config_updates['mlp_lr'] = config['lr']
+        config_updates['num_epochs'] = config['num_epochs']
+        config_updates['num_z_samples'] = config['num_z_samples']
+
+        config_updates['output_dir'] = ex_dir
+        config_updates['weights_dir'] = weights_dir
+        config_updates['seed'] = seed
+        config_updates['verbose'] = verbose
+        config_updates['save_weights'] = False
+        run(exname, observer, config_updates)
+    else:
+        print(f"Retrained MLP on z experiment already exists in {ex_dir}.")
 
     # Generate counterfactual predictions for each drug -----------------------
     exname = 'test_and_finetune'
