@@ -77,6 +77,11 @@ def cfg(dataset):
     alpha = 0             # Loss = alpha*vgae_loss + (1-alpha)*mlp_loss; if alpha=0, VGAE is frozen.
     reinit_pooling = True # Whether to reinitialise the VGAE pooling module
 
+    # Cross-validate over the current dataset instead of reusing the pretrained model's
+    # test_fold_indices.csv. Required when the MLP is retrained on a different cohort than
+    # the VGAEs were trained on, where the saved fold assignments index different subjects.
+    new_folds = False
+
 # Match configs function -------------------------------------------------------
 def match_config(config: Dict) -> Dict:
     '''Matches the configs specific to this experiment.'''
@@ -94,11 +99,33 @@ def match_config(config: Dict) -> Dict:
     reinit_pooling = config.get('reinit_pooling', True)
     if reinit_pooling: # new pooling, so pooling configs don't need to match
         exceptions.extend(['pooling_cfg', 'context_attrs'])
+
+    new_folds = config.get('new_folds', False)
+    if new_folds:
+        # The MLP is retrained on a different cohort, so the cohort-level settings are
+        # expected to differ. Everything the pretrained VGAE actually sees (atlas,
+        # num_nodes, node/edge attrs, edge transform) is still matched.
+        exceptions.extend(['study', 'session', 'prefilter',
+                           'num_folds', 'batch_size', 'val_split'])
+
     config_updates = match_ingredient_configs(config=config,
                                               previous_config=previous_config,
                                               ingredients=ingredients,
                                               exceptions=exceptions)
-        
+
+    if new_folds:
+        # test_fold_indices.csv belongs to the pretrained cohort and is not read in this
+        # mode, so it must not be required to exist.
+        num_pretrained_models = previous_config['dataset']['num_folds']
+        assert config_updates['dataset']['num_folds'] == num_pretrained_models, \
+            (f"new_folds pairs fold k with pretrained VGAE k, so dataset.num_folds "
+             f"({config_updates['dataset']['num_folds']}) must equal the number of "
+             f"pretrained models ({num_pretrained_models}).")
+        config_updates['weight_filenames'] = config.get(
+            'weight_filenames',
+            {'vgae': [f'k{k}_vgae_weights.pth' for k in range(num_pretrained_models)]})
+
+
     # If alpha=0, vgae_lr is set to 0 (issue warning if overridden)
     alpha = config_updates.get('alpha', 0.2)
     vgae_lr = config_updates.get('vgae_lr', 0.0001)
@@ -186,12 +213,17 @@ def run(_config):
     data = load_data()
     device = torch.device(_config['device'])
     logger.info(f'Using device: {device}')
-    test_indices = np.loadtxt(os.path.join(weights_dir, weight_filenames['test_fold_indices'][0]), dtype=int)
-    train_loaders, val_loaders, test_loaders, mean_std \
-            = get_dataloaders_from_test_indices(data, test_indices, seed=seed)
+    if _config['new_folds']:
+        # Cross-validate over the current cohort; fold k is paired with pretrained VGAE k.
+        train_loaders, val_loaders, test_loaders, test_indices_list, mean_std \
+                = get_kfold_dataloaders(data, seed=seed)
+    else:
+        test_indices = np.loadtxt(os.path.join(weights_dir, weight_filenames['test_fold_indices'][0]), dtype=int)
+        train_loaders, val_loaders, test_loaders, mean_std \
+                = get_dataloaders_from_test_indices(data, test_indices, seed=seed)
 
-    # Get test-indices list for saving and VGAE reconstructions
-    test_indices_list = [np.where(test_indices == fold)[0] for fold in range(num_folds)]
+        # Get test-indices list for saving and VGAE reconstructions
+        test_indices_list = [np.where(test_indices == fold)[0] for fold in range(num_folds)]
 
     # Load pretrained VGAEs
     if reinit_pooling:
