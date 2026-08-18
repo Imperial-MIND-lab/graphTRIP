@@ -29,17 +29,17 @@ ABLATION_SCATTERS = [
      'Frozen graphTRIP-VGAE, with post-hoc ridge regression on z', 'psilodep2'),
     (('graphtrip', 'retrain_mlp_on_z'), 'retrain_mlp_on_z_true_vs_predicted',
      'Frozen graphTRIP-VGAE, with retrained MLP head on z', 'psilodep2'),
-    (('ablation', 'control_mlp'), 'control_mlp_true_vs_predicted',
+    (('ablation', 'feature_ablation', 'control_mlp_raw'), 'control_mlp_true_vs_predicted',
      'MLP, Trained on Clinical Data', None),
-    (('ablation', 'linreg_on_clinical_data'), 'linreg_on_clinical_data_true_vs_pred',
+    (('ablation', 'feature_ablation', 'linreg_on_clinical_data'), 'linreg_on_clinical_data_true_vs_pred',
      'OLS Regression, Trained on Clinical Data', None),
 ]
 
 ABLATION_MODELS = [
     ('graphtrip', ('graphtrip', 'weights')),
-    ('control_mlp', ('ablation', 'control_mlp')),
+    ('control_mlp', ('ablation', 'feature_ablation', 'control_mlp_raw')),
     ('vgae_linreg_head', ('ablation', 'vgae_linreg_head')),
-    ('linreg_on_clinical_data', ('ablation', 'linreg_on_clinical_data')),
+    ('linreg_on_clinical_data', ('ablation', 'feature_ablation', 'linreg_on_clinical_data')),
     ('pca_benchmark', ('ablation', 'pca_benchmark')),
     ('tsne_benchmark', ('ablation', 'tsne_benchmark')),
     ('linreg_on_z', ('graphtrip', 'linreg_on_z')),
@@ -48,8 +48,8 @@ ABLATION_MODELS = [
 
 GRAPHTRIP_FEATURE_ABLATIONS = [
     ('graphtrip', ('graphtrip', 'weights')),
-    ('no_clinical_features', ('ablation', 'no_clinical_features')),
-    ('no_node_features', ('ablation', 'no_node_features')),
+    ('no_clinical_features', ('ablation', 'feature_ablation', 'no_clinical_features')),
+    ('no_node_features', ('ablation', 'feature_ablation', 'no_node_features')),
 ]
 
 MEDUSA_FEATURE_ABLATIONS = [
@@ -82,11 +82,11 @@ def ablation_models(ctx, out):
 def feature_ablation(ctx, out):
     # a. graphTRIP feature ablation ------------------------------------------------------
     scatter_from_results(
-        os.path.join(output_dir('ablation', 'no_clinical_features'), 'prediction_results.csv'),
+        os.path.join(output_dir('ablation', 'feature_ablation', 'no_clinical_features'), 'prediction_results.csv'),
         out, 'no_clinical_features_true_vs_pred', yerr='prediction_sem',
         title='graphTRIP, Trained without Clinical Features')
     scatter_from_results(
-        os.path.join(output_dir('ablation', 'no_node_features'), 'prediction_results.csv'),
+        os.path.join(output_dir('ablation', 'feature_ablation', 'no_node_features'), 'prediction_results.csv'),
         out, 'no_node_features_true_vs_pred', yerr='prediction_sem',
         title='graphTRIP, Trained without REACT Node Features')
 

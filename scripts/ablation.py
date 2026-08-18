@@ -18,8 +18,7 @@ Outputs:
 - outputs/ablation/pca_benchmark/
 - outputs/ablation/tsne_benchmark/
 - outputs/ablation/vgae_linreg_head/
-- outputs/ablation/feature_ablation/control_mlp/             clinical only, standardised
-- outputs/ablation/feature_ablation/control_mlp_raw/         clinical only, raw
+- outputs/ablation/feature_ablation/control_mlp_raw/         clinical only
 - outputs/ablation/feature_ablation/linreg_on_clinical_data/ clinical only
 - outputs/ablation/feature_ablation/no_node_features/        FC + clinical
 - outputs/ablation/feature_ablation/no_clinical_features/    FC + REACT + arm
@@ -51,6 +50,7 @@ from experiments.run_experiment import run
 
 
 MEDUSA_CONFIG_FILE = 'experiments/configs/medusa_graphtrip.json'
+DEFAULT_OUTPUT_BASE = 'outputs/ablation'
 MEDUSA_OUTPUT_BASE = 'outputs/medusa_ablation'
 
 # Feature ablations are kept apart from the model ablations, because they are read
@@ -59,17 +59,9 @@ MEDUSA_OUTPUT_BASE = 'outputs/medusa_ablation'
 FEATURE_ABLATION_SUBDIR = 'feature_ablation'
 
 
-def control_mlp_config(config, standardise):
+def control_mlp_config(config):
     '''
     Config for an MLP trained on clinical data only, without any neuroimaging input.
-
-    Parameters:
-    ----------
-    config (dict): the graphTRIP config that all ablations are derived from.
-    standardise (bool): whether the baseline severity scores are standardised with the
-        training-fold statistics. graphTRIP itself trains on raw scores, so both variants
-        are run: the standardised one is the stronger benchmark, the raw one is matched to
-        graphTRIP's own input scaling.
     '''
     config_updates = copy.deepcopy(config)
 
@@ -88,14 +80,13 @@ def control_mlp_config(config, standardise):
     config_updates['dataset']['node_attrs'] = []
     config_updates['dataset']['edge_attrs'] = []
     config_updates['dataset']['context_attrs'] = []
-    numerical_attrs = ['QIDS_Before', 'BDI_Before']
-    config_updates['dataset']['graph_attrs_to_standardise'] = \
-        numerical_attrs if standardise else []
+    config_updates['dataset']['graph_attrs_to_standardise'] = []
 
     return config_updates
 
 
-def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
+def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0,
+         medusa_output_dir=None):
     # Add project root to paths
     config_file = add_project_root(config_file)
     output_dir = add_project_root(output_dir)
@@ -114,7 +105,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
         raise FileNotFoundError(f"{medusa_config_file} not found")
     medusa_config = load_configs_from_json(medusa_config_file)
     medusa_config = fetch_job_config(medusa_config, 0)
-    medusa_output_base = add_project_root(MEDUSA_OUTPUT_BASE)
+    medusa_output_base = add_project_root(medusa_output_dir or MEDUSA_OUTPUT_BASE)
 
     # Feature ablation output directory
     feature_dir = os.path.join(output_dir, FEATURE_ABLATION_SUBDIR)
@@ -126,7 +117,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
         medusa_config['num_epochs'] = 2
 
     # Check valid job ID input
-    valid_jobids = list(range(12)) + [-1]
+    valid_jobids = list(range(11)) + [-1]
     if jobid not in valid_jobids:
         raise ValueError(f"Invalid job ID: {jobid}. Must be one of {valid_jobids}.")
 
@@ -134,12 +125,12 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
     # Train MLP on clinical data only, without neuroimaging features
     if jobid == 0 or jobid == -1:
         exname = 'train_mlp'
-        ex_dir = os.path.join(feature_dir, 'control_mlp', f'seed_{seed}')
+        ex_dir = os.path.join(feature_dir, 'control_mlp_raw', f'seed_{seed}')
         if os.path.exists(add_project_root(ex_dir)):
             print(f"Experiment {exname} already exists in {ex_dir}")
         else:
             # Use the same ingredient configs as the main model
-            config_updates = control_mlp_config(config, standardise=True)
+            config_updates = control_mlp_config(config)
 
             # Add more config to the config_updates
             config_updates['save_weights'] = True
@@ -342,23 +333,8 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0):
         else:
             print(f"graphTRIP without node or clinical features experiment already exists in {ex_dir}.")
 
-    # 11. Control MLP benchmark, without standardisation --------------------------
-    # Same clinical-only MLP as job 0, but on raw scores, as graphTRIP is trained.
+    # 11. medusa_graphTRIP with neither node nor clinical features ----------------
     if jobid == 10 or jobid == -1:
-        exname = 'train_mlp'
-        ex_dir = os.path.join(feature_dir, 'control_mlp_raw', f'seed_{seed}')
-        if not os.path.exists(add_project_root(ex_dir)):
-            config_updates = control_mlp_config(config, standardise=False)
-            config_updates['output_dir'] = ex_dir
-            config_updates['seed'] = seed
-            config_updates['verbose'] = verbose
-            config_updates['save_weights'] = True
-            run(exname, observer, config_updates)
-        else:
-            print(f"Control MLP without standardisation experiment already exists in {ex_dir}.")
-
-    # 12. medusa_graphTRIP with neither node nor clinical features ----------------
-    if jobid == 11 or jobid == -1:
         exname = 'train_cfrnet'
         ex_dir = os.path.join(medusa_output_base, 'no_react_no_clinical', f'seed_{seed}')
         if not os.path.exists(add_project_root(ex_dir)):
@@ -383,20 +359,34 @@ if __name__ == "__main__":
     parser.add_argument('-c', '--config_file', type=str, 
                         default='experiments/configs/graphtrip.json', 
                         help='Path to the config file with graphTRIP model config')
-    parser.add_argument('-o', '--output_dir', type=str, default='outputs/ablation/', help='Path to the output directory')
+    parser.add_argument('-o', '--output_dir', type=str, default=None,
+                        help='Path to the output directory. Defaults to '
+                             f'{DEFAULT_OUTPUT_BASE}/, in which case the Medusa jobs write '
+                             f'to {MEDUSA_OUTPUT_BASE}/. If given explicitly, the Medusa '
+                             'jobs write to <output_dir>/medusa/ instead, so that -o is '
+                             'never silently ignored.')
     parser.add_argument('-s', '--seed', type=int, default=0, help='Random seed')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('-j', '--jobid', type=int, default=-1,
-                        help='Job ID (0-11). If -1, runs all jobs sequentially.')
+                        help='Job ID (0-10). If -1, runs all jobs sequentially.')
     parser.add_argument('-ci', '--config_id', type=int, default=None, help='Config ID')
     args = parser.parse_args()
+
+    # The Medusa jobs
+    if args.output_dir is None:
+        args.output_dir = DEFAULT_OUTPUT_BASE
+        medusa_output_dir = MEDUSA_OUTPUT_BASE
+    else:
+        medusa_output_dir = os.path.join(args.output_dir, 'medusa')
 
     # Add config subdirectory into output directory, if config_id is provided
     if args.config_id is not None:
         args.output_dir = os.path.join(args.output_dir, f'config_{args.config_id}')
+        medusa_output_dir = os.path.join(medusa_output_dir, f'config_{args.config_id}')
     else:
         args.config_id = 0
 
     # Run the main function
-    main(args.config_file, args.output_dir, args.verbose, args.debug, args.seed, args.jobid, args.config_id)
+    main(args.config_file, args.output_dir, args.verbose, args.debug, args.seed, args.jobid,
+         args.config_id, medusa_output_dir)

@@ -26,7 +26,7 @@ from figure_making.registry import register
 @register('fig2', group='main', subdir='Fig.2')
 def fig2_prediction_performance(ctx, out):
     weights_base_dir = ctx.weights_base_dir
-    linreg_dir = output_dir('ablation', 'linreg_on_clinical_data')
+    linreg_dir = output_dir('ablation', 'feature_ablation', 'linreg_on_clinical_data')
 
     # a. graphTRIP and linear regression benchmark performance --------------------------
     results = scatter_from_results(
