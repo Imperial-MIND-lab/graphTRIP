@@ -10,6 +10,7 @@ License: BSD 3-Clause
 """
 
 import os
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -21,7 +22,7 @@ from statsmodels.stats.multitest import fdrcorrection
 from utils.helpers import aggregate_prediction_results, sort_features
 from utils.statsalg import min_significant_r, compare_model_performances
 from utils.plotting import (
-    COOLWARM, ESCIT, PSILO,
+    COOLWARM, ESCIT, PSILO, NEUTRAL,
     true_vs_pred_scatter, plot_raincloud, plot_metric_boxplot,
     plot_fc_reconstruction_single, plot_brain_surface_grid, plot_colormap_stack,
     plot_stacked_percentages, plot_piechart, plot_confusion_matrix, plot_roc_curve)
@@ -305,6 +306,100 @@ def model_comparison_panels(specs, out, name, num_subs, model_of_interest,
     distributions = metrics_to_distributions(metrics_df, sort_by_mean=sort_by_mean)
     raincloud_of_model_r(distributions, out, name, num_subs, offset=offset, figsize=figsize)
     report_model_comparison(distributions, out, model_of_interest, table_prefix=table_prefix)
+    return distributions
+
+
+# Feature ablations ----------------------------------------------------------------------
+
+# Column order of the domain-presence matrix.
+INPUT_DOMAINS = ['Clinical', 'FC', 'REACT']
+
+
+def _domain_matrix(ax, labels, domains, domain_names):
+    '''
+    Draws the filled/empty markers that say which input domains each model received.
+
+    Reading the rows as a matrix is what makes the ablation a design rather than a list
+    of models, which is the comparison the panel exists to support.
+    '''
+    for row, label in enumerate(labels):
+        present = domains.get(label, ())
+        ax.plot([0, len(domain_names) - 1], [row, row],
+                color=NEUTRAL, alpha=0.15, linewidth=1, zorder=1)
+        for col, domain in enumerate(domain_names):
+            ax.scatter(col, row, s=70, zorder=3, linewidth=1.2, edgecolor=NEUTRAL,
+                       facecolor=NEUTRAL if domain in present else 'white')
+
+    ax.set_xticks(range(len(domain_names)))
+    ax.set_xticklabels(domain_names, rotation=45, ha='right')
+    ax.set_xlim(-0.6, len(domain_names) - 0.4)
+    ax.set_yticks(range(len(labels)))
+    ax.set_yticklabels(labels)
+    ax.tick_params(length=0)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+
+def feature_ablation_panel(specs, domains, out, name, num_subs, reference_model,
+                           domain_names=None, figsize=(9, 4), offset=4, table_prefix=''):
+    '''
+    Raincloud of the feature ablations, with a domain-presence matrix down the left.
+
+    Parameters:
+    ----------
+        specs (list): (label, directory, metrics_filename) triples, ordered top to bottom.
+        domains (dict): {label: iterable of domain names the model received}.
+        out (FigureOutput): Output handle of the calling target.
+        name (str): Panel filename without extension.
+        num_subs (int): Cohort size, for the significance threshold.
+        reference_model (str): Label of the full model, drawn as the reference line.
+        domain_names (list): Column order of the matrix. Defaults to INPUT_DOMAINS.
+        table_prefix (str): Prefix for the comparison tables.
+
+    Returns:
+    -------
+        dict: {model: [r per seed]}, in the order given.
+    '''
+    domain_names = list(INPUT_DOMAINS if domain_names is None else domain_names)
+
+    metrics_df = collect_seed_metrics(specs)
+    distributions = metrics_to_distributions(metrics_df, sort_by_mean=False)
+    order = [label for label, _, _ in specs if label in distributions]
+    distributions = {label: distributions[label] for label in order}
+
+    if reference_model not in distributions:
+        raise ValueError(f'Reference model {reference_model} is not among {order}.')
+
+    r_min = min_significant_r(num_subs)
+    reference_r = float(np.mean(distributions[reference_model]))
+    out.log(f'Minimum significant r-value: {r_min}')
+    out.log(f'Reference model ({reference_model}) mean r: {reference_r:.4f}')
+    out.log()
+
+    # plot_raincloud places the first entry at the bottom, so reverse to make the order
+    # of `specs` read top to bottom.
+    plotted = dict(reversed(list(distributions.items())))
+
+    colors = plot_colormap_stack('YlGnBu', len(plotted) + offset, make_plot=False)[offset:]
+    palette = {label: color for label, color in zip(plotted.keys(), colors)}
+
+    fig, (ax_matrix, ax_rain) = plt.subplots(
+        1, 2, figsize=figsize, sharey=True,
+        gridspec_kw={'width_ratios': [0.45 * len(domain_names), 4], 'wspace': 0.06})
+
+    plot_raincloud(plotted, palette=palette, ax=ax_rain, alpha=0.5, box_alpha=0.3,
+                   vline=reference_r, shade_below=r_min, sort_by_mean=False)
+    ax_rain.set_xlabel('r')
+    ax_rain.tick_params(labelleft=False)
+
+    _domain_matrix(ax_matrix, list(plotted.keys()), domains, domain_names)
+
+    save_path = out.fig(name)
+    if save_path:
+        fig.savefig(save_path, bbox_inches='tight')
+    plt.close(fig)
+
+    report_model_comparison(distributions, out, reference_model, table_prefix=table_prefix)
     return distributions
 
 

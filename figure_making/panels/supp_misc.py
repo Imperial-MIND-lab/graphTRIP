@@ -34,6 +34,18 @@ PERFORMANCE_MODELS = [
      'prediction_results.csv'),
     ('pca_benchmark', ('ablation', 'pca_benchmark'), 'prediction_results.csv'),
     ('tsne_benchmark', ('ablation', 'tsne_benchmark'), 'prediction_results.csv'),
+    ('no_node_features', ('ablation', 'feature_ablation', 'no_node_features'),
+     'prediction_results.csv'),
+    ('no_clinical_features', ('ablation', 'feature_ablation', 'no_clinical_features'),
+     'prediction_results.csv'),
+    ('no_react_no_clinical', ('ablation', 'feature_ablation', 'no_react_no_clinical'),
+     'prediction_results.csv'),
+    ('medusa_no_node_features', ('medusa_ablation', 'no_node_features'),
+     'prediction_results.csv'),
+    ('medusa_no_clinical_features', ('medusa_ablation', 'no_clinical_features'),
+     'prediction_results.csv'),
+    ('medusa_no_react_no_clinical', ('medusa_ablation', 'no_react_no_clinical'),
+     'prediction_results.csv'),
     ('graphTRIP_bdi', ('graphtrip_bdi', 'weights'), 'prediction_results.csv'),
 ]
 

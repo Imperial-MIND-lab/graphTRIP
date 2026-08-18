@@ -16,10 +16,12 @@ from figure_making.panels import fig5_medusa               # noqa: F401
 from figure_making.panels import fig6_interpretation       # noqa: F401
 from figure_making.panels import supp_dataset_stats        # noqa: F401
 from figure_making.panels import supp_ablations            # noqa: F401
+from figure_making.panels import supp_graphtrip_partial_corrs  # noqa: F401
 from figure_making.panels import supp_z_outcome_predictability  # noqa: F401
 from figure_making.panels import supp_bdi                  # noqa: F401
 from figure_making.panels import supp_aal                  # noqa: F401
 from figure_making.panels import supp_psilodep1            # noqa: F401
 from figure_making.panels import supp_medusa               # noqa: F401
+from figure_making.panels import supp_medusa_ablations     # noqa: F401
 from figure_making.panels import supp_interpretability     # noqa: F401
 from figure_making.panels import supp_misc                 # noqa: F401

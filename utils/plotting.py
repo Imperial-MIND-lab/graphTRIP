@@ -1419,7 +1419,8 @@ def plot_piechart(
 # Distribution plots ------------------------------------------------------------
 
 def plot_raincloud(distributions, palette=None, alpha=ALPHA_SCATTER, box_alpha=0.5, 
-                   save_path=None, figsize=(8, 5), vline=None, xlim=None, sort_by_mean=False):
+                   save_path=None, figsize=(8, 5), vline=None, xlim=None, sort_by_mean=False,
+                   ax=None, shade_below=None):
     """
     Creates a raincloud plot (half violin + points + boxplot) for multiple distributions.
     
@@ -1444,9 +1445,16 @@ def plot_raincloud(distributions, palette=None, alpha=ALPHA_SCATTER, box_alpha=0
         Tuple of (min, max) for x-axis limits
     sort_by_mean : bool, optional
         If True, sorts distributions by their mean values (default: False)
+    ax : matplotlib.axes.Axes, optional
+        Draw into this axes instead of a new figure. The caller then owns the layout
+        and the saving; figsize, save_path and plt.show() are ignored.
+    shade_below : float, optional
+        Shades everything left of this value, to mark a region of non-significance.
     """
     # Create figure
-    fig, ax = plt.subplots(figsize=figsize)
+    owns_figure = ax is None
+    if owns_figure:
+        _, ax = plt.subplots(figsize=figsize)
     
     # If no palette provided, create one using default colors
     if palette is None:
@@ -1505,12 +1513,22 @@ def plot_raincloud(distributions, palette=None, alpha=ALPHA_SCATTER, box_alpha=0
     
     if xlim is not None:
         ax.set_xlim(xlim)
-    
+
+    # Shade the non-significant region. Drawn last, so that it spans the final x-limits
+    # rather than the default ones.
+    if shade_below is not None:
+        ax.axvspan(ax.get_xlim()[0], shade_below, color='k', alpha=0.06, zorder=0, lw=0)
+        ax.set_xlim(ax.get_xlim())
+
     ax.set_xlabel('Value')
     
     # Add some padding to y-axis
     ax.set_ylim(y_positions.min() - 0.5, y_positions.max() + 0.5)
     
+    # The caller owns the layout when it supplied the axes
+    if not owns_figure:
+        return ax
+
     # Adjust layout
     plt.tight_layout()
     
