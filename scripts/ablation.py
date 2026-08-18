@@ -243,7 +243,7 @@ def main(config_file, output_dir, verbose, debug, seed, jobid=-1, config_id=0,
             # Dataset configs
             config_updates['dataset'] = copy.deepcopy(config['dataset'])
             config_updates['dataset']['batch_size'] = -1 # linear regression uses full batch
-            config_updates['dataset']['graph_attrs_to_standardise'] = ['QIDS_Before', 'BDI_Before']
+            config_updates['dataset']['graph_attrs_to_standardise'] = []
 
             # Other configs
             config_updates['regression_model'] = 'LinearRegression'

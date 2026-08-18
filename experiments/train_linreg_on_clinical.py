@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 from sklearn.linear_model import Ridge, LinearRegression
 
 from utils.files import add_project_root
-from utils.helpers import fix_random_seed, get_logger
+from utils.helpers import fix_random_seed, get_logger, save_test_indices
 from utils.plotting import true_vs_pred_scatter
 
 
@@ -205,6 +205,12 @@ def run(_config):
             with open(model_path, 'wb') as f:
                 pickle.dump(model, f)
 
+            # Save the coefficients in the format SklearnLinearModelWrapper reads
+            params = {'weight': np.asarray(model.coef_),
+                      'bias': np.atleast_1d(np.asarray(model.intercept_))}
+            torch.save(params, os.path.join(
+                output_dir, f'k{k}_{regression_model.lower()}_params.pth'))
+
     # Print training time
     end_time = time()
     logger.info(f"Training completed after {(end_time-start_time)/60:.2f} minutes.")
@@ -213,6 +219,10 @@ def run(_config):
     all_outputs_df = pd.DataFrame(all_outputs)
     data_file = os.path.join(output_dir, 'prediction_results.csv')
     all_outputs_df.to_csv(data_file, index=False)
+
+    # Save test fold assignments
+    if save_weights:
+        test_indices_file = save_test_indices(test_indices, output_dir)
 
     # Evaluate overall results
     r, p, mae, mae_std = evaluate_regression(all_outputs_df)
