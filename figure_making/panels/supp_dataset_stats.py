@@ -37,6 +37,14 @@ ARM_COMPARISONS = ['QIDS_Before', 'BDI_Before',
                    'QIDS_Final_Integration', 'BDI_Final_Integration',
                    'Delta_QIDS', 'Delta_BDI']
 
+# Baseline vs post-treatment QIDS scatters. The first two panels are each study's
+# prediction target; the third is the later psilodep1 timepoint in the same 16 patients.
+QIDS_SCATTER_PANELS = [
+    {'study': 'psilodep2', 'before_col': 'QIDS_Before', 'after_col': 'QIDS_Final_Integration'},
+    {'study': 'psilodep1', 'before_col': 'QIDS_Before', 'after_col': 'QIDS_1week'},
+    {'study': 'psilodep1', 'before_col': 'QIDS_Before', 'after_col': 'QIDS_3months'},
+]
+
 # Condition_numeric is coded identically in both studies: 1 = psilocybin, -1 = escitalopram.
 CONDITION_STYLES = [(1, 'Psilocybin', 'd', PSILO),
                     (-1, 'Escitalopram', 'o', ESCIT)]
@@ -288,11 +296,12 @@ def dataset_stats(ctx, out):
                "(Welch's t-tests, uncorrected)", baseline_tests)
 
     # Baseline versus post-treatment QIDS -------------------------------------------------
-    fig, axes = plt.subplots(1, len(STUDIES), figsize=(4.5 * len(STUDIES), 4))
+    fig, axes = plt.subplots(1, len(QIDS_SCATTER_PANELS),
+                             figsize=(4.5 * len(QIDS_SCATTER_PANELS), 4))
 
     rows = []
-    for ax, spec in zip(axes, STUDIES):
-        measure, before_col, after_col = spec['measures'][0]
+    for ax, spec in zip(axes, QIDS_SCATTER_PANELS):
+        before_col, after_col = spec['before_col'], spec['after_col']
         before, after, conditions = _paired_data(annotations[spec['study']],
                                                  before_col, after_col)
 

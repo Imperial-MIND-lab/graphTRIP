@@ -7,6 +7,8 @@ Date: 2026-08-10
 License: BSD 3-Clause
 """
 
+import os
+
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -24,7 +26,12 @@ from figure_making.registry import register
 PERFORMANCE_MODELS = [
     ('graphTRIP', ('graphtrip', 'weights'), 'prediction_results.csv'),
     ('medusa_graphtrip', ('medusa_graphtrip', 'weights'), 'prediction_results.csv'),
-    ('psilodep1', ('validation', 'finetuning'), 'prediction_results_mean_vote.csv'),
+    # Zero-shot on psilodep1, under both input mappings. This replaces the fine-tuned
+    # psilodep1 model, which the pipeline no longer trains.
+    ('psilodep1_zeroshot', ('validation', 'evaluate_graphtrip'),
+     'initial_prediction_results_mean_vote.csv'),
+    ('psilodep1_zeroshot_harmonised', ('validation', 'evaluate_graphtrip'),
+     'initial_prediction_results_mean_vote_harmonised.csv'),
     ('schaefer200', ('graphtrip', 'transfer_atlas', 'schaefer200'),
      'initial_prediction_results.csv'),
     ('aal', ('graphtrip', 'transfer_atlas', 'aal'), 'initial_prediction_results.csv'),
@@ -50,6 +57,10 @@ PERFORMANCE_MODELS = [
 ]
 
 METRIC_COLUMNS = ['r', 'p_value', 'r2', 'mae', 'mse', 'rmse']
+
+# summarise_seed_metrics caches its result in the results directory, so a directory that
+# contributes more than one row needs one cache per prediction file.
+DEFAULT_PREDICTION_FILE = 'prediction_results.csv'
 
 
 @register('norm_target_maps', group='supp', subdir='SUPPLEMENTARY/norm_target_maps')
@@ -82,9 +93,13 @@ def model_performance_summary(ctx, out):
 
     for label, parts, prediction_file in PERFORMANCE_MODELS:
         base_dir = output_dir(*parts)
+        summary_file = ('seed_metrics_summary.csv'
+                        if prediction_file == DEFAULT_PREDICTION_FILE
+                        else f'seed_metrics_{os.path.splitext(prediction_file)[0]}.csv')
         try:
             metrics = summarise_seed_metrics(base_dir=base_dir,
-                                             prediction_file=prediction_file)
+                                             prediction_file=prediction_file,
+                                             summary_file=summary_file)
         except (ValueError, FileNotFoundError) as e:
             out.log(f'Skipping {label}: {e}')
             continue

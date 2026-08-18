@@ -818,10 +818,10 @@ def true_vs_pred_scatter_multi(ypreds_list, marker_col=None, style=None, titles=
 
 def regression_scatter(ypreds, marker_col=None, style=None, title=None,
                       save_path=None, xcol='label', ycol='prediction',
-                      show_ci=True, regline_alpha=0.6, equal_aspect=False,
-                      xlim=None, ylim=None, yerr=None):
+                      show_ci=False, regline_alpha=0.6, equal_aspect=False,
+                      xlim=None, ylim=None, yerr=None, ax=None):
     """
-    Create a scatter plot with regression line and confidence intervals.
+    Create a scatter plot with a fitted regression line, and optionally its confidence band.
 
     Parameters:
     -----------
@@ -832,22 +832,27 @@ def regression_scatter(ypreds, marker_col=None, style=None, title=None,
     save_path (str): Optional path to save the figure
     xcol (str): Name of column to use for x-axis values (default: 'label')
     ycol (str): Name of column to use for y-axis values (default: 'prediction')
-    show_ci (bool): Whether to show confidence intervals around regression line (default: True)
+    show_ci (bool): Whether to show confidence intervals around regression line (default: False)
     regline_alpha (float): Alpha value for regression line (default: 0.6)
     yerr (str): Optional column name in ypreds for per-point y-axis error bars
+    ax (matplotlib.axes.Axes): Optional axes to draw into, for composing this scatter into a
+                               larger figure. A new figure is created if it is None.
     """
-    plt.figure(figsize=(6, 5))
+    owns_figure = ax is None
+    if owns_figure:
+        plt.figure(figsize=(6, 5))
+        ax = plt.gca()
 
     # Calculate correlation and p-value for title
     x = ypreds[xcol].values
     y = ypreds[ycol].values
     r_value, p_value = pearsonr(x, y)
 
-    # Create base scatter plot with regression line and confidence intervals
-    ax = sns.regplot(x=x, y=y,
-                    scatter=False,  # We'll add scatter points manually
-                    line_kws={'color': 'darkred', 'alpha': regline_alpha},
-                    ci=95 if show_ci else None)
+    # Create base regression line, and its confidence band if requested
+    sns.regplot(x=x, y=y, ax=ax,
+                scatter=False,  # We'll add scatter points manually
+                line_kws={'color': PSILO, 'alpha': regline_alpha},
+                ci=95 if show_ci else None)
 
     # Add scatter points with custom markers and colors
     if 'Condition' in ypreds.columns:
@@ -971,9 +976,10 @@ def regression_scatter(ypreds, marker_col=None, style=None, title=None,
 
     if save_path:
         format = save_path.split('.')[-1]
-        plt.savefig(save_path, format=format)
+        ax.figure.savefig(save_path, format=format)
 
-    plt.show()
+    if owns_figure:
+        plt.show()
 
 def regression_scatter2(ypreds, title=None,
                       save_path=None, xcol='label', ycol='prediction',

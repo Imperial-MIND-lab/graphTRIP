@@ -516,6 +516,7 @@ def summarise_seed_metrics(
     prediction_file: str = 'prediction_results.csv',
     pred_col: str = 'prediction',
     label_col: str = 'label',
+    summary_file: str = 'seed_metrics_summary.csv',
 ) -> pd.DataFrame:
     """
     For each seed subdirectory in base_dir, loads prediction_results.csv and
@@ -528,11 +529,14 @@ def summarise_seed_metrics(
         prediction_file: Name of the prediction CSV in each seed subdirectory.
         pred_col: Column name for model predictions.
         label_col: Column name for ground truth labels.
+        summary_file: Name of the cached summary written into base_dir. Give it a distinct
+            name when summarising several prediction files of the same directory, so that
+            one does not silently return another's cache.
 
     Returns:
         pd.DataFrame with columns [seed, r, p_value, r2, mae, mse, rmse].
     """
-    output_file = os.path.join(base_dir, 'seed_metrics_summary.csv')
+    output_file = os.path.join(base_dir, summary_file)
     if os.path.exists(output_file):
         print(f"Output file found at {output_file}. Loading existing results.")
         return pd.read_csv(output_file)
