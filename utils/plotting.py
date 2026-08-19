@@ -451,7 +451,8 @@ def plot_loss_curves(train_loss, test_loss, val_loss, save_path=None):
 # MLP plotting -----------------------------------------------------------------
 
 def true_vs_pred_scatter(ypreds, marker_col=None, style=None, title=None,
-                         save_path=None, xcol='label', ycol='prediction', yerr=None):
+                         save_path=None, xcol='label', ycol='prediction', yerr=None,
+                         stats=None):
     """
     Create a scatter plot of true vs predicted values.
 
@@ -464,6 +465,14 @@ def true_vs_pred_scatter(ypreds, marker_col=None, style=None, title=None,
     xcol (str): Name of column to use for x-axis values (default: 'label')
     ycol (str): Name of column to use for y-axis values (default: 'prediction')
     yerr (str): Optional column name in ypreds for per-point y-axis error bars
+    stats (None | False | dict): Controls the 'r=..., p=..., MAE=...' line appended to
+                       the title. None (default) computes it from xcol and ycol with an
+                       ordinary Pearson test. False omits the line. A dict with keys
+                       'r', 'p', 'mae', 'mae_std' renders those values instead.
+
+    Returns:
+    -------
+        dict: {'r', 'p', 'mae', 'mae_std'} as plotted, or None when stats is False.
     """
     plt.figure(figsize=(6, 5))
 
@@ -550,17 +559,24 @@ def true_vs_pred_scatter(ypreds, marker_col=None, style=None, title=None,
     plt.gca().set_aspect('equal', adjustable='box')
 
     title = title or ''
-    r, p = pearsonr(ypreds[xcol], ypreds[ycol])
-    mae = np.mean(np.abs(ypreds[xcol] - ypreds[ycol]))
-    mae_std = np.std(np.abs(ypreds[xcol] - ypreds[ycol]))
-    full_title = f'r={r:.4f}, p={p:.4e}, MAE={mae:.4f} ± {mae_std:.4f}'
-    plt.title(title + '\n' + full_title)
+    if stats is False:
+        plt.title(title)
+    else:
+        if stats is None:
+            r, p = pearsonr(ypreds[xcol], ypreds[ycol])
+            mae = np.mean(np.abs(ypreds[xcol] - ypreds[ycol]))
+            mae_std = np.std(np.abs(ypreds[xcol] - ypreds[ycol]))
+            stats = {'r': r, 'p': p, 'mae': mae, 'mae_std': mae_std}
+        full_title = (f"r={stats['r']:.4f}, p={stats['p']:.4e}, "
+                      f"MAE={stats['mae']:.4f} ± {stats['mae_std']:.4f}")
+        plt.title(title + '\n' + full_title)
 
     if save_path:
         format = save_path.split('.')[-1]
         plt.savefig(save_path, format=format)
 
     plt.show()
+    return None if stats is False else stats
 
 def true_vs_pred_scatter_with_patch(ypreds, marker_col=None, style=None, title=None,
                          save_path=None, xcol='label', ycol='prediction',

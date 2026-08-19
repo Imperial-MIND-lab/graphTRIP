@@ -12,7 +12,8 @@ License: BSD 3-Clause
 
 import os
 
-from figure_making.common import scatter_from_results
+from figure_making.common import (
+    scatter_from_results, feature_ablation_panel, report_prediction_metrics)
 from figure_making.paths import output_dir
 from figure_making.registry import register
 
@@ -43,21 +44,66 @@ FEATURE_ABLATION_SCATTERS = [
      'graphTRIP, Trained without REACT Node or Clinical Features', None),
 ]
 
+# Ablations of the inputs, holding the architecture fixed
+FEATURE_ABLATIONS = [
+    ('graphtrip', ('graphtrip', 'weights'),
+     ('Clinical', 'FC', 'REACT')),
+    ('no_node_features', ('ablation', 'feature_ablation', 'no_node_features'),
+     ('Clinical', 'FC')),
+    ('no_clinical_features', ('ablation', 'feature_ablation', 'no_clinical_features'),
+     ('FC', 'REACT')),
+    ('no_react_no_clinical', ('ablation', 'feature_ablation', 'no_react_no_clinical'),
+     ('FC',)),
+    ('control_mlp', ('ablation', 'feature_ablation', 'control_mlp_raw'),
+     ('Clinical',)),
+    ('linreg_on_clinical_data', ('ablation', 'feature_ablation', 'linreg_on_clinical_data'),
+     ('Clinical',)),
+]
+
+
+def _results_file(parts):
+    return os.path.join(output_dir(*parts), 'prediction_results.csv')
+
 
 def _scatters(specs, out):
     for parts, name, title, study in specs:
-        scatter_from_results(os.path.join(output_dir(*parts), 'prediction_results.csv'),
-                             out, name, condition_study=study,
+        scatter_from_results(_results_file(parts), out, name, condition_study=study,
                              yerr='prediction_sem', title=title)
+
+
+def _model_label(panel_name):
+    '''Strips the panel-name suffix, so the metrics table is keyed by model.'''
+    for suffix in ('_true_vs_predicted', '_true_vs_pred'):
+        if panel_name.endswith(suffix):
+            return panel_name[:-len(suffix)]
+    return panel_name
+
+
+def _metrics(specs, out):
+    '''Accuracy of each scattered model, so the numbers exist outside the panel titles.'''
+    report_prediction_metrics([(_model_label(name), _results_file(parts))
+                               for parts, name, _, _ in specs], out)
 
 
 @register('ablation_models', group='supp', subdir='SUPPLEMENTARY/ablation_models')
 def ablation_models(ctx, out):
     '''Scatters for the ablations of the VGAE and of the prediction head.'''
     _scatters(MODEL_ABLATION_SCATTERS, out)
+    _metrics(MODEL_ABLATION_SCATTERS, out)
 
 
 @register('feature_ablation', group='supp', subdir='SUPPLEMENTARY/feature_ablation')
 def feature_ablation(ctx, out):
-    '''Scatters for the ablations of the input domains.'''
+    '''Scatters and the seed-wise raincloud for the ablations of the input domains.'''
     _scatters(FEATURE_ABLATION_SCATTERS, out)
+    _metrics(FEATURE_ABLATION_SCATTERS, out)
+
+    out.log('=== Feature ablations ===')
+    feature_ablation_panel(
+        [(label, output_dir(*parts), 'final_metrics.csv')
+         for label, parts, _ in FEATURE_ABLATIONS],
+        {label: domains for label, _, domains in FEATURE_ABLATIONS},
+        out, 'raincloud_feature_ablations',
+        num_subs=ctx.num_subs,
+        reference_model='graphtrip',
+        table_prefix='feature_ablation_')

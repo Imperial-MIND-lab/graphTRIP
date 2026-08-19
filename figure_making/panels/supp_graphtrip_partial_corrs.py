@@ -10,7 +10,7 @@ import os
 
 from utils.helpers import aggregate_prediction_results
 
-from figure_making.common import partial_correlation_panels
+from figure_making.common import attach_annotations, partial_correlation_panels
 from figure_making.panels.fig2_performance import BENCHMARK_DIR
 from figure_making.paths import output_dir, require
 from figure_making.registry import register
@@ -23,11 +23,12 @@ def graphtrip_partial_corrs(ctx, out):
     # The scatters themselves are Fig.2a, so only the residual panels are drawn here.
     results_file = os.path.join(ctx.weights_base_dir, 'prediction_results.csv')
     require(os.path.dirname(results_file))
-    results = aggregate_prediction_results(results_file=results_file)
+    results = attach_annotations(aggregate_prediction_results(results_file=results_file))
 
     benchmark_file = os.path.join(output_dir(*BENCHMARK_DIR), 'prediction_results.csv')
     require(os.path.dirname(benchmark_file))
-    benchmark_results = aggregate_prediction_results(results_file=benchmark_file)
+    benchmark_results = attach_annotations(
+        aggregate_prediction_results(results_file=benchmark_file))
 
     out.log('=== graphTRIP ===')
     summary = partial_correlation_panels(results, out, 'graphtrip_partial_corr')

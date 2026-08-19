@@ -18,6 +18,7 @@ from utils.annotations import load_receptor_maps
 from utils.helpers import summarise_seed_metrics
 from utils.plotting import COOLWARM
 
+from figure_making.common import report_prediction_metrics
 from figure_making.paths import output_dir
 from figure_making.registry import register
 
@@ -47,6 +48,9 @@ PERFORMANCE_MODELS = [
      'prediction_results.csv'),
     ('no_react_no_clinical', ('ablation', 'feature_ablation', 'no_react_no_clinical'),
      'prediction_results.csv'),
+    # Frozen graphTRIP VGAE with only the prediction head refit on [z, Condition].
+    ('linreg_on_z', ('graphtrip', 'linreg_on_z'), 'prediction_results.csv'),
+    ('retrain_mlp_on_z', ('graphtrip', 'retrain_mlp_on_z'), 'prediction_results.csv'),
     ('medusa_no_node_features', ('medusa_ablation', 'no_node_features'),
      'prediction_results.csv'),
     ('medusa_no_clinical_features', ('medusa_ablation', 'no_clinical_features'),
@@ -128,3 +132,44 @@ def model_performance_summary(ctx, out):
     summary_df = pd.DataFrame(rows)
     out.table('model_performance_summary', summary_df)
     out.log_df('Model performance summary', summary_df)
+
+
+# Models trained and tested on psilodep2, whose aggregated and within-arm statistics are
+# comparable
+AGGREGATED_METRIC_MODELS = [
+    ('graphTRIP', ('graphtrip', 'weights')),
+    ('medusa_graphtrip', ('medusa_graphtrip', 'weights')),
+    ('control_mlp', ('ablation', 'feature_ablation', 'control_mlp_raw')),
+    ('linreg_on_clinical_data', ('ablation', 'feature_ablation', 'linreg_on_clinical_data')),
+    ('vgae_linreg_head', ('ablation', 'vgae_linreg_head')),
+    ('pca_benchmark', ('ablation', 'pca_benchmark')),
+    ('tsne_benchmark', ('ablation', 'tsne_benchmark')),
+    ('no_node_features', ('ablation', 'feature_ablation', 'no_node_features')),
+    ('no_clinical_features', ('ablation', 'feature_ablation', 'no_clinical_features')),
+    ('no_react_no_clinical', ('ablation', 'feature_ablation', 'no_react_no_clinical')),
+    ('medusa_no_node_features', ('medusa_ablation', 'no_node_features')),
+    ('medusa_no_clinical_features', ('medusa_ablation', 'no_clinical_features')),
+    ('medusa_no_react_no_clinical', ('medusa_ablation', 'no_react_no_clinical')),
+    ('linreg_on_z', ('graphtrip', 'linreg_on_z')),
+    ('retrain_mlp_on_z', ('graphtrip', 'retrain_mlp_on_z')),
+]
+
+
+@register('aggregated_prediction_metrics', group='supp', subdir='SUPPLEMENTARY')
+def aggregated_prediction_metrics(ctx, out):
+    '''
+    One lookup table of the accuracy of the mean-across-seed predictions, per model.
+
+    This is the statistic the manuscript quotes, and it is a different number from
+    model_performance_summary.csv, which averages the per-seed r values. Averaging ten
+    noisy per-seed correlations is not the correlation of the averaged predictions, and
+    the two must not be swapped for one another.
+
+    The companion _within_arm table answers whether accuracy is even across the two
+    treatment arms.
+    '''
+    report_prediction_metrics(
+        [(label, os.path.join(output_dir(*parts), 'prediction_results.csv'))
+         for label, parts in AGGREGATED_METRIC_MODELS],
+        out, name='aggregated_prediction_metrics',
+        heading='Accuracy of the mean-across-seed predictions')

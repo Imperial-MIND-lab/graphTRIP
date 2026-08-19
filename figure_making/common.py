@@ -16,11 +16,12 @@ import pandas as pd
 import seaborn as sns
 import statsmodels.api as sm
 from scipy import stats
-from scipy.stats import pearsonr, t as t_dist
+from scipy.stats import pearsonr, norm, t as t_dist
 from statsmodels.stats.multitest import fdrcorrection
 
 from utils.helpers import aggregate_prediction_results, sort_features
-from utils.statsalg import min_significant_r, compare_model_performances
+from utils.statsalg import (
+    min_significant_r, compare_model_performances, compute_within_group_pearsonr)
 from utils.plotting import (
     COOLWARM, ESCIT, PSILO, NEUTRAL,
     true_vs_pred_scatter, plot_raincloud, plot_metric_boxplot,
@@ -66,7 +67,126 @@ def scatter_from_results(results_file, out, name, condition_study=None, **kwargs
     return results
 
 
+# Prediction accuracy as tables ----------------------------------------------------------
+
+# Condition is coded identically in both studies: 1 = psilocybin, -1 = escitalopram.
+# Psilocybin first, so that the Fisher z below contrasts escitalopram against psilocybin.
+ARM_NAMES = {1.0: 'Psilocybin', -1.0: 'Escitalopram'}
+
+
+def fmt_p(pval):
+    '''
+    Formats a p-value for a statistics report: a 4-decimal float down to 0.0001, then
+    scientific with one decimal. 
+    '''
+    return f'{pval:.4f}' if pval >= 1e-4 else f'{pval:.1e}'
+
+
+def attach_annotations(results, study='psilodep2', columns=('Condition', 'QIDS_Before')):
+    '''
+    Adds annotation columns to a results frame, matching on subject_id.
+
+    Models trained without the clinical inputs (no_clinical_features, linreg_on_z, ...)
+    write prediction CSVs that carry neither QIDS_Before nor Condition, but the partial
+    and within-arm analyses need both for every model.
+    '''
+    from experiments.ingredients.data_ingredient import add_drug_condition_to_outputs
+    from datasets import get_default_prefilter
+    from utils.annotations import load_annotations
+
+    if 'Condition' in columns and 'Condition' not in results.columns:
+        results = add_drug_condition_to_outputs(results.copy(), study)
+
+    missing = [c for c in columns if c != 'Condition' and c not in results.columns]
+    if missing:
+        annotations = load_annotations(study=study, filter=get_default_prefilter(study))
+        lookup = annotations[['Patient'] + missing].copy()
+        lookup['subject_id'] = lookup['Patient'] - 1
+        results = results.merge(lookup[['subject_id'] + missing],
+                                on='subject_id', how='left')
+    return results
+
+
+def prediction_metrics(results, label, xcol='label', ycol='prediction'):
+    '''
+    Accuracy of the mean-across-seed predictions, as one row.
+    '''
+    r, p = pearsonr(results[xcol], results[ycol])
+    abs_err = np.abs(results[xcol] - results[ycol])
+    return {'model': label, 'n': len(results), 'r': r, 'p': p,
+            'mae': abs_err.mean(), 'mae_std': abs_err.std(ddof=0)}
+
+
+def _fisher_z(r1, n1, r2, n2):
+    '''Two-sided test that two independent correlations differ.'''
+    z = (np.arctanh(r2) - np.arctanh(r1)) / np.sqrt(1 / (n1 - 3) + 1 / (n2 - 3))
+    return z, 2 * norm.sf(abs(z))
+
+
+def within_arm_metrics(results, label, xcol='label', ycol='prediction'):
+    '''
+    Accuracy within each treatment arm, plus a test that the two arms differ.
+    '''
+    per_arm = compute_within_group_pearsonr(
+        results, cond_dict=ARM_NAMES, grouping_col='Condition').set_index('Condition')
+
+    rows = []
+    for value, arm in ARM_NAMES.items():
+        if arm not in per_arm.index:
+            continue
+        subset = results[results['Condition'] == value]
+        abs_err = np.abs(subset[xcol] - subset[ycol])
+        rows.append({'model': label, 'arm': arm, 'n': int(per_arm.loc[arm, 'n']),
+                     'r': per_arm.loc[arm, 'r'], 'p': per_arm.loc[arm, 'p'],
+                     'z': np.nan, 'mae': abs_err.mean(),
+                     'bias': (subset[ycol] - subset[xcol]).mean()})
+
+    if len(rows) == 2:
+        z, p = _fisher_z(rows[0]['r'], rows[0]['n'], rows[1]['r'], rows[1]['n'])
+        rows.append({'model': label, 'arm': 'difference',
+                     'n': rows[0]['n'] + rows[1]['n'], 'r': np.nan, 'p': p, 'z': z,
+                     'mae': np.nan, 'bias': np.nan})
+
+    return pd.DataFrame(rows)
+
+
+def report_prediction_metrics(specs, out, name='prediction_metrics', study='psilodep2',
+                              heading='Prediction accuracy of the mean predictions'):
+    '''
+    Writes the accuracy of several models as CSVs, instead of only into panel titles.
+
+    Parameters:
+    ----------
+        specs (list): (label, results_file) pairs. Missing directories raise MissingInput,
+                      as elsewhere, so a target fails loudly rather than reporting a gap.
+        name (str): Basename of the overall table; the within-arm table appends
+                    '_within_arm'.
+
+    Returns:
+    -------
+        tuple: (overall_df, within_arm_df)
+    '''
+    overall, per_arm = [], []
+    for label, results_file in specs:
+        require(os.path.dirname(results_file))
+        results = attach_annotations(
+            aggregate_prediction_results(results_file=results_file), study)
+        overall.append(prediction_metrics(results, label))
+        per_arm.append(within_arm_metrics(results, label))
+
+    overall_df = pd.DataFrame(overall)
+    within_arm_df = pd.concat(per_arm, ignore_index=True)
+
+    out.log_df(heading, overall_df)
+    out.log_df('Within-arm accuracy, and Fisher z that the arms differ', within_arm_df)
+    out.table(name, overall_df)
+    out.table(f'{name}_within_arm', within_arm_df)
+    return overall_df, within_arm_df
+
+
 # Partial correlations (notebook cells 22, 24, 25) ---------------------------------------
+
+INTERACTION_COL = 'Condition:QIDS_Before'
 
 PARTIAL_CORR_ANALYSES = [
     {'name': 'Condition only',
@@ -78,6 +198,9 @@ PARTIAL_CORR_ANALYSES = [
     {'name': 'Condition + QIDS_Before',
      'covariates': ['Condition', 'QIDS_Before'],
      'suffix': 'condition_qids_before'},
+    {'name': 'Condition + QIDS_Before + interaction',
+     'covariates': ['Condition', 'QIDS_Before', INTERACTION_COL],
+     'suffix': 'condition_qids_before_interaction'},
 ]
 
 
@@ -104,11 +227,16 @@ def partial_correlation(df, x_col, y_col, covariate_cols):
 def partial_correlation_panels(results, out, prefix, xcol='label', ycol='prediction',
                                yerr=None):
     '''
-    Runs the three partial-correlation analyses of prediction versus label and plots each.
+    Runs the partial-correlation analyses of prediction versus label and plots each.
 
-    Controls for treatment condition, baseline QIDS, and both.
+    Controls for treatment condition, baseline QIDS, both, and both plus their
+    interaction.
     '''
     summary_rows = []
+
+    results = results.copy()
+    if INTERACTION_COL not in results.columns:
+        results[INTERACTION_COL] = results['Condition'] * results['QIDS_Before']
 
     for analysis in PARTIAL_CORR_ANALYSES:
         covs = analysis['covariates']
@@ -117,7 +245,7 @@ def partial_correlation_panels(results, out, prefix, xcol='label', ycol='predict
         out.log(f"Partial correlation ({analysis['name']}):")
         out.log(f"   covariates: {', '.join(covs)}")
         out.log(f"   r = {r:.4f}")
-        out.log(f"   p = {p:.4e}")
+        out.log(f"   p = {fmt_p(p)}")
         out.log()
 
         x_resid = f"{xcol}_controlled_{analysis['suffix']}"
@@ -127,7 +255,11 @@ def partial_correlation_panels(results, out, prefix, xcol='label', ycol='predict
         plot_df[x_resid] = y_res
         plot_df[y_resid] = x_res
 
+        # Need to pass partial-correlation statistics explicitly, otherwise true_vs_pred_scatter would compute standard Pearson test
+        abs_err = np.abs(plot_df[x_resid] - plot_df[y_resid])
         true_vs_pred_scatter(plot_df, xcol=x_resid, ycol=y_resid, yerr=yerr,
+                             stats={'r': r, 'p': p, 'mae': abs_err.mean(),
+                                    'mae_std': abs_err.std(ddof=0)},
                              save_path=out.fig(f"{prefix}_{analysis['suffix']}"))
 
         summary_rows.append({'analysis': analysis['name'],

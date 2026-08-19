@@ -9,6 +9,7 @@ License: BSD 3-Clause
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import statsmodels.api as sm
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from scipy import stats
@@ -215,6 +216,33 @@ def _regression_line(ax, x, y, color):
     ax.plot(x_line, slope * x_line + intercept, color=color, alpha=0.6, zorder=1)
 
 
+def _arm_difference_tests(spec, before, after, conditions):
+    '''
+    Tests whether the baseline-outcome association differs between the treatment arms.
+    (Fisher z contrast, and interaction term of pooled regression.
+    '''
+    psilo, escit = CONDITION_STYLES[0][0], CONDITION_STYLES[1][0]
+    r_p, _ = stats.pearsonr(before[conditions == psilo], after[conditions == psilo])
+    r_e, _ = stats.pearsonr(before[conditions == escit], after[conditions == escit])
+    n_p = int((conditions == psilo).sum())
+    n_e = int((conditions == escit).sum())
+
+    z = (np.arctanh(r_e) - np.arctanh(r_p)) / np.sqrt(1 / (n_p - 3) + 1 / (n_e - 3))
+    rows = [{'study': spec['study'],
+             'test': 'Fisher z (escitalopram vs psilocybin r)',
+             'estimate': np.nan, 'statistic': z, 'p': 2 * stats.norm.sf(abs(z)),
+             'df': np.nan, 'n': n_p + n_e}]
+
+    design = sm.add_constant(np.column_stack([before, conditions, before * conditions]),
+                             has_constant='add')
+    fit = sm.OLS(after, design).fit()
+    rows.append({'study': spec['study'],
+                 'test': f"OLS interaction {spec['before_col']} x Condition",
+                 'estimate': fit.params[3], 'statistic': fit.tvalues[3],
+                 'p': fit.pvalues[3], 'df': fit.df_resid, 'n': len(after)})
+    return rows
+
+
 def _add_study_separator(fig, left_ax, right_ax):
     '''Draws a dashed vertical line between the panels of the two studies.'''
     x = (left_ax.get_position().x1 + right_ax.get_position().x0) / 2
@@ -300,6 +328,7 @@ def dataset_stats(ctx, out):
                              figsize=(4.5 * len(QIDS_SCATTER_PANELS), 4))
 
     rows = []
+    arm_test_rows = []
     for ax, spec in zip(axes, QIDS_SCATTER_PANELS):
         before_col, after_col = spec['before_col'], spec['after_col']
         before, after, conditions = _paired_data(annotations[spec['study']],
@@ -320,6 +349,15 @@ def dataset_stats(ctx, out):
                 rows.append({'study': spec['study'], 'condition': label,
                              'x': before_col, 'y': after_col,
                              'n': int(mask.sum()), 'r': r, 'p': pval})
+
+            # Also save pooled baseline vs post-treatment QIDS correlation
+            r_pooled, p_pooled = stats.pearsonr(before, after)
+            rows.append({'study': spec['study'], 'condition': 'all',
+                         'x': before_col, 'y': after_col,
+                         'n': len(before), 'r': r_pooled, 'p': p_pooled})
+            title_lines.append(f'pooled r={r_pooled:.2f}, {_fmt_p(p_pooled)}')
+
+            arm_test_rows.extend(_arm_difference_tests(spec, before, after, conditions))
             ax.set_title('\n'.join([f"{spec['study']}: {title_lines[0]}"] + title_lines[1:]))
         else:
             r, pval = stats.pearsonr(before, after)
@@ -344,6 +382,10 @@ def dataset_stats(ctx, out):
     correlations = pd.DataFrame(rows)
     out.table('qids_before_vs_post_correlations', correlations)
     out.log_df('Baseline versus post-treatment QIDS', correlations)
+
+    arm_tests = pd.DataFrame(arm_test_rows)
+    out.table('baseline_outcome_arm_tests', arm_tests)
+    out.log_df('Does the baseline-outcome association differ between arms?', arm_tests)
 
     # QIDS and BDI comparisons between the psilodep2 treatment arms ----------------------
     df = annotations['psilodep2']
