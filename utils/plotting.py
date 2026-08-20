@@ -1217,7 +1217,7 @@ def plot_legend(color_dict, orientation='horizontal', size=(6, 1), label=None, s
 
 def permutation_importance_bar_chart(df, ylabel='Importance Scores',
                                      y_column='mean', yerr_column='std', feature_column='feature',
-                                     save_path=None, color=PSILO, alpha=0.5):
+                                     save_path=None, color=PSILO, alpha=0.5, baseline=None):
     """
     Creates a bar chart showing permutation importance scores with error bars.
     
@@ -1234,6 +1234,9 @@ def permutation_importance_bar_chart(df, ylabel='Importance Scores',
         Color for the bars
     alpha : float, optional
         Alpha (transparency) value for the bars
+    baseline : float, optional
+        Unpermuted score of the same models. If given, each bar is annotated with the
+        score as a percentage of it.
     """
     # Create figure
     num_features = len(df)
@@ -1247,6 +1250,21 @@ def permutation_importance_bar_chart(df, ylabel='Importance Scores',
                   color=color,
                   alpha=alpha)
     
+    # Annotate each bar with the score relative to the unpermuted baseline
+    if baseline:
+        errors = df[yerr_column].fillna(0.0) if yerr_column else [0.0] * num_features
+        for bar, value, error in zip(bars, df[y_column], errors):
+            above = value >= 0
+            percent = 100 * value / baseline
+            # A signed zero reads as a rendering fault rather than as a negligible score
+            label = f'{percent:+.0f}%' if round(percent) != 0 else '0%'
+            ax.annotate(label,
+                        xy=(bar.get_x() + bar.get_width() / 2,
+                            bar.get_height() + (error if above else -error)),
+                        xytext=(0, 3 if above else -3), textcoords='offset points',
+                        ha='center', va='bottom' if above else 'top', fontsize=8)
+        ax.margins(y=0.15)  # headroom, so the labels stay inside the axes
+
     # Customize axes
     ax.set_ylabel(ylabel)
     ax.set_xticks(range(num_features))

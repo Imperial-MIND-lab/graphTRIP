@@ -10,11 +10,11 @@ import os
 import numpy as np
 
 from utils.configs import load_ingredient_configs, get_weight_filenames_from_config
-from utils.helpers import load_test_fold_indices, aggregate_importance_scores
-from utils.plotting import NEUTRAL, permutation_importance_bar_chart
+from utils.helpers import load_test_fold_indices
 from experiments.ingredients.data_ingredient import get_conditions
 
-from figure_making.common import scatter_from_results, plot_correlation_boxplot
+from figure_making.common import (
+    scatter_from_results, plot_correlation_boxplot, importance_panel)
 from figure_making.loaders import load_dataset, load_vgaes
 from figure_making.paths import output_dir, require
 from figure_making.registry import register
@@ -46,9 +46,5 @@ def graphtrip_bdi(ctx, out):
     plot_correlation_boxplot(out, x_orig_rcn, conditions, 'original_vs_recon_corrs')
 
     # Permutation importance -------------------------------------------------------------
-    importance_dir = require(output_dir('graphtrip_bdi', 'permutation_importance'))
-    scores = aggregate_importance_scores(
-        os.path.join(importance_dir, 'importance_scores_aggregated.csv'))
-    scores = scores.sort_values(by='mean', ascending=False)
-    permutation_importance_bar_chart(scores, yerr_column='se', color=NEUTRAL, alpha=0.8,
-                                     save_path=out.fig('importance_scores_aggregated'))
+    importance_panel(require(output_dir('graphtrip_bdi', 'permutation_importance')),
+                     weights_base_dir, out)

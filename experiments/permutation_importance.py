@@ -195,7 +195,7 @@ def compute_score_with_fold_permutation(kfold_models,
     feature_idx (int or slice): If provided, this feature/features will be permuted within each fold
     """
     num_folds = max(testfold_indices) + 1
-    ypreds = np.zeros_like(ytrue)
+    ypreds = np.zeros_like(ytrue, dtype=float)
     
     x_permuted = mlp_inputs.copy()
     for k in range(num_folds):

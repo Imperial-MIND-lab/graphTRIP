@@ -19,12 +19,14 @@ from scipy import stats
 from scipy.stats import pearsonr, norm, t as t_dist
 from statsmodels.stats.multitest import fdrcorrection
 
-from utils.helpers import aggregate_prediction_results, sort_features
+from utils.helpers import (
+    aggregate_importance_scores, aggregate_prediction_results, sort_features)
 from utils.statsalg import (
     min_significant_r, compare_model_performances, compute_within_group_pearsonr)
 from utils.plotting import (
     COOLWARM, ESCIT, PSILO, NEUTRAL,
     true_vs_pred_scatter, plot_raincloud, plot_metric_boxplot,
+    permutation_importance_bar_chart,
     plot_fc_reconstruction_single, plot_brain_surface_grid, plot_colormap_stack,
     plot_stacked_percentages, plot_piechart, plot_confusion_matrix, plot_roc_curve)
 
@@ -112,9 +114,12 @@ def prediction_metrics(results, label, xcol='label', ycol='prediction'):
     Accuracy of the mean-across-seed predictions, as one row.
     '''
     r, p = pearsonr(results[xcol], results[ycol])
-    abs_err = np.abs(results[xcol] - results[ycol])
+    err = results[xcol] - results[ycol]
+    ss_tot = ((results[xcol] - results[xcol].mean()) ** 2).sum()
     return {'model': label, 'n': len(results), 'r': r, 'p': p,
-            'mae': abs_err.mean(), 'mae_std': abs_err.std(ddof=0)}
+            'R2': 1 - (err ** 2).sum() / ss_tot,
+            'mae': np.abs(err).mean(), 'rmse': np.sqrt((err ** 2).mean()),
+            'mae_std': np.abs(err).std(ddof=0)}
 
 
 def _fisher_z(r1, n1, r2, n2):
@@ -151,7 +156,8 @@ def within_arm_metrics(results, label, xcol='label', ycol='prediction'):
 
 
 def report_prediction_metrics(specs, out, name='prediction_metrics', study='psilodep2',
-                              heading='Prediction accuracy of the mean predictions'):
+                              heading='Prediction accuracy of the mean predictions',
+                              targets=None):
     '''
     Writes the accuracy of several models as CSVs, instead of only into panel titles.
 
@@ -161,6 +167,9 @@ def report_prediction_metrics(specs, out, name='prediction_metrics', study='psil
                       as elsewhere, so a target fails loudly rather than reporting a gap.
         name (str): Basename of the overall table; the within-arm table appends
                     '_within_arm'.
+        targets (dict): {label: target name}. Adds a target column, so that the absolute
+                        errors of models trained on different outcomes are not read as
+                        being in the same units.
 
     Returns:
     -------
@@ -171,7 +180,10 @@ def report_prediction_metrics(specs, out, name='prediction_metrics', study='psil
         require(os.path.dirname(results_file))
         results = attach_annotations(
             aggregate_prediction_results(results_file=results_file), study)
-        overall.append(prediction_metrics(results, label))
+        row = prediction_metrics(results, label)
+        if targets is not None:
+            row = {'model': label, 'target': targets.get(label, ''), **row}
+        overall.append(row)
         per_arm.append(within_arm_metrics(results, label))
 
     overall_df = pd.DataFrame(overall)
@@ -439,6 +451,47 @@ def model_comparison_panels(specs, out, name, num_subs, model_of_interest,
     raincloud_of_model_r(distributions, out, name, num_subs, offset=offset, figsize=figsize)
     report_model_comparison(distributions, out, model_of_interest, table_prefix=table_prefix)
     return distributions
+
+
+# Permutation importance ------------------------------------------------------------------
+
+def importance_panel(importance_dir, weights_dir, out, name='importance_scores_aggregated',
+                     metrics_file='final_metrics.csv', **kwargs):
+    '''
+    Bar chart of the aggregated importance scores, annotated with the relative error increase.
+
+    Each score is the increase in mean absolute error when a block of MLP inputs is
+    shuffled, measured against one seed's out-of-fold predictions.
+
+    Parameters:
+    ----------
+        importance_dir (str): Directory holding importance_scores_aggregated.csv.
+        weights_dir (str): Directory of the seed_*/ runs the importances were computed on.
+        name (str): Panel filename, and the stem of the tables written beside it.
+
+    Returns:
+    -------
+        tuple: (scores, baseline_df)
+    '''
+    scores = aggregate_importance_scores(
+        os.path.join(importance_dir, 'importance_scores_aggregated.csv'))
+    scores = scores.sort_values(by='mean', ascending=False)
+
+    seed_mae = collect_seed_metrics([(name, weights_dir, metrics_file)])['mae']
+    baseline = seed_mae.mean()
+    scores['percent_of_baseline'] = 100 * scores['mean'] / baseline
+
+    permutation_importance_bar_chart(scores, yerr_column='se', color=NEUTRAL, alpha=0.8,
+                                     baseline=baseline, save_path=out.fig(name), **kwargs)
+
+    baseline_df = pd.DataFrame([{'n_seeds': len(seed_mae),
+                                 'baseline_mae': baseline,
+                                 'baseline_mae_sem': seed_mae.sem()}])
+    out.table(name, scores)
+    out.table(f'{name}_baseline', baseline_df)
+    out.log(f'Permutation importance baseline: MAE = {baseline:.3f} +/- {seed_mae.sem():.3f} '
+            f'(mean +/- sem across {len(seed_mae)} seeds)')
+    return scores, baseline_df
 
 
 # Feature ablations ----------------------------------------------------------------------

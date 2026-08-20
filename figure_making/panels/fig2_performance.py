@@ -20,12 +20,9 @@ License: BSD 3-Clause
 
 import os
 
-from utils.helpers import aggregate_importance_scores
-from utils.plotting import NEUTRAL, permutation_importance_bar_chart
-
 from figure_making.common import (
     scatter_from_results, model_comparison_panels, report_prediction_metrics,
-    plot_reconstruction_panels)
+    plot_reconstruction_panels, importance_panel)
 from figure_making.paths import output_dir, require
 from figure_making.registry import register
 
@@ -95,9 +92,5 @@ def fig2_prediction_performance(ctx, out):
                                brain_subdir='graphTRIP_reconstructions')
 
     # f. Permutation importance -----------------------------------------------------------
-    importance_dir = require(output_dir('graphtrip', 'permutation_importance'))
-    scores = aggregate_importance_scores(
-        os.path.join(importance_dir, 'importance_scores_aggregated.csv'))
-    scores = scores.sort_values(by='mean', ascending=False)
-    permutation_importance_bar_chart(scores, yerr_column='se', color=NEUTRAL, alpha=0.8,
-                                     save_path=out.fig('importance_scores_aggregated'))
+    importance_panel(require(output_dir('graphtrip', 'permutation_importance')),
+                     weights_base_dir, out)

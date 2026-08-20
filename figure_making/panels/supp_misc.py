@@ -7,6 +7,7 @@ Date: 2026-08-10
 License: BSD 3-Clause
 """
 
+import json
 import os
 
 import numpy as np
@@ -134,25 +135,68 @@ def model_performance_summary(ctx, out):
     out.log_df('Model performance summary', summary_df)
 
 
-# Models trained and tested on psilodep2, whose aggregated and within-arm statistics are
-# comparable
+# Every model whose predictions are on the psilodep2 patients
 AGGREGATED_METRIC_MODELS = [
-    ('graphTRIP', ('graphtrip', 'weights')),
-    ('medusa_graphtrip', ('medusa_graphtrip', 'weights')),
-    ('control_mlp', ('ablation', 'feature_ablation', 'control_mlp_raw')),
-    ('linreg_on_clinical_data', ('ablation', 'feature_ablation', 'linreg_on_clinical_data')),
-    ('vgae_linreg_head', ('ablation', 'vgae_linreg_head')),
-    ('pca_benchmark', ('ablation', 'pca_benchmark')),
-    ('tsne_benchmark', ('ablation', 'tsne_benchmark')),
-    ('no_node_features', ('ablation', 'feature_ablation', 'no_node_features')),
-    ('no_clinical_features', ('ablation', 'feature_ablation', 'no_clinical_features')),
-    ('no_react_no_clinical', ('ablation', 'feature_ablation', 'no_react_no_clinical')),
-    ('medusa_no_node_features', ('medusa_ablation', 'no_node_features')),
-    ('medusa_no_clinical_features', ('medusa_ablation', 'no_clinical_features')),
-    ('medusa_no_react_no_clinical', ('medusa_ablation', 'no_react_no_clinical')),
-    ('linreg_on_z', ('graphtrip', 'linreg_on_z')),
-    ('retrain_mlp_on_z', ('graphtrip', 'retrain_mlp_on_z')),
+    ('graphTRIP', ('graphtrip', 'weights'), DEFAULT_PREDICTION_FILE),
+    ('medusa_graphtrip', ('medusa_graphtrip', 'weights'), DEFAULT_PREDICTION_FILE),
+    ('graphTRIP_bdi', ('graphtrip_bdi', 'weights'), DEFAULT_PREDICTION_FILE),
+
+    # Ablations of the architecture, holding every input domain fixed
+    ('vgae_linreg_head', ('ablation', 'vgae_linreg_head'), DEFAULT_PREDICTION_FILE),
+    ('pca_benchmark', ('ablation', 'pca_benchmark'), DEFAULT_PREDICTION_FILE),
+    ('tsne_benchmark', ('ablation', 'tsne_benchmark'), DEFAULT_PREDICTION_FILE),
+    ('linreg_on_z', ('graphtrip', 'linreg_on_z'), DEFAULT_PREDICTION_FILE),
+    ('retrain_mlp_on_z', ('graphtrip', 'retrain_mlp_on_z'), DEFAULT_PREDICTION_FILE),
+    ('flatvae_mlp', ('flatvae_mlp',), DEFAULT_PREDICTION_FILE),
+
+    # Non-graph benchmarks trained on the same folds
+    ('selser', ('selser', 'selser'), DEFAULT_PREDICTION_FILE),
+    ('selser_augmented', ('selser', 'selser_augmented'), DEFAULT_PREDICTION_FILE),
+
+    # Ablations of the inputs, holding the architecture fixed
+    ('control_mlp', ('ablation', 'feature_ablation', 'control_mlp_raw'),
+     DEFAULT_PREDICTION_FILE),
+    ('linreg_on_clinical_data', ('ablation', 'feature_ablation', 'linreg_on_clinical_data'),
+     DEFAULT_PREDICTION_FILE),
+    ('no_node_features', ('ablation', 'feature_ablation', 'no_node_features'),
+     DEFAULT_PREDICTION_FILE),
+    ('no_clinical_features', ('ablation', 'feature_ablation', 'no_clinical_features'),
+     DEFAULT_PREDICTION_FILE),
+    ('no_react_no_clinical', ('ablation', 'feature_ablation', 'no_react_no_clinical'),
+     DEFAULT_PREDICTION_FILE),
+    ('medusa_no_node_features', ('medusa_ablation', 'no_node_features'),
+     DEFAULT_PREDICTION_FILE),
+    ('medusa_no_clinical_features', ('medusa_ablation', 'no_clinical_features'),
+     DEFAULT_PREDICTION_FILE),
+    ('medusa_no_react_no_clinical', ('medusa_ablation', 'no_react_no_clinical'),
+     DEFAULT_PREDICTION_FILE),
+
+    # Atlas transfer: the graphTRIP weights are reused unchanged on re-parcellated data
+    ('transfer_schaefer200', ('graphtrip', 'transfer_atlas', 'schaefer200'),
+     'initial_prediction_results.csv'),
+    ('transfer_aal', ('graphtrip', 'transfer_atlas', 'aal'),
+     'initial_prediction_results.csv'),
+
+    # Negative controls: the same pipelines, trained on shuffled outcomes
+    ('leakage_test', ('graphtrip', 'leakage_test'), DEFAULT_PREDICTION_FILE),
+    ('medusa_leakage_test', ('medusa_graphtrip', 'leakage_test'), DEFAULT_PREDICTION_FILE),
 ]
+
+
+def model_target(base_dir):
+    '''
+    Reads the prediction target from a model's saved config.
+
+    The table quotes MAE and RMSE in the units of whatever each model was trained to
+    predict, which is QIDS for most rows but BDI for graphTRIP_bdi and a shuffled outcome
+    for the leakage tests.
+    '''
+    config_file = os.path.join(base_dir, 'seed_0', 'config.json')
+    if not os.path.exists(config_file):
+        return ''
+    with open(config_file) as f:
+        config = json.load(f)
+    return config.get('dataset', config).get('target', '')
 
 
 @register('aggregated_prediction_metrics', group='supp', subdir='SUPPLEMENTARY')
@@ -168,8 +212,12 @@ def aggregated_prediction_metrics(ctx, out):
     The companion _within_arm table answers whether accuracy is even across the two
     treatment arms.
     '''
-    report_prediction_metrics(
-        [(label, os.path.join(output_dir(*parts), 'prediction_results.csv'))
-         for label, parts in AGGREGATED_METRIC_MODELS],
-        out, name='aggregated_prediction_metrics',
-        heading='Accuracy of the mean-across-seed predictions')
+    specs, targets = [], {}
+    for label, parts, prediction_file in AGGREGATED_METRIC_MODELS:
+        base_dir = output_dir(*parts)
+        specs.append((label, os.path.join(base_dir, prediction_file)))
+        targets[label] = model_target(base_dir)
+
+    report_prediction_metrics(specs, out, name='aggregated_prediction_metrics',
+                              heading='Accuracy of the mean-across-seed predictions',
+                              targets=targets)

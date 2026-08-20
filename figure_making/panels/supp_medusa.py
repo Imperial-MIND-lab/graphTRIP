@@ -9,10 +9,10 @@ License: BSD 3-Clause
 import os
 
 from utils.configs import load_ingredient_configs, get_weight_filenames_from_config
-from utils.helpers import load_test_fold_indices, aggregate_importance_scores
-from utils.plotting import NEUTRAL, permutation_importance_bar_chart
+from utils.helpers import load_test_fold_indices
 
-from figure_making.common import plot_correlation_boxplot, propensity_panels
+from figure_making.common import (
+    plot_correlation_boxplot, propensity_panels, importance_panel)
 from figure_making.loaders import load_vgaes
 from figure_making.paths import medusa_weights_dir, output_dir, require
 from figure_making.registry import register
@@ -44,9 +44,5 @@ def medusa_reconstructions_and_propensity(ctx, out):
                       suffix='_wo_QIDS')
 
     # Permutation importance ---------------------------------------------------------------
-    importance_dir = require(output_dir('medusa_graphtrip', 'permutation_importance'))
-    scores = aggregate_importance_scores(
-        os.path.join(importance_dir, 'importance_scores_aggregated.csv'))
-    scores = scores.sort_values(by='mean', ascending=False)
-    permutation_importance_bar_chart(scores, yerr_column='se', color=NEUTRAL, alpha=0.8,
-                                     save_path=out.fig('importance_scores_aggregated'))
+    importance_panel(require(output_dir('medusa_graphtrip', 'permutation_importance')),
+                     weights_dir, out)
