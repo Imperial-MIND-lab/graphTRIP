@@ -450,9 +450,26 @@ def plot_loss_curves(train_loss, test_loss, val_loss, save_path=None):
 
 # MLP plotting -----------------------------------------------------------------
 
+def _arm_regression_lines(ypreds, xcol, ycol):
+    '''Draws the least-squares fit within each treatment arm, labelled with its r.'''
+    drawn = False
+    for value, label, color in ((1.0, 'Psilocybin', PSILO), (-1.0, 'Escitalopram', ESCIT)):
+        arm = ypreds[ypreds['Condition'] == value]
+        if len(arm) < 3 or arm[xcol].nunique() < 2:
+            continue
+        r, _ = pearsonr(arm[xcol], arm[ycol])
+        slope, intercept = np.polyfit(arm[xcol], arm[ycol], 1)
+        x_line = np.array([arm[xcol].min(), arm[xcol].max()])
+        plt.plot(x_line, slope * x_line + intercept, color=color, alpha=0.8,
+                 label=f'{label}: r={r:.4f}')
+        drawn = True
+    if drawn:
+        plt.legend(frameon=False, fontsize='small', loc='best')
+
+
 def true_vs_pred_scatter(ypreds, marker_col=None, style=None, title=None,
                          save_path=None, xcol='label', ycol='prediction', yerr=None,
-                         stats=None):
+                         stats=None, arm_regression=False):
     """
     Create a scatter plot of true vs predicted values.
 
@@ -469,6 +486,8 @@ def true_vs_pred_scatter(ypreds, marker_col=None, style=None, title=None,
                        the title. None (default) computes it from xcol and ycol with an
                        ordinary Pearson test. False omits the line. A dict with keys
                        'r', 'p', 'mae', 'mae_std' renders those values instead.
+    arm_regression (bool): Adds a regression line per treatment arm, labelled with its r.
+                       Requires a 'Condition' column.
 
     Returns:
     -------
@@ -557,6 +576,9 @@ def true_vs_pred_scatter(ypreds, marker_col=None, style=None, title=None,
     plt.xlim(min_val, max_val)
     plt.ylim(min_val, max_val)
     plt.gca().set_aspect('equal', adjustable='box')
+
+    if arm_regression and 'Condition' in ypreds.columns:
+        _arm_regression_lines(ypreds, xcol, ycol)
 
     title = title or ''
     if stats is False:

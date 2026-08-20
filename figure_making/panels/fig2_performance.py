@@ -60,7 +60,7 @@ def fig2_prediction_performance(ctx, out):
 
     # a. graphTRIP predictions -----------------------------------------------------------
     scatter_from_results(graphtrip_results, out, 'graphTRIP_true_vs_pred',
-                         yerr='prediction_sem')
+                         yerr='prediction_sem', arm_regression=True)
 
     # b. Model ablations -----------------------------------------------------------------
     out.log('=== Model ablations ===')
@@ -72,10 +72,11 @@ def fig2_prediction_performance(ctx, out):
 
     # e. Feature ablations, as scatters ---------------------------------------------------
     scatter_from_results(no_clinical_results, out, 'no_clinical_features_true_vs_pred',
-                         condition_study='psilodep2', yerr='prediction_sem')
+                         condition_study='psilodep2', yerr='prediction_sem',
+                         arm_regression=True)
 
     scatter_from_results(control_mlp_results, out, 'control_mlp_true_vs_pred',
-                         yerr='prediction_sem')
+                         yerr='prediction_sem', arm_regression=True)
 
     # Accuracy of every model the Fig. 2 quoted in the text
     out.log('=== Prediction accuracy ===')
