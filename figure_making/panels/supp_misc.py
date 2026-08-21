@@ -176,10 +176,6 @@ AGGREGATED_METRIC_MODELS = [
      'initial_prediction_results.csv'),
     ('transfer_aal', ('graphtrip', 'transfer_atlas', 'aal'),
      'initial_prediction_results.csv'),
-
-    # Negative controls: the same pipelines, trained on shuffled outcomes
-    ('leakage_test', ('graphtrip', 'leakage_test'), DEFAULT_PREDICTION_FILE),
-    ('medusa_leakage_test', ('medusa_graphtrip', 'leakage_test'), DEFAULT_PREDICTION_FILE),
 ]
 
 
@@ -188,8 +184,7 @@ def model_target(base_dir):
     Reads the prediction target from a model's saved config.
 
     The table quotes MAE and RMSE in the units of whatever each model was trained to
-    predict, which is QIDS for most rows but BDI for graphTRIP_bdi and a shuffled outcome
-    for the leakage tests.
+    predict, which is QIDS for most rows but BDI for graphTRIP_bdi.
     '''
     config_file = os.path.join(base_dir, 'seed_0', 'config.json')
     if not os.path.exists(config_file):

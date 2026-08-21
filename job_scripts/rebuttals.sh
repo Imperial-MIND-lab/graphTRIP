@@ -13,20 +13,12 @@ conda activate graphtrip
 cd $PBS_O_WORKDIR
 
 # Array indices:
-# 0-9:   graphtrip leakage test, seeds 0-9
-# 10-19: medusa leakage test, seeds 0-9
 # 20-29: ablation job 5 (no node features), seeds 0-9
 # 30-39: ablation job 6 (no clinical features), seeds 0-9
 # 40-49: ablation job 7 (medusa no node features), seeds 0-9
 # 50-59: ablation job 8 (medusa no clinical features), seeds 0-9
 
-if [ "$PBS_ARRAY_INDEX" -ge 0 ] && [ "$PBS_ARRAY_INDEX" -le 9 ]; then
-    SEED=$((PBS_ARRAY_INDEX))
-    python -m scripts.graphtrip_leakage_test -s $SEED
-elif [ "$PBS_ARRAY_INDEX" -ge 10 ] && [ "$PBS_ARRAY_INDEX" -le 19 ]; then
-    SEED=$((PBS_ARRAY_INDEX - 10))
-    python -m scripts.medusa_leakage_test -s $SEED
-elif [ "$PBS_ARRAY_INDEX" -ge 20 ] && [ "$PBS_ARRAY_INDEX" -le 29 ]; then
+if [ "$PBS_ARRAY_INDEX" -ge 20 ] && [ "$PBS_ARRAY_INDEX" -le 29 ]; then
     SEED=$((PBS_ARRAY_INDEX - 20))
     python -m scripts.ablation -j 5 -s $SEED
 elif [ "$PBS_ARRAY_INDEX" -ge 30 ] && [ "$PBS_ARRAY_INDEX" -le 39 ]; then

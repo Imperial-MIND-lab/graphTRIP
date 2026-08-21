@@ -39,8 +39,9 @@ def data_cfg():
     study = "psilodep2"
     session = "before"
     atlas = "schaefer100"
-    target = "QIDS_Final_Integration" 
+    target = "QIDS_Final_Integration"
     prefilter = None # Filter samples based on annotations.csv; e.g., {'Condition': 'P'}
+    perm_seed = None # Seed for permuting labels; None for no permutation.
 
     # Get the number of nodes
     num_nodes = None
@@ -86,8 +87,8 @@ def data_cfg():
 @data_ingredient.capture
 def load_data(study, session, atlas, target, prefilter,
               node_attrs, edge_attrs, graph_attrs, context_attrs,
-              edge_tfm_type, edge_tfm_params, transforms, 
-              add_3Dcoords, drug_condition, max_spd_dist):
+              edge_tfm_type, edge_tfm_params, transforms,
+              add_3Dcoords, drug_condition, max_spd_dist, perm_seed=None):
     '''Loads the dataset for the given configurations.'''   
     # Create the attributes object
     attrs = Attrs(node=node_attrs, edge=edge_attrs, graph=graph_attrs)
@@ -156,6 +157,14 @@ def load_data(study, session, atlas, target, prefilter,
     if target is not None:
         missing_targets = np.array([torch.isnan(graph.y).item() for graph in dataset])
         dataset = dataset[~missing_targets]
+
+    # Permute the target across the cohort, for the permutation null
+    if perm_seed is not None:
+        patients = [graph.subject.item()+1 for graph in dataset] # 1-indexed, as in annotations.csv
+        labels = np.array([graph.y.item() for graph in dataset])
+        rng = np.random.default_rng(perm_seed)
+        permuted = labels[rng.permutation(len(labels))]
+        dataset.transform.transforms.append(AddLabel(dict(zip(patients, permuted))))
 
     return dataset
 
@@ -270,7 +279,7 @@ def load_dataset_from_configs(config):
     valid_args = ['study', 'session', 'atlas', 'target', 'prefilter',
                   'node_attrs', 'edge_attrs', 'graph_attrs', 'context_attrs',
                   'edge_tfm_type', 'edge_tfm_params', 'transforms',
-                  'add_3Dcoords', 'drug_condition', 'max_spd_dist']
+                  'add_3Dcoords', 'drug_condition', 'max_spd_dist', 'perm_seed']
     input_args = {k: config[k] for k in valid_args if k in config}
     return load_data(**input_args)
 
