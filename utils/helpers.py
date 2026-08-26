@@ -119,6 +119,35 @@ def fix_random_seed(seed: int):
     # PyTorch Geometric
     seed_everything(seed)
 
+def permute_labels(subject_ids, labels, perm_seed):
+    '''
+    Permutes labels across the cohort, for the permutation null.
+
+    Reproduces the permutation that data_ingredient.load_data applies to the graph dataset,
+    so that models trained outside that pipeline (e.g. the SELSER baseline) can share a
+    perm_seed with graphTRIP and have their nulls paired. Sorting by subject id first makes
+    the mapping independent of the order in which the caller happened to load subjects; the
+    graph dataset is already in that order after prefiltering.
+
+    Parameters:
+    ----------
+    subject_ids (array-like): subject identifiers, one per label
+    labels (array-like): the outcomes to permute
+    perm_seed (int): seed of the permutation, shared across training seeds
+
+    Returns:
+    -------
+    np.ndarray: permuted labels, in the order the inputs were given
+    '''
+    subject_ids = np.asarray(subject_ids)
+    labels = np.asarray(labels, dtype=float)
+
+    order = np.argsort(subject_ids)
+    rng = np.random.default_rng(perm_seed)
+    permuted = np.empty_like(labels)
+    permuted[order] = labels[order][rng.permutation(len(labels))]
+    return permuted
+
 def load_experiment(exname: str):
     '''Loads a sacred experiment by name.'''
     try:
