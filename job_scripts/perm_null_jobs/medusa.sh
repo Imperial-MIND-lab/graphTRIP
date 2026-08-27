@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -l select=1:ncpus=1:mem=3gb
-#PBS -l walltime=03:00:00
+#PBS -l walltime=05:00:00
 #PBS -N pn_medusa
 #PBS -J 0-999
 
