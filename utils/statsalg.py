@@ -22,7 +22,7 @@ import itertools
 from sklearn.decomposition import PCA
 from statsmodels.stats.multitest import fdrcorrection
 from scipy import stats
-from scipy.stats import pearsonr, spearmanr
+from scipy.stats import pearsonr, spearmanr, mannwhitneyu
 from sklearn.metrics import mutual_info_score, r2_score
 from scipy.stats import chi2_contingency
 from sklearn.model_selection import KFold
@@ -821,31 +821,96 @@ def get_cohen_d_label(cohen_d: float) -> str:
     else:
         return "very large"
 
-def compare_reconstruction_performance(primary: dict, validation: dict) -> dict[str, pd.DataFrame]:
-    from scipy.stats import mannwhitneyu
+def compare_reconstruction_performance(primary: dict,
+                                       validation: dict,
+                                       n_bootstrap: int = 10000,
+                                       seed: int = 0,
+                                       alpha: float = 0.05) -> dict[str, pd.DataFrame]:
+    """
+    Compares per-subject reconstruction quality between two datasets, feature by feature.
+
+    Both inputs are 'metrics' dicts as returned by evaluate_x_reconstructions, i.e.
+    {'corr': df, 'mae': df} with one row per subject and one column per feature. The two
+    datasets contain different people, so the groups are compared with an unpaired
+    Mann-Whitney U test, FDR-corrected over the features of each metric.
+
+    Parameters:
+    ----------
+        primary (dict): Metrics of the primary (training) dataset.
+        validation (dict): Metrics of the independent validation dataset.
+        n_bootstrap (int): Resamples for the confidence interval of the difference.
+        seed (int): Seed of the bootstrap resampler.
+        alpha (float): Significance level, and 1-alpha is the CI coverage.
+
+    Returns:
+    -------
+        dict: {metric: DataFrame}, one row per feature.
+    """
+    rng = np.random.default_rng(seed)
     results = {}
 
     for metric in ("corr", "mae"):
-        a = primary[metric]
-        b = validation[metric]
+        if metric not in primary or metric not in validation:
+            continue
+        a, b = primary[metric], validation[metric]
+        features = [f for f in a.columns if f in b.columns]
         rows = []
 
-        for feat in a.columns:
-            x = a[feat].dropna().values
-            y = b[feat].dropna().values
+        for feat in features:
+            x = pd.to_numeric(a[feat], errors='coerce').dropna().values
+            y = pd.to_numeric(b[feat], errors='coerce').dropna().values
+            n_x, n_y = len(x), len(y)
 
             U, p = mannwhitneyu(x, y, alternative="two-sided")
 
-            nx, ny = len(x), len(y)
-            pooled_std = np.sqrt(((nx - 1) * x.std(ddof=1) ** 2 + (ny - 1) * y.std(ddof=1) ** 2) / (nx + ny - 2))
+            # Cohen's d, and the effect size matched to the rank test
+            pooled_std = np.sqrt(((n_x - 1) * x.std(ddof=1) ** 2 +
+                                  (n_y - 1) * y.std(ddof=1) ** 2) / (n_x + n_y - 2))
             d = (x.mean() - y.mean()) / pooled_std if pooled_std > 0 else np.nan
+            cles = U / (n_x * n_y)
 
-            rows.append({"feature": feat, "U_stat": U, "p_uncorrected": p, "cohens_d": d})
+            # Percentile bootstrap CIs of the difference in means and of Cohen's d
+            pct = [100 * alpha / 2, 100 * (1 - alpha / 2)]
+            xb = x[rng.integers(0, n_x, (n_bootstrap, n_x))]
+            yb = y[rng.integers(0, n_y, (n_bootstrap, n_y))]
+            boot_diff = xb.mean(axis=1) - yb.mean(axis=1)
+            boot_pooled = np.sqrt(((n_x - 1) * xb.var(axis=1, ddof=1) +
+                                   (n_y - 1) * yb.var(axis=1, ddof=1)) / (n_x + n_y - 2))
+            with np.errstate(divide='ignore', invalid='ignore'):
+                boot_d = np.where(boot_pooled > 0, boot_diff / boot_pooled, np.nan)
+            ci_low, ci_high = np.percentile(boot_diff, pct)
+            d_ci_low, d_ci_high = np.nanpercentile(boot_d, pct)
+
+            rows.append({"feature": feat,
+                         "n_primary": n_x,
+                         "mean_primary": x.mean(),
+                         "sd_primary": x.std(ddof=1),
+                         "median_primary": np.median(x),
+                         "n_validation": n_y,
+                         "mean_validation": y.mean(),
+                         "sd_validation": y.std(ddof=1),
+                         "median_validation": np.median(y),
+                         "mean_difference": x.mean() - y.mean(),
+                         "ci_low": ci_low,
+                         "ci_high": ci_high,
+                         "cohens_d": d,
+                         "cohens_d_ci_low": d_ci_low,
+                         "cohens_d_ci_high": d_ci_high,
+                         "effect_size": get_cohen_d_label(d),
+                         "cles": cles,
+                         "rank_biserial": 2 * cles - 1,
+                         "U_stat": U,
+                         "p_uncorrected": p})
 
         df = pd.DataFrame(rows)
-        _, p_fdr = fdrcorrection(df["p_uncorrected"])
-        df["p_fdr"] = p_fdr
-        df = df[["feature", "U_stat", "p_uncorrected", "p_fdr", "cohens_d"]]
+        df["p_fdr"] = fdrcorrection(df["p_uncorrected"], alpha=alpha)[1]
+        df["significant_fdr"] = df["p_fdr"] < alpha
+        df = df[["feature", "n_primary", "mean_primary", "sd_primary", "median_primary",
+                 "n_validation", "mean_validation", "sd_validation", "median_validation",
+                 "mean_difference", "ci_low", "ci_high",
+                 "cohens_d", "cohens_d_ci_low", "cohens_d_ci_high", "effect_size",
+                 "cles", "rank_biserial",
+                 "U_stat", "p_uncorrected", "p_fdr", "significant_fdr"]]
 
         results[metric] = df
 

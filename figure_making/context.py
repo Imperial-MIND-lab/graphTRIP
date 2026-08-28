@@ -144,13 +144,6 @@ class FigureContext:
     def reconstructions(self, vgaes_dict, dataset, test_indices_dict=None):
         '''
         Returns (adj_orig_rcn, x_orig_rcn) with reconstruction metrics attached.
-
-        Memoised on the identity of the arguments, because the notebook computes the
-        same (vgaes, dataset, test folds) triple more than once.
-
-        The metrics glue matches the notebook: FC correlations are attached as an extra
-        column of the node-attribute correlation dataframe, so that plot_metric_boxplot
-        shows node features and FC together.
         '''
         key = (id(vgaes_dict), id(dataset), id(test_indices_dict))
         if key in self._recon_cache:
@@ -162,6 +155,7 @@ class FigureContext:
         fc_metrics = evaluate_fc_reconstructions(adj_orig_rcn)
         x_orig_rcn['metrics'] = evaluate_x_reconstructions(x_orig_rcn)
         x_orig_rcn['metrics']['corr']['FC'] = fc_metrics['corr']
+        x_orig_rcn['metrics']['mae']['FC'] = fc_metrics['mae']
 
         # The inputs are stored alongside the results so that they stay alive: the cache
         # key is their id(), which CPython would otherwise be free to reuse.
