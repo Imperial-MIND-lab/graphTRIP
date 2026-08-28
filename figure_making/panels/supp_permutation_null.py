@@ -60,22 +60,30 @@ MODELS = [
     ('SELSER', ('selser', 'permutation_null'), ('selser', 'selser')),
 ]
 
+# Metrics to report, and whether a larger value is the better one.
+METRICS = [('r', True), ('r2', True), ('mae', False), ('rmse', False)]
+
 # Zero-shot analyses of graphTRIP's null weights: (label, null subdir, observed tree,
-# prediction file). No retraining, so these ride along with the graphTRIP null.
+# prediction file, metrics). No retraining, so these ride along with the graphTRIP null.
+#
+# The atlas transfers stay on the same cohort and outcome, so every metric is comparable
+# with the in-atlas result. psilodep1 is a different cohort, treatment and target, so
+# predictions are not expected to fall on the identity line and only the correlation is
+# interpretable.
 TRANSFERS = [
     ('graphTRIP to Schaefer 200', ('transfer_atlas', 'schaefer200'),
-     ('graphtrip', 'transfer_atlas', 'schaefer200'), 'initial_prediction_results.csv'),
+     ('graphtrip', 'transfer_atlas', 'schaefer200'), 'initial_prediction_results.csv',
+     METRICS),
     ('graphTRIP to AAL', ('transfer_atlas', 'aal'),
-     ('graphtrip', 'transfer_atlas', 'aal'), 'initial_prediction_results.csv'),
+     ('graphtrip', 'transfer_atlas', 'aal'), 'initial_prediction_results.csv',
+     METRICS),
     ('graphTRIP zero-shot on psilodep1', ('psilodep1',),
      ('validation', 'evaluate_graphtrip'),
-     'initial_prediction_results_mean_vote_harmonised.csv'),
+     'initial_prediction_results_mean_vote_harmonised.csv',
+     [('r', True)]),
 ]
 
 TRANSFER_SOURCE = ('graphtrip', 'permutation_null')
-
-# Metrics to report, and whether a larger value is the better one.
-METRICS = [('r', True), ('r2', True), ('mae', False), ('rmse', False)]
 
 # The metric the null histogram is drawn for.
 HEADLINE = 'r'
@@ -474,7 +482,7 @@ def gather_models(out, rng):
 def gather_transfers(out):
     '''Ensemble-level nulls of graphTRIP's zero-shot analyses, where they have been run.'''
     rows, missing = [], []
-    for label, null_subdir, observed_parts, prediction_file in TRANSFERS:
+    for label, null_subdir, observed_parts, prediction_file, metrics in TRANSFERS:
         try:
             observed, draws = collect_transfer(null_subdir, observed_parts, prediction_file)
         except (MissingInput, FileNotFoundError, ValueError) as error:
@@ -483,7 +491,7 @@ def gather_transfers(out):
         if observed is None or draws is None:
             missing.append(label)
             continue
-        for metric, greater in METRICS:
+        for metric, greater in metrics:
             rows.append({'analysis': label, 'metric': metric,
                          **null_stats(observed[metric], draws[metric], greater)})
 

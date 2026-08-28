@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -l select=1:ncpus=1:mem=2gb
-#PBS -l walltime=08:00:00
+#PBS -l walltime=12:00:00
 #PBS -N pn_selser
 
 # Permutation null for the SELSER-fMRI baseline: 100 permutations x 10 CV splits.
