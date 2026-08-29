@@ -153,10 +153,12 @@ EXTRA_ARGS="${EXTRA_ARGS# }"
 N_PERMS=$((PERM_END - PERM_START + 1))
 
 if [ "$MODEL" = "selser" ]; then
-    N_JOBS=1
+    # One element per permutation seed; the ten CV splits run inside it. SELSER is cheap
+    # per fit but pays a large fixed cost per invocation, so the elements are coarser than
+    # the other models' one-run-per-element mapping.
+    N_JOBS=$N_PERMS
     N_RUNS=$((N_PERMS * SEEDS_PER_PERM))
-    VARS="PERM_START=${PERM_START},PERM_END=${PERM_END}"
-    set -- -v "$VARS" "$JOB_SCRIPT"
+    set -- -J "${PERM_START}-${PERM_END}" "$JOB_SCRIPT"
 else
     ARRAY_START=$((PERM_START * SEEDS_PER_PERM))
     ARRAY_END=$((PERM_END * SEEDS_PER_PERM + SEEDS_PER_PERM - 1))
