@@ -96,6 +96,9 @@ INVARIANCE_REPEATS = 20
 # Panels are laid out in a grid, because six models do not fit in one row.
 NCOLS = 3
 
+# The observed value is marked in dark red, so that it reads against the grey/cyan nulls.
+DARK_RED = '#AA0000'
+
 
 # Metrics ----------------------------------------------------------------------------
 
@@ -320,19 +323,23 @@ def _save(fig, out, name):
 
 def null_histogram(collected, out, name='permutation_null_histogram'):
     '''Null draws with the observed value marked: the headline panel.'''
+    r_grid = np.linspace(-0.99, 0.99, 400)
     fig, axes = _model_axes(len(collected))
     for ax, c in zip(axes, collected):
         null = c['ensemble'][HEADLINE].values
         observed = c['observed'][HEADLINE]
         s = c['stats'][HEADLINE]
 
-        ax.hist(null, bins=np.linspace(-0.8, 0.8, 25), color=NEUTRAL,
-                edgecolor=NEUTRAL2, linewidth=0.6)
+        density = stats.norm.pdf(r_grid, null.mean(), null.std(ddof=1))
+        ax.fill_between(r_grid, density, color=NEUTRAL2, alpha=0.25, linewidth=0)
+        ax.plot(r_grid, density, color=NEUTRAL2, linewidth=1.6, label='permutation null')
+        ax.plot(null, np.zeros_like(null), '|', color=NEUTRAL2, markersize=10,
+                markeredgewidth=1.2)
         ax.axvline(0, color=NEUTRAL2, linewidth=0.8, zorder=0)
-        ax.axvline(observed, color=PSILO, linestyle='--', linewidth=2,
+        ax.axvline(observed, color=DARK_RED, linestyle='--', linewidth=2,
                    label=f'observed r = {observed:.3f}')
         ax.set_xlabel('Ensemble r under label permutation')
-        ax.set_ylabel('Permutations')
+        ax.set_ylabel('Density')
         ax.set_title(f"{c['label']}\nnull {null.mean():+.3f} $\\pm$ {null.std(ddof=1):.3f}, "
                      f"rank p = {s['rank_p']:.3f} ({s['n_draws']} draws)", fontsize=10)
         ax.legend(loc='upper left', fontsize=8, frameon=False)
@@ -362,7 +369,7 @@ def null_vs_parametric(collected, out, name='permutation_null_vs_parametric'):
                 label=f'permutation, SD = {sd:.3f}')
         ax.plot(null, np.zeros_like(null), '|', color=ESCIT, markersize=10,
                 markeredgewidth=1.2)
-        ax.axvline(observed, color=PSILO, linestyle='--', linewidth=2,
+        ax.axvline(observed, color=DARK_RED, linestyle='--', linewidth=2,
                    label=f'observed r = {observed:.3f}')
         ax.set_xlabel('r')
         ax.set_ylabel('Density')
