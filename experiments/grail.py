@@ -85,6 +85,7 @@ def cfg(dataset):
     cohen_d_threshold = 0.8     # Cohen's d to select a feature; used only if run_spin_test.
     run_spin_test = True        # If False, skip the spin test and save mean alignments only.
     grail_features = None       # If a list, compute alignments for these features only.
+    medusa_modes = None         # If a list, grail these CFRHead outputs in one pass.
 
     # Cross-cohort evaluation. Defaults leave the behaviour of a same-cohort run unchanged.
     transfer_eval = False           # Evaluating on a cohort the model was not trained on.
@@ -130,8 +131,25 @@ def match_config(config: Dict) -> Dict:
     if config_updates.get('medusa', False):
         assert config_updates['mlp_model']['model_type'] == 'CFRHead', \
             'GRAIL with medusa only works with CFRHead MLP.'
+    if config_updates.get('medusa_modes', None):
+        assert config_updates['mlp_model']['model_type'] == 'CFRHead', \
+            'medusa_modes only works with CFRHead MLP.'
+        assert not config_updates.get('medusa', False), \
+            'medusa_modes replaces medusa; set only one of them.'
+        assert not config_updates.get('run_spin_test', True), \
+            'medusa_modes requires run_spin_test=False: the spin test selects a different '\
+            'feature set per head, which one shared pass cannot represent.'
+        unknown = sorted(set(config_updates['medusa_modes']) - set(MEDUSA_MODES))
+        assert not unknown, f'Unknown medusa_modes: {unknown}. Valid: {sorted(MEDUSA_MODES)}.'
             
     return config_updates
+
+# The CFRHead outputs GRAIL can be run against.
+MEDUSA_MODES = {
+    'escitalopram': lambda mlp, x: mlp.mlp0(x),
+    'psilocybin':   lambda mlp, x: mlp.mlp1(x),
+    'ite':          lambda mlp, x: mlp.mlp1(x) - mlp.mlp0(x),
+}
 
 # Helper functions -------------------------------------------------------------
     
@@ -188,7 +206,10 @@ def get_alignments_and_features(triu_edges, ypred_grad, z,
     --------
     alignments (dict): The alignments between the feature gradients and ypred_grad.
     """
-    alignments = {}
+    # ypred_grad may be a single gradient, or a {mode: gradient} dict.
+    single = torch.is_tensor(ypred_grad)
+    ypred_grads = {None: ypred_grad} if single else ypred_grad
+    alignments = {mode: {} for mode in ypred_grads}
     device = triu_edges.device
     
     # Get adjacency matrix
@@ -198,8 +219,8 @@ def get_alignments_and_features(triu_edges, ypred_grad, z,
     def process_feature(name, value):
         if selected_features is None or name in selected_features:
             grad = compute_gradient(value, z)
-            alignment = compute_gradient_alignment(ypred_grad, grad)
-            alignments[name] = alignment
+            for mode, mode_grad in ypred_grads.items():
+                alignments[mode][name] = compute_gradient_alignment(mode_grad, grad)
 
     # Compute modularity using RSN mapping
     rsn_modularity = compute_modularity_torch(adj, rsn_mapping)
@@ -249,7 +270,7 @@ def get_alignments_and_features(triu_edges, ypred_grad, z,
                 feat = compute_correlation(x[:, attr_idx], density)
                 process_feature(f'x{attr}_corr_{receptor}', feat)
     
-    return alignments
+    return alignments[None] if single else alignments
 
 @ex.capture
 def get_ypred_from_z(z, vgae, mlp, batch, medusa=False):
@@ -267,6 +288,14 @@ def get_ypred_from_z(z, vgae, mlp, batch, medusa=False):
     else:
         # CFRNet: use treatment information
         return mlp(x, treatment)
+
+@ex.capture
+def get_ypreds_from_z(z, vgae, mlp, batch, medusa_modes):
+    '''Returns {mode: prediction} for each requested CFRHead output.'''
+    context = get_context(batch)
+    x = torch.cat([vgae.readout(z, context, batch.batch), batch.graph_attr], dim=1)
+    return {mode: MEDUSA_MODES[mode](mlp, x) for mode in medusa_modes}
+
 
 def compute_gradient(output_scalar, z):
     """
@@ -361,6 +390,7 @@ def run(_config):
     n_permutations = _config['n_permutations']
     run_spin_test = _config['run_spin_test']
     grail_features = _config['grail_features']
+    medusa_modes = _config['medusa_modes']
 
     # Validate this_k input
     max_num_folds = _config['dataset']['num_folds']
@@ -486,9 +516,14 @@ def run(_config):
             triu_edges_list = []
             
             for z in zs:
-                # Get MLP prediction and its gradient
-                ypred = get_ypred_from_z(z, vgae, mlp, batch)
-                ypred_grad = compute_gradient(ypred, z)
+                # Get MLP prediction(s) and their gradient(s)
+                if medusa_modes:
+                    ypreds = get_ypreds_from_z(z, vgae, mlp, batch)
+                    ypred_grad = {mode: compute_gradient(yp, z)
+                                  for mode, yp in ypreds.items()}
+                else:
+                    ypred = get_ypred_from_z(z, vgae, mlp, batch)
+                    ypred_grad = compute_gradient(ypred, z)
                 
                 # Get reconstructed outputs
                 x, triu_edges = get_reconstructions(z, vgae, batch)
@@ -512,6 +547,19 @@ def run(_config):
                     selected_features=grail_features)
                 subject_alignments.append(alignments)
             
+            if medusa_modes:
+                # One row per (head, subject, fold). The heads shared this subject's latent
+                # samples, reconstructions and feature gradients; only the prediction
+                # gradient differed.
+                for mode in medusa_modes:
+                    means = pd.DataFrame([a[mode] for a in subject_alignments]).mean(axis=0)
+                    if feature_names is None:
+                        feature_names = list(means.index)
+                    flat_rows.append({'grail_mode': mode, 'subject': sub,
+                                      'subject_id': int(batch.subject.item()) + 1,
+                                      'fold': k, **means.to_dict()})
+                continue
+
             # Get feature names
             if feature_names is None:
                 feature_names = list(subject_alignments[0].keys())
