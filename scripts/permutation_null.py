@@ -1,6 +1,6 @@
 """
-This script trains one of the permutation-null models on permuted outcomes, to build an
-empirical null distribution of prediction performance.
+This script trains one of the permutation-null models on permuted outcomes, and runs the
+evaluations of its weights, to build empirical null distributions.
 
 The outcome is permuted across the whole cohort before any pipeline step -- before
 splitting, scaling and VGAE fitting -- so the null covers the entire pipeline rather than
@@ -16,9 +16,10 @@ Dependencies:
 Outputs:
 - outputs/<model tree>/permutation_null/perm_{perm_seed}/seed_{seed}/
 
-graphTRIP additionally evaluates its null weights zero-shot:
+graphTRIP additionally evaluates its null weights zero-shot, and runs GRAIL on them:
 - .../perm_{perm_seed}/transfer_atlas/{schaefer200,aal}/seed_{seed}/
 - .../perm_{perm_seed}/psilodep1/seed_{seed}/
+- .../perm_{perm_seed}/grail/seed_{seed}/mean_alignments.csv
 
 Author: Hanna M. Tolle
 Date: 2026-08-26
@@ -50,6 +51,11 @@ N_PERMUTATIONS = 100
 
 ATLAS_NUM_NODES = {'schaefer200': 200, 'aal': 116}
 
+# GRAIL settings, matching the published runs (see scripts/xai_biomarkers.py)
+GRAIL_NUM_Z_SAMPLES = 25
+GRAIL_SIGMA = 2.0
+GRAIL_FEATURES = None  # all 69 candidates; a list would restrict to those biomarkers
+
 
 def bdi_config(config):
     '''Config for the graphTRIP model predicting post-treatment BDI instead of QIDS.'''
@@ -73,7 +79,7 @@ MODELS = {
                   'exname': 'train_jointly',
                   'output_dir': 'outputs/graphtrip/',
                   'apply': None,
-                  'evaluations': ['transfer_atlas', 'psilodep1']},
+                  'evaluations': ['transfer_atlas', 'psilodep1', 'grail']},
 
     'medusa': {'config_file': MEDUSA_CONFIG_FILE,
                'exname': 'train_cfrnet',
@@ -172,8 +178,39 @@ def run_psilodep1(weights_dir, perm_dir, seed, verbose, debug, observer, config_
     run(exname, observer, config_updates)
 
 
+def run_grail(config, weights_dir, perm_dir, seed, perm_seed, verbose, debug, observer):
+    '''
+    Runs GRAIL on the null weights, without the spin permutation test.
+    '''
+    ex_dir = os.path.join(perm_dir, 'grail', f'seed_{seed}')
+    if os.path.exists(ex_dir):
+        print(f"GRAIL already exists in {ex_dir}.")
+        return
+
+    config_updates = {'dataset': copy.deepcopy(config['dataset']),
+                      'vgae_weights_dir': weights_dir,
+                      'mlp_weights_dir': weights_dir,
+                      'output_dir': ex_dir,
+                      'seed': seed,
+                      'verbose': verbose,
+                      'this_k': None,
+                      'this_sub': None,
+                      'num_z_samples': 2 if debug else GRAIL_NUM_Z_SAMPLES,
+                      'sigma': GRAIL_SIGMA,
+                      'all_rsn_conns': False,
+                      'medusa': False,
+                      'run_spin_test': False,
+                      'grail_features': GRAIL_FEATURES}
+
+    # GRAIL never reads graph.y, so the permutation is inert here. It is set to keep the
+    # config match against the null run's own config.json exact, and to record provenance.
+    config_updates['dataset']['perm_seed'] = perm_seed
+    config_updates['dataset']['drug_condition'] = None
+    run('grail', observer, config_updates)
+
+
 def main(model, config_file, output_dir, verbose, debug, seed, perm_seed, config_id=0,
-         eval_only=False):
+         eval_only=False, evaluations=None):
     # Add project root to paths
     config_file = add_project_root(config_file)
     output_dir = add_project_root(output_dir)
@@ -210,18 +247,26 @@ def main(model, config_file, output_dir, verbose, debug, seed, perm_seed, config
     else:
         train_null_model(exname, config, ex_dir, perm_seed, observer)
 
-    # Evaluate the null weights zero-shot --------------------------------------
-    evaluations = MODELS[model]['evaluations']
-    if not evaluations:
+    # Evaluate the null weights ------------------------------------------------
+    to_run = MODELS[model]['evaluations']
+    if evaluations is not None:
+        unknown = [e for e in evaluations if e not in to_run]
+        if unknown:
+            raise ValueError(f"Unknown evaluation(s) for {model}: {', '.join(unknown)}. "
+                             f"Available: {', '.join(to_run) or 'none'}.")
+        to_run = [e for e in to_run if e in evaluations]
+    if not to_run:
         return
     if not weights_exist(ex_dir):
-        print(f"No fold weights in {ex_dir}; skipping zero-shot evaluations.")
+        print(f"No fold weights in {ex_dir}; skipping evaluations.")
         return
 
-    if 'transfer_atlas' in evaluations:
+    if 'transfer_atlas' in to_run:
         run_transfer_atlas(base_config, ex_dir, perm_dir, seed, verbose, observer)
-    if 'psilodep1' in evaluations:
+    if 'psilodep1' in to_run:
         run_psilodep1(ex_dir, perm_dir, seed, verbose, debug, observer, config_id)
+    if 'grail' in to_run:
+        run_grail(config, ex_dir, perm_dir, seed, perm_seed, verbose, debug, observer)
 
 
 if __name__ == "__main__":
@@ -229,6 +274,7 @@ if __name__ == "__main__":
     How to run:
     python -m scripts.permutation_null -m graphtrip -p 0 -s 0 -v -dbg
     python -m scripts.permutation_null -m graphtrip -p 0 -s 0 --eval_only
+    python -m scripts.permutation_null -m graphtrip -p 0 -s 0 --eval_only --evaluations grail
     """
     # Parse command line arguments
     parser = argparse.ArgumentParser()
@@ -245,8 +291,11 @@ if __name__ == "__main__":
     parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('-ci', '--config_id', type=int, default=None, help='Config ID')
     parser.add_argument('--eval_only', action='store_true',
-                        help='Skip training and only run the zero-shot evaluations of an '
-                             'existing null run; used to backfill earlier permutations')
+                        help='Skip training and only run the evaluations of an existing '
+                             'null run; used to backfill earlier permutations')
+    parser.add_argument('--evaluations', type=str, nargs='*', default=None,
+                        help='Restrict to these evaluations of the null weights, e.g. '
+                             '--evaluations grail. Defaults to all of the model\'s.')
     args = parser.parse_args()
 
     # Fall back onto the model defaults
@@ -263,4 +312,5 @@ if __name__ == "__main__":
 
     # Run the main function
     main(args.model, args.config_file, args.output_dir, args.verbose,
-         args.debug, args.seed, args.perm_seed, args.config_id, args.eval_only)
+         args.debug, args.seed, args.perm_seed, args.config_id, args.eval_only,
+         args.evaluations)

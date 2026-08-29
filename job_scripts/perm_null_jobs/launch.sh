@@ -16,9 +16,11 @@
 # Options:
 #   --perms A-B   restrict to permutation seeds A..B (default 0-99). For the array jobs
 #                 this becomes -J (A*10)-(B*10+9), because index = perm*10 + seed.
-#   --eval-only   run only the zero-shot evaluations of existing runs, skipping training.
+#   --eval-only   run only the evaluations of existing runs, skipping training.
 #                 graphtrip only; used to backfill permutations trained before the
 #                 evaluations were added.
+#   --eval NAME   submit <model>_NAME.sh, which runs only that one evaluation against
+#                 weights that already exist and never trains. Currently: grail.
 #   --debug       two-epoch smoke test; defaults --perms to 0-0 when not given otherwise.
 #   --dry-run     print the qsub command and exit without submitting.
 #
@@ -26,6 +28,8 @@
 #   bash job_scripts/perm_null_jobs/launch.sh graphtrip --perms 10-11 --dry-run
 #   bash job_scripts/perm_null_jobs/launch.sh graphtrip --perms 10-99
 #   bash job_scripts/perm_null_jobs/launch.sh graphtrip --perms 0-9 --eval-only
+#   bash job_scripts/perm_null_jobs/launch.sh graphtrip --eval grail --perms 0-0 --dry-run
+#   bash job_scripts/perm_null_jobs/launch.sh graphtrip --eval grail --perms 1-99
 #   bash job_scripts/perm_null_jobs/launch.sh selser
 #
 # Every step of scripts/permutation_null.py is guarded by an output-directory check, so
@@ -62,6 +66,7 @@ PERM_START=0
 PERM_END=99
 PERMS_GIVEN=0
 EVAL_ONLY=0
+EVAL=""
 DEBUG=0
 DRY_RUN=0
 
@@ -77,6 +82,10 @@ while [ $# -gt 0 ]; do
             PERMS_GIVEN=1
             shift 2 ;;
         --eval-only) EVAL_ONLY=1; shift ;;
+        --eval)
+            [ $# -ge 2 ] || { echo "Error: --eval needs an evaluation name." >&2; exit 1; }
+            EVAL="$2"
+            shift 2 ;;
         --debug)     DEBUG=1; shift ;;
         --dry-run)   DRY_RUN=1; shift ;;
         -h|--help)   usage 0 ;;
@@ -95,7 +104,14 @@ if ! echo " $MODELS " | grep -q " $MODEL "; then
     exit 1
 fi
 
-JOB_SCRIPT="${SCRIPT_DIR}/${MODEL}.sh"
+if [ -n "$EVAL" ]; then
+    # The evaluation job script carries its own --eval_only --evaluations flags, so they
+    # never have to travel through qsub -v as a value containing spaces.
+    [ "$EVAL_ONLY" -eq 0 ] || { echo "Error: --eval already implies --eval-only." >&2; exit 1; }
+    JOB_SCRIPT="${SCRIPT_DIR}/${MODEL}_${EVAL}.sh"
+else
+    JOB_SCRIPT="${SCRIPT_DIR}/${MODEL}.sh"
+fi
 [ -f "$JOB_SCRIPT" ] || { echo "Error: $JOB_SCRIPT not found." >&2; exit 1; }
 
 if [ "$PERM_END" -lt "$PERM_START" ]; then
@@ -103,7 +119,7 @@ if [ "$PERM_END" -lt "$PERM_START" ]; then
 fi
 
 if [ "$EVAL_ONLY" -eq 1 ] && [ "$MODEL" != "graphtrip" ]; then
-    echo "Error: --eval-only applies to graphtrip only; $MODEL has no zero-shot evaluations." >&2
+    echo "Error: --eval-only and --eval apply to graphtrip only; $MODEL has no evaluations." >&2
     exit 1
 fi
 
@@ -154,6 +170,7 @@ else
 fi
 
 echo "model         : ${MODEL}"
+[ -n "$EVAL" ] && echo "evaluation    : ${EVAL} (evaluation only, no training)"
 echo "permutations  : ${PERM_START}-${PERM_END} (${N_PERMS}) x ${SEEDS_PER_PERM} seeds = ${N_RUNS} runs"
 echo "array elements: ${N_JOBS}"
 echo "resources     : $(grep -m1 '^#PBS -l select' "$JOB_SCRIPT" | sed 's/^#PBS -l //')"

@@ -81,8 +81,10 @@ def cfg(dataset):
     medusa = False              # Only works with CFRHead MLP. Grails mlp1-mlp0 instead of ypred.
     this_k = None               # If None, compute all folds sequentially. If int, compute only fold this_k.
     this_sub = None             # If None, compute all subjects sequentially. If int, compute only subject this_sub.
-    n_permutations = 1000       # Number of permutations to use for null model analysis.
-    cohen_d_threshold = 0.8     # Threshold for Cohen's d to consider a feature significant.
+    n_permutations = 1000       # Spin permutations; used only if run_spin_test.
+    cohen_d_threshold = 0.8     # Cohen's d to select a feature; used only if run_spin_test.
+    run_spin_test = True        # If False, skip the spin test and save mean alignments only.
+    grail_features = None       # If a list, compute alignments for these features only.
 
     # Cross-cohort evaluation. Defaults leave the behaviour of a same-cohort run unchanged.
     transfer_eval = False           # Evaluating on a cohort the model was not trained on.
@@ -122,6 +124,9 @@ def match_config(config: Dict) -> Dict:
     # Other compatibiltiy checks
     num_z_samples = config_updates.get('num_z_samples', 100)
     assert num_z_samples > 1, 'num_z_samples must be > 1.'
+    if not config_updates.get('run_spin_test', True):
+        for key in ['n_permutations', 'cohen_d_threshold']:
+            assert key not in config, f'{key} is meaningless when run_spin_test is False.'
     if config_updates.get('medusa', False):
         assert config_updates['mlp_model']['model_type'] == 'CFRHead', \
             'GRAIL with medusa only works with CFRHead MLP.'
@@ -354,6 +359,8 @@ def run(_config):
     this_sub = _config.get('this_sub', None)
     cohen_d_threshold = _config['cohen_d_threshold']
     n_permutations = _config['n_permutations']
+    run_spin_test = _config['run_spin_test']
+    grail_features = _config['grail_features']
 
     # Validate this_k input
     max_num_folds = _config['dataset']['num_folds']
@@ -425,7 +432,9 @@ def run(_config):
     atlas = _config['dataset']['atlas']
     receptor_maps = load_receptor_maps(atlas)
     rsn_mapping, rsn_names = get_rsn_mapping(atlas)
-    rotated_roi_indices = load_rotated_rois(atlas, n_permutations=_config['n_permutations'])
+    # The rotated maps are the second GRAIL stage's only input
+    rotated_roi_indices = (load_rotated_rois(atlas, n_permutations=n_permutations)
+                           if run_spin_test else None)
 
     # Convert to tensors (needed for gradient computation later)
     rsn_mapping = torch.tensor(rsn_mapping, device=device)
@@ -434,6 +443,7 @@ def run(_config):
 
     num_folds = len(vgaes)
     feature_names = None
+    flat_rows = []  # (subject, fold) rows of mean alignments, when the spin test is off
     
     # Determine which folds to compute
     if this_k is None:
@@ -480,14 +490,14 @@ def run(_config):
                 ypred = get_ypred_from_z(z, vgae, mlp, batch)
                 ypred_grad = compute_gradient(ypred, z)
                 
-                # Store ypred_grad for null distribution computation
-                ypred_grads.append(ypred_grad.detach().clone())
-                zs_list.append(z)
-                
                 # Get reconstructed outputs
                 x, triu_edges = get_reconstructions(z, vgae, batch)
-                xs_list.append(x)
-                triu_edges_list.append(triu_edges)
+
+                if run_spin_test:
+                    ypred_grads.append(ypred_grad.detach().clone())
+                    zs_list.append(z)
+                    xs_list.append(x)
+                    triu_edges_list.append(triu_edges)
                 
                 # Compute interpretable features and their gradients
                 alignments = get_alignments_and_features(
@@ -498,12 +508,10 @@ def run(_config):
                     rsn_names=rsn_names, 
                     receptor_maps=receptor_maps, 
                     x=x, 
-                    node_attrs=node_attrs)
+                    node_attrs=node_attrs,
+                    selected_features=grail_features)
                 subject_alignments.append(alignments)
             
-            # First-stage GRAIL feature screening ----------------------------------------------
-            # Perform 1-sample t-test + cohen d across latent samples for each feature
-
             # Get feature names
             if feature_names is None:
                 feature_names = list(subject_alignments[0].keys())
@@ -511,6 +519,19 @@ def run(_config):
             # Convert alignments to dataframe and store mean alignments for this subject
             feature_alignments = pd.DataFrame(subject_alignments)
             observed_mean_alignments = feature_alignments.mean(axis=0)
+
+            if not run_spin_test:
+                # Mean alignments only, collected into one flat table per run rather than
+                # a file per (subject, fold): the null-model analysis runs a thousand of
+                # these, and the per-subject layout would leave 294k files behind.
+                flat_rows.append({'subject': sub,
+                                  'subject_id': int(batch.subject.item()) + 1,
+                                  'fold': k,
+                                  **observed_mean_alignments.to_dict()})
+                continue
+
+            # First-stage GRAIL feature screening ----------------------------------------------
+            # Perform 1-sample t-test + cohen d across latent samples for each feature
             
             # Perform 1-sample t-test for each feature 
             feature_stats = test_column_significance(feature_alignments, test_type='t-test')
@@ -613,6 +634,12 @@ def run(_config):
             feature_pvals_df = pd.DataFrame([feature_pvals])
             feature_pvals_df.to_csv(os.path.join(sub_output_dir, f'k{k}_feature_pvals.csv'), index=False)
             ex.add_artifact(os.path.join(sub_output_dir, f'k{k}_feature_pvals.csv'))
+
+    # Save the flat mean-alignment table ---------------------------------------
+    if not run_spin_test:
+        flat_path = os.path.join(output_dir, 'mean_alignments.csv')
+        pd.DataFrame(flat_rows).to_csv(flat_path, index=False)
+        ex.add_artifact(flat_path)
 
     # Log the runtime
     run_time = (time()-start_time)/60
