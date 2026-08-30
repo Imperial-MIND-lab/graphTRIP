@@ -10,9 +10,6 @@ Panels:
      clinical-only MLP benchmark
 - f. permutation importance
 
-The partial correlations moved to the graphtrip_partial_corrs supplementary target, and
-the feature-ablation raincloud to the feature_ablation supplementary target.
-
 Author: Hanna M. Tolle
 Date: 2026-08-10
 License: BSD 3-Clause

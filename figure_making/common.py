@@ -525,7 +525,7 @@ def _domain_matrix(ax, labels, domains, domain_names):
         spine.set_visible(False)
 
 
-def feature_ablation_panel(specs, domains, out, name, num_subs, reference_model,
+def feature_ablation_panel(specs, domains, out, name, reference_model,
                            domain_names=None, figsize=(9, 4), offset=4, table_prefix=''):
     '''
     Raincloud of the feature ablations, with a domain-presence matrix down the left.
@@ -536,8 +536,7 @@ def feature_ablation_panel(specs, domains, out, name, num_subs, reference_model,
         domains (dict): {label: iterable of domain names the model received}.
         out (FigureOutput): Output handle of the calling target.
         name (str): Panel filename without extension.
-        num_subs (int): Cohort size, for the significance threshold.
-        reference_model (str): Label of the full model, drawn as the reference line.
+        reference_model (str): Label of the full model, whose mean r is reported.
         domain_names (list): Column order of the matrix. Defaults to INPUT_DOMAINS.
         table_prefix (str): Prefix for the comparison tables.
 
@@ -555,9 +554,7 @@ def feature_ablation_panel(specs, domains, out, name, num_subs, reference_model,
     if reference_model not in distributions:
         raise ValueError(f'Reference model {reference_model} is not among {order}.')
 
-    r_min = min_significant_r(num_subs)
     reference_r = float(np.mean(distributions[reference_model]))
-    out.log(f'Minimum significant r-value: {r_min}')
     out.log(f'Reference model ({reference_model}) mean r: {reference_r:.4f}')
     out.log()
 
@@ -573,7 +570,7 @@ def feature_ablation_panel(specs, domains, out, name, num_subs, reference_model,
         gridspec_kw={'width_ratios': [0.45 * len(domain_names), 4], 'wspace': 0.06})
 
     plot_raincloud(plotted, palette=palette, ax=ax_rain, alpha=0.5, box_alpha=0.3,
-                   vline=reference_r, shade_below=r_min, sort_by_mean=False)
+                   sort_by_mean=False)
     ax_rain.set_xlabel('r')
     ax_rain.tick_params(labelleft=False)
 

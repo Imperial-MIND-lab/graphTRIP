@@ -22,7 +22,7 @@ from figure_making.panels import supp_bdi                  # noqa: F401
 from figure_making.panels import supp_aal                  # noqa: F401
 from figure_making.panels import supp_psilodep1            # noqa: F401
 from figure_making.panels import supp_medusa               # noqa: F401
-from figure_making.panels import supp_medusa_ablations     # noqa: F401
+from figure_making.panels import supp_input_domain_ablations  # noqa: F401
 from figure_making.panels import supp_interpretability     # noqa: F401
 from figure_making.panels import supp_permutation_null     # noqa: F401
 from figure_making.panels import supp_grail_null        # noqa: F401
