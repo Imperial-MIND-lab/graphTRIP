@@ -20,7 +20,8 @@ from scipy.stats import pearsonr, norm, t as t_dist
 from statsmodels.stats.multitest import fdrcorrection
 
 from utils.helpers import (
-    aggregate_importance_scores, aggregate_prediction_results, sort_features)
+    aggregate_importance_scores, aggregate_prediction_results, sort_features,
+    summarise_seed_metrics)
 from utils.statsalg import (
     min_significant_r, compare_model_performances, compute_within_group_pearsonr)
 from utils.plotting import (
@@ -442,6 +443,95 @@ def report_model_comparison(distributions, out, model_of_interest, table_prefix=
     return global_df, posthoc_df
 
 
+# Whether a larger value is the better model, per metric. mse is left out: it is a
+# monotone transform of rmse, so the rank tests below return identical p-values.
+SEED_METRICS = {'r': 'higher', 'r2': 'higher', 'mae': 'lower', 'rmse': 'lower'}
+
+DEFAULT_PREDICTION_FILE = 'prediction_results.csv'
+
+
+def collect_seed_metric_table(specs, prediction_file=DEFAULT_PREDICTION_FILE):
+    '''
+    Per-seed r, r2, mae, mse and rmse for several models, as one long dataframe.
+
+    final_metrics.csv carries only r and mae, so the remaining metrics are recomputed
+    from each seed's predictions by summarise_seed_metrics, which caches them in the
+    model directory. 
+
+    Parameters:
+    ----------
+        specs (list): (label, directory) pairs, each directory holding seed_*/ subdirs.
+
+    Returns:
+    -------
+        pd.DataFrame: One row per model and seed, with a 'model' column.
+    '''
+    summary_file = ('seed_metrics_summary.csv'
+                    if prediction_file == DEFAULT_PREDICTION_FILE
+                    else f'seed_metrics_{os.path.splitext(prediction_file)[0]}.csv')
+
+    frames = []
+    for label, base_dir in specs:
+        require(base_dir)
+        metrics = summarise_seed_metrics(base_dir=base_dir,
+                                         prediction_file=prediction_file,
+                                         summary_file=summary_file).copy()
+        metrics['seed'] = metrics['seed'].astype(str).str.replace('seed_', '').astype(int)
+        metrics['model'] = label
+        frames.append(metrics)
+    return pd.concat(frames, ignore_index=True)
+
+
+def compare_across_metrics(seed_table, order, model_of_interest, metrics=None):
+    """
+    Friedman and pairwise Wilcoxon over several performance metrics, as one long table.
+
+    The r comparison says whether an ablation loses rank-order accuracy; mae and rmse say
+    whether it loses calibrated accuracy, and the two need not agree. Each metric is
+    corrected as its own BH family, since the metrics are alternative readings of the
+    same runs rather than separate hypotheses.
+
+    Parameters:
+    ----------
+        seed_table (pd.DataFrame): Output of collect_seed_metric_table.
+        order (list): Model labels to compare, in panel order.
+        model_of_interest (str): Label of the full model each ablation is tested against.
+        metrics (list): Metric columns to test. Defaults to SEED_METRICS.
+
+    Returns:
+    -------
+        pd.DataFrame: One row per test, with columns
+                      metric, test, model_a, model_b, n, statistic, p, p_bh, significant.
+    """
+    metrics = list(SEED_METRICS if metrics is None else metrics)
+    rows = []
+
+    for metric in metrics:
+        # Seeds are the paired unit, so a seed missing for any model is dropped for all.
+        per_seed = seed_table.pivot(
+            index='seed', columns='model', values=metric)[order].dropna()
+        distributions = {label: per_seed[label].tolist() for label in order}
+
+        global_df, pairwise_df = compare_model_performances(
+            distributions, is_dependent=True, model_of_interest=model_of_interest)
+
+        rows.append({'metric': metric, 'test': 'friedman', 'model_a': '(all)',
+                     'model_b': '', 'n': len(per_seed),
+                     'statistic': global_df['Statistic'].iloc[0],
+                     'p': global_df['P-Value'].iloc[0], 'p_bh': np.nan,
+                     'significant': bool(global_df['Significant (alpha=0.05)'].iloc[0])})
+
+        for _, row in pairwise_df.iterrows():
+            rows.append({
+                'metric': metric, 'test': 'wilcoxon',
+                'model_a': row['Model A'], 'model_b': row['Model B'], 'n': len(per_seed),
+                'statistic': np.nan, 'p': row['Original P-Value'],
+                'p_bh': row['Corrected P-Value'],
+                'significant': bool(row['Reject Null (Significant Difference)'])})
+
+    return pd.DataFrame(rows)
+
+
 def model_comparison_panels(specs, out, name, num_subs, model_of_interest,
                             sort_by_mean=True, offset=4, figsize=(8, 4),
                             skip_missing=False, table_prefix=''):
@@ -525,38 +615,23 @@ def _domain_matrix(ax, labels, domains, domain_names):
         spine.set_visible(False)
 
 
-def feature_ablation_panel(specs, domains, out, name, reference_model,
-                           domain_names=None, figsize=(9, 4), offset=4, table_prefix=''):
+def feature_ablation_panel(distributions, domains, out, name,
+                           domain_names=None, figsize=(9, 4), offset=4):
     '''
     Raincloud of the feature ablations, with a domain-presence matrix down the left.
 
+    Takes the per-seed values rather than a directory, so that the panel and the tests
+    beside it are guaranteed to be reading the same numbers.
+
     Parameters:
     ----------
-        specs (list): (label, directory, metrics_filename) triples, ordered top to bottom.
+        distributions (dict): {label: r per seed}, ordered top to bottom.
         domains (dict): {label: iterable of domain names the model received}.
         out (FigureOutput): Output handle of the calling target.
         name (str): Panel filename without extension.
-        reference_model (str): Label of the full model, whose mean r is reported.
         domain_names (list): Column order of the matrix. Defaults to INPUT_DOMAINS.
-        table_prefix (str): Prefix for the comparison tables.
-
-    Returns:
-    -------
-        dict: {model: [r per seed]}, in the order given.
     '''
     domain_names = list(INPUT_DOMAINS if domain_names is None else domain_names)
-
-    metrics_df = collect_seed_metrics(specs)
-    distributions = metrics_to_distributions(metrics_df, sort_by_mean=False)
-    order = [label for label, _, _ in specs if label in distributions]
-    distributions = {label: distributions[label] for label in order}
-
-    if reference_model not in distributions:
-        raise ValueError(f'Reference model {reference_model} is not among {order}.')
-
-    reference_r = float(np.mean(distributions[reference_model]))
-    out.log(f'Reference model ({reference_model}) mean r: {reference_r:.4f}')
-    out.log()
 
     # plot_raincloud places the first entry at the bottom, so reverse to make the order
     # of `specs` read top to bottom.
@@ -580,9 +655,6 @@ def feature_ablation_panel(specs, domains, out, name, reference_model,
     if save_path:
         fig.savefig(save_path, bbox_inches='tight')
     plt.close(fig)
-
-    report_model_comparison(distributions, out, reference_model, table_prefix=table_prefix)
-    return distributions
 
 
 # Biomarker categories (cells 74, 143, 145) ----------------------------------------------

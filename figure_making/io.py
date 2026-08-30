@@ -33,12 +33,15 @@ class FigureOutput:
         self.n_figs = 0
         self.n_tables = 0
 
-    def _ensure_dir(self):
+    def _ensure_dir(self, name=''):
         '''
         Creates the output directory on first write, so that a target skipped for
         missing inputs does not leave an empty directory behind.
+
+        A name may carry a subdirectory ('graphtrip/raincloud'), which lets a target
+        group its panels and tables by model without needing several FigureOutputs.
         '''
-        os.makedirs(self.dir, exist_ok=True)
+        os.makedirs(os.path.join(self.dir, os.path.dirname(name)), exist_ok=True)
 
     # Figures ---------------------------------------------------------------------------
 
@@ -59,7 +62,7 @@ class FigureOutput:
         '''
         if not self.cfg.save:
             return None
-        self._ensure_dir()
+        self._ensure_dir(name)
         self.n_figs += 1
         return os.path.join(self.dir, f'{name}.{ext or self.cfg.fmt}')
 
@@ -69,7 +72,7 @@ class FigureOutput:
         '''Writes a dataframe as <name>.csv into this target's directory.'''
         if not self.cfg.save:
             return None
-        self._ensure_dir()
+        self._ensure_dir(name)
         self.n_tables += 1
         path = os.path.join(self.dir, f'{name}.csv')
         df.to_csv(path, index=index)
@@ -79,7 +82,7 @@ class FigureOutput:
         '''Writes text as <name>.txt into this target's directory.'''
         if not self.cfg.save:
             return None
-        self._ensure_dir()
+        self._ensure_dir(name)
         path = os.path.join(self.dir, f'{name}.txt')
         with open(path, 'w') as f:
             f.write(content if content.endswith('\n') else content + '\n')
