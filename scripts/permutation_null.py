@@ -16,10 +16,14 @@ Dependencies:
 Outputs:
 - outputs/<model tree>/permutation_null/perm_{perm_seed}/seed_{seed}/
 
-graphTRIP additionally evaluates its null weights zero-shot, and runs GRAIL on them:
-- .../perm_{perm_seed}/transfer_atlas/{schaefer200,aal}/seed_{seed}/
-- .../perm_{perm_seed}/psilodep1/seed_{seed}/
-- .../perm_{perm_seed}/grail/seed_{seed}/mean_alignments.csv
+graphTRIP and Medusa additionally run GRAIL on their null weights, and graphTRIP evaluates
+them zero-shot:
+- .../perm_{perm_seed}/transfer_atlas/{schaefer200,aal}/seed_{seed}/   (graphTRIP)
+- .../perm_{perm_seed}/psilodep1/seed_{seed}/                          (graphTRIP)
+- .../perm_{perm_seed}/grail/seed_{seed}/mean_alignments.csv           (both)
+
+Medusa's GRAIL output carries a grail_mode column holding its three CFRHead outputs
+(escitalopram, psilocybin, ite), so its table has three rows per (subject, fold).
 
 Author: Hanna M. Tolle
 Date: 2026-08-26
@@ -73,19 +77,24 @@ def no_clinical_config(config):
 
 # Model settings. 'apply' rewrites the base config the way the model's own driver script
 # does, so the null model is trained by exactly the same recipe as its true-label
-# counterpart; 'evaluations' lists the zero-shot analyses to run on the null weights.
+# counterpart; 'evaluations' lists the zero-shot analyses to run on the null weights;
+# 'grail' overrides the GRAIL defaults for models that need them.
 MODELS = {
     'graphtrip': {'config_file': GRAPHTRIP_CONFIG_FILE,
                   'exname': 'train_jointly',
                   'output_dir': 'outputs/graphtrip/',
                   'apply': None,
-                  'evaluations': ['transfer_atlas', 'psilodep1', 'grail']},
+                  'evaluations': ['transfer_atlas', 'psilodep1', 'grail'],
+                  'grail': {}},
 
+    # Medusa's three GRAIL modes share their latent samples, reconstructions and feature
+    # gradients, so one pass over the features serves all three
     'medusa': {'config_file': MEDUSA_CONFIG_FILE,
                'exname': 'train_cfrnet',
                'output_dir': 'outputs/medusa_graphtrip/',
                'apply': None,
-               'evaluations': []},
+               'evaluations': ['grail'],
+               'grail': {'medusa_modes': ['escitalopram', 'psilocybin', 'ite']}},
 
     'graphtrip_bdi': {'config_file': GRAPHTRIP_CONFIG_FILE,
                       'exname': 'train_jointly',
@@ -178,7 +187,8 @@ def run_psilodep1(weights_dir, perm_dir, seed, verbose, debug, observer, config_
     run(exname, observer, config_updates)
 
 
-def run_grail(config, weights_dir, perm_dir, seed, perm_seed, verbose, debug, observer):
+def run_grail(model, config, weights_dir, perm_dir, seed, perm_seed, verbose, debug,
+              observer):
     '''
     Runs GRAIL on the null weights, without the spin permutation test.
     '''
@@ -201,6 +211,9 @@ def run_grail(config, weights_dir, perm_dir, seed, perm_seed, verbose, debug, ob
                       'medusa': False,
                       'run_spin_test': False,
                       'grail_features': GRAIL_FEATURES}
+
+    # Model-specific GRAIL settings, e.g. Medusa's three CFRHead outputs
+    config_updates.update(MODELS[model].get('grail', {}))
 
     # GRAIL never reads graph.y, so the permutation is inert here. It is set to keep the
     # config match against the null run's own config.json exact, and to record provenance.
@@ -266,7 +279,7 @@ def main(model, config_file, output_dir, verbose, debug, seed, perm_seed, config
     if 'psilodep1' in to_run:
         run_psilodep1(ex_dir, perm_dir, seed, verbose, debug, observer, config_id)
     if 'grail' in to_run:
-        run_grail(config, ex_dir, perm_dir, seed, perm_seed, verbose, debug, observer)
+        run_grail(model, config, ex_dir, perm_dir, seed, perm_seed, verbose, debug, observer)
 
 
 if __name__ == "__main__":
@@ -275,6 +288,7 @@ if __name__ == "__main__":
     python -m scripts.permutation_null -m graphtrip -p 0 -s 0 -v -dbg
     python -m scripts.permutation_null -m graphtrip -p 0 -s 0 --eval_only
     python -m scripts.permutation_null -m graphtrip -p 0 -s 0 --eval_only --evaluations grail
+    python -m scripts.permutation_null -m medusa -p 0 -s 0 --eval_only --evaluations grail
     """
     # Parse command line arguments
     parser = argparse.ArgumentParser()

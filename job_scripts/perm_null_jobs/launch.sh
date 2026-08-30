@@ -17,8 +17,8 @@
 #   --perms A-B   restrict to permutation seeds A..B (default 0-99). For the array jobs
 #                 this becomes -J (A*10)-(B*10+9), because index = perm*10 + seed.
 #   --eval-only   run only the evaluations of existing runs, skipping training.
-#                 graphtrip only; used to backfill permutations trained before the
-#                 evaluations were added.
+#                 graphtrip and medusa only; used to backfill permutations trained before
+#                 the evaluations were added.
 #   --eval NAME   submit <model>_NAME.sh, which runs only that one evaluation against
 #                 weights that already exist and never trains. Currently: grail.
 #   --debug       two-epoch smoke test; defaults --perms to 0-0 when not given otherwise.
@@ -30,6 +30,8 @@
 #   bash job_scripts/perm_null_jobs/launch.sh graphtrip --perms 0-9 --eval-only
 #   bash job_scripts/perm_null_jobs/launch.sh graphtrip --eval grail --perms 0-0 --dry-run
 #   bash job_scripts/perm_null_jobs/launch.sh graphtrip --eval grail --perms 1-99
+#   bash job_scripts/perm_null_jobs/launch.sh medusa --eval grail --perms 0-0 --dry-run
+#   bash job_scripts/perm_null_jobs/launch.sh medusa --eval grail --perms 1-99
 #   bash job_scripts/perm_null_jobs/launch.sh selser
 #
 # Every step of scripts/permutation_null.py is guarded by an output-directory check, so
@@ -41,6 +43,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 MODELS="graphtrip medusa graphtrip_bdi no_clinical_features control_mlp_raw selser"
+# Models whose null weights have evaluations to run against them; the rest train only.
+EVAL_MODELS="graphtrip medusa"
 SEEDS_PER_PERM=10
 
 # The processed-dataset caches every job reads. PyTorch Geometric guards these with a bare
@@ -118,8 +122,8 @@ if [ "$PERM_END" -lt "$PERM_START" ]; then
     echo "Error: --perms range is empty ($PERM_START-$PERM_END)." >&2; exit 1
 fi
 
-if [ "$EVAL_ONLY" -eq 1 ] && [ "$MODEL" != "graphtrip" ]; then
-    echo "Error: --eval-only and --eval apply to graphtrip only; $MODEL has no evaluations." >&2
+if [ "$EVAL_ONLY" -eq 1 ] && ! echo " $EVAL_MODELS " | grep -q " $MODEL "; then
+    echo "Error: $MODEL has no evaluations; --eval-only and --eval apply to: $EVAL_MODELS." >&2
     exit 1
 fi
 
