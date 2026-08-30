@@ -163,22 +163,29 @@ def collect_empirical(parts):
     return prediction_metrics(agg['label'], agg['prediction']), seeds, agg
 
 
-def collect_null(parts, true_labels):
+def collect_null(parts, true_labels, n_seeds):
     '''
     Both levels of the null, plus the true-label probe.
 
     The probe correlates each null ensemble's predictions with the *unpermuted* outcome.
     A pipeline that leaked the outcome would recover it even when trained on permuted
     labels, so this is a sharper leakage test than the permuted-label correlation.
+
+    Permutations with fewer than n_seeds (i.e. incomplete) runs are dropped.
     '''
     base = output_dir(*parts)
     dirs = perm_dirs(base)
     if not dirs:
         raise FileNotFoundError(f'No perm_* directories in {base}')
 
-    ensemble, seed_level = [], []
+    ensemble, seed_level, incomplete = [], [], []
     for perm_dir in dirs:
         perm_seed = int(os.path.basename(perm_dir).split('_')[-1])
+
+        found = len(glob.glob(os.path.join(perm_dir, 'seed_*', 'prediction_results.csv')))
+        if found != n_seeds:
+            incomplete.append((perm_seed, found))
+            continue
 
         agg = ensemble_predictions(perm_dir).sort_values('subject_id')
         row = {'perm_seed': perm_seed, **prediction_metrics(agg['label'], agg['prediction'])}
@@ -190,7 +197,10 @@ def collect_null(parts, true_labels):
         seeds.insert(0, 'perm_seed', perm_seed)
         seed_level.append(seeds)
 
-    return pd.DataFrame(ensemble), pd.concat(seed_level, ignore_index=True)
+    if not ensemble:
+        raise FileNotFoundError(f'No complete {n_seeds}-seed permutations in {base}')
+
+    return (pd.DataFrame(ensemble), pd.concat(seed_level, ignore_index=True), incomplete)
 
 
 def collect_transfer(null_subdir, observed_parts, prediction_file):
@@ -261,7 +271,7 @@ def ensemble_size_effects(empirical_preds, empirical_labels, null_runs, rng):
     artefact of ensembling. Observed and null are always computed at the same ensemble
     size, since comparing across sizes would not be a valid test.
     '''
-    n_seeds = len(empirical_preds)
+    n_seeds = min([len(empirical_preds)] + [len(preds) for preds, _ in null_runs])
     rows = []
     for k in [k for k in ENSEMBLE_SIZES if k <= n_seeds]:
         observed = [prediction_metrics(
@@ -449,15 +459,20 @@ def gather_models(out, rng):
     Models are skipped individually rather than failing the target, so the panel keeps
     working while the remaining permutation arrays are still running.
     '''
-    collected, invariance, missing = [], [], []
+    collected, invariance, missing, partial = [], [], [], []
     for label, null_parts, empirical_parts in MODELS:
         try:
             observed, empirical_seeds, empirical_agg = collect_empirical(empirical_parts)
             true_labels = empirical_agg.sort_values('subject_id')['label'].values
-            ensemble, seed_level = collect_null(null_parts, true_labels)
+            n_seeds = len(empirical_seeds)
+            ensemble, seed_level, incomplete = collect_null(
+                null_parts, true_labels, n_seeds)
         except (MissingInput, FileNotFoundError, ValueError) as error:
             missing.append(f'{label} ({error})')
             continue
+        if incomplete:
+            partial.append(f'{label}: ' + ', '.join(
+                f'perm_{p} ({n}/{n_seeds} seeds)' for p, n in incomplete))
 
         collected.append({
             'label': label,
@@ -475,13 +490,19 @@ def gather_models(out, rng):
         empirical_preds, empirical_labels = seed_predictions(output_dir(*empirical_parts))
         null_runs = [run for run in (seed_predictions(d)
                                      for d in perm_dirs(output_dir(*null_parts)))
-                     if run[0] is not None]
+                     if run[0] is not None and len(run[0]) == n_seeds]
         if empirical_preds is not None and len(empirical_preds) > 1 and null_runs:
             invariance.append((label, ensemble_size_effects(
                 empirical_preds, empirical_labels, null_runs, rng)))
 
     if missing:
         out.log(f'No permutation null for: {"; ".join(missing)}.')
+        out.log()
+    if partial:
+        out.log('Permutations dropped for having an incomplete seed set -- a draw built '
+                'from fewer seeds carries more seed noise and is not the same statistic:')
+        for line in partial:
+            out.log(f'  {line}')
         out.log()
     return collected, invariance
 
