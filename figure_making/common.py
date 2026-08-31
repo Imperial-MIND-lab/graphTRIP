@@ -25,7 +25,7 @@ from utils.helpers import (
 from utils.statsalg import (
     min_significant_r, compare_model_performances, compute_within_group_pearsonr)
 from utils.plotting import (
-    COOLWARM, ESCIT, PSILO, NEUTRAL,
+    ALPHA_SCATTER, BOX_COLOR, COOLWARM, ESCIT, PSILO, NEUTRAL,
     true_vs_pred_scatter, plot_raincloud, plot_metric_boxplot,
     permutation_importance_bar_chart,
     plot_fc_reconstruction_single, plot_brain_surface_grid, plot_colormap_stack,
@@ -80,9 +80,19 @@ ARM_NAMES = {1.0: 'Psilocybin', -1.0: 'Escitalopram'}
 def fmt_p(pval):
     '''
     Formats a p-value for a statistics report: a 4-decimal float down to 0.0001, then
-    scientific with one decimal. 
+    scientific with one decimal.
     '''
     return f'{pval:.4f}' if pval >= 1e-4 else f'{pval:.1e}'
+
+
+def fmt_p_floor(pval, decimals=3):
+    '''
+    Formats a p-value for a panel title, without rounding small values to zero. Unlike
+    fmt_p, values below the floor are written as an inequality rather than in scientific
+    notation, which reads better inside a figure.
+    '''
+    floor = 10 ** -decimals
+    return f'p<{floor:.{decimals}f}' if pval < floor else f'p={pval:.{decimals}f}'
 
 
 def attach_annotations(results, study='psilodep2', columns=('Condition', 'QIDS_Before')):
@@ -108,6 +118,126 @@ def attach_annotations(results, study='psilodep2', columns=('Condition', 'QIDS_B
         results = results.merge(lookup[['subject_id'] + missing],
                                 on='subject_id', how='left')
     return results
+
+
+# Baseline severity of the two cohorts ---------------------------------------------------
+
+# Both groups received psilocybin: the psilodep2 escitalopram arm is dropped, and
+# psilodep1 has no second arm.
+BASELINE_GROUPS = [
+    {'study': 'psilodep2', 'label': 'psilodep2\n(psilocybin arm)', 'condition': 1},
+    {'study': 'psilodep1', 'label': 'psilodep1\n(all psilocybin)', 'condition': None},
+]
+BASELINE_MEASURES = [('QIDS', 'QIDS_Before'), ('BDI', 'BDI_Before')]
+
+JITTER_SD = 0.06
+MARKER_SIZE = 28
+SIG_ALPHA = 0.05
+
+
+def study_annotations(study):
+    '''
+    Annotations of the patients a study contributes to the models.
+
+    The filter is datasets.get_default_prefilter(), the same one BrainGraphDataset applies,
+    so the rows describe exactly the patients that are trained and tested on.
+    '''
+    from datasets import get_default_prefilter
+    from utils.annotations import load_annotations
+    return load_annotations(study, filter=get_default_prefilter(study))
+
+
+def _baseline_samples(group, column):
+    '''Baseline scores of one study group, dropping patients without a score.'''
+    df = study_annotations(group['study'])
+    if group['condition'] is not None:
+        df = df[df['Condition_numeric'] == group['condition']]
+    return df[column].dropna().to_numpy(dtype=float)
+
+
+def _compare_studies(measure, column, groups, samples):
+    '''
+    Welch's t-test and Cohen's d between the baseline scores of two independent groups.
+
+    Welch rather than Student, because the two studies differ in sample size and the
+    equality of their variances is not established.
+    '''
+    a, b = samples
+    t, pval = stats.ttest_ind(a, b, equal_var=False)
+    pooled_sd = np.sqrt(((len(a) - 1) * a.var(ddof=1) + (len(b) - 1) * b.var(ddof=1))
+                        / (len(a) + len(b) - 2))
+    return {'measure': measure, 'column': column,
+            'group1': groups[0]['study'], 'n1': len(a),
+            'mean1': a.mean(), 'std1': a.std(ddof=1),
+            'group2': groups[1]['study'], 'n2': len(b),
+            'mean2': b.mean(), 'std2': b.std(ddof=1),
+            't': t, 'p': pval, 'cohen_d': (a.mean() - b.mean()) / pooled_sd}
+
+
+def _baseline_group_panel(ax, samples, labels, ylabel, rng):
+    '''Boxplots of each group's baseline scores, with the individual patients on top.'''
+    scores = pd.DataFrame({'score': np.concatenate(samples),
+                           'group': np.repeat(labels, [len(s) for s in samples])})
+    sns.boxplot(data=scores, x='group', y='score', order=labels,
+                color=BOX_COLOR, width=0.5, showfliers=False, ax=ax, zorder=1)
+
+    # Every patient shown here received psilocybin, hence a single marker style.
+    for position, values in enumerate(samples):
+        x_jitter = position + rng.normal(0, JITTER_SD, size=len(values))
+        ax.scatter(x_jitter, values, marker='d', color=PSILO, edgecolor=PSILO,
+                   s=MARKER_SIZE, alpha=ALPHA_SCATTER, zorder=2)
+
+    ax.set_xlabel('')
+    ax.set_ylabel(ylabel)
+
+
+def _add_significance_marker(ax, pval, positions=(0., 1.)):
+    '''Marks a significant group difference with an asterisk centred above the boxes.'''
+    if pval >= SIG_ALPHA:
+        return
+    ax.text(np.mean(positions), 0.97, '*', transform=ax.get_xaxis_transform(),
+            color='red', fontsize=16, fontweight='bold', ha='center', va='top')
+
+
+def baseline_severity_panels(out, name, rng, groups=None, measures=None):
+    '''
+    One boxplot per severity measure, comparing the baseline scores of the two cohorts.
+
+    Parameters:
+    ----------
+        out (FigureOutput): Output handle of the calling target.
+        name (str): Panel filename without extension.
+        rng (np.random.Generator): Source of the marker jitter.
+
+    Returns:
+    -------
+        pd.DataFrame: One row per measure, with the group means and Welch's t-test.
+    '''
+    groups = list(BASELINE_GROUPS if groups is None else groups)
+    measures = list(BASELINE_MEASURES if measures is None else measures)
+
+    fig, axes = plt.subplots(1, len(measures), figsize=(3 * len(measures), 3.5))
+    axes = np.atleast_1d(axes)
+
+    rows = []
+    for ax, (measure, column) in zip(axes, measures):
+        samples = [_baseline_samples(group, column) for group in groups]
+        labels = [f"{group['label']}\nn={len(sample)}"
+                  for group, sample in zip(groups, samples)]
+        _baseline_group_panel(ax, samples, labels, f'{measure} Score', rng)
+
+        test = _compare_studies(measure, column, groups, samples)
+        _add_significance_marker(ax, test['p'])
+        ax.set_title(f"{measure}: t={test['t']:.2f}, {fmt_p_floor(test['p'])}, "
+                     f"d={test['cohen_d']:.2f}")
+        rows.append(test)
+
+    plt.tight_layout()
+    save_path = out.fig(name)
+    if save_path:
+        plt.savefig(save_path)
+    plt.close(fig)
+    return pd.DataFrame(rows)
 
 
 def prediction_metrics(results, label, xcol='label', ycol='prediction'):
@@ -588,6 +718,15 @@ def importance_panel(importance_dir, weights_dir, out, name='importance_scores_a
 
 # Column order of the domain-presence matrix.
 INPUT_DOMAINS = ['Clinical', 'FC', 'REACT']
+
+# Names of the ablated models in the figures, keyed by the results directory they live in.
+# Shared so that the psilodep2 ablation panels and the psilodep1 transfer panels label the
+# same model identically.
+ABLATION_NAMES = {
+    'no_clinical_features': 'FC + REACT',
+    'no_node_features': 'FC + clinical',
+    'no_react_no_clinical': 'FC only',
+}
 
 
 def _domain_matrix(ax, labels, domains, domain_names):

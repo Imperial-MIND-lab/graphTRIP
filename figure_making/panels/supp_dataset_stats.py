@@ -14,10 +14,10 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from scipy import stats
 
-from datasets import get_default_prefilter
-from utils.annotations import load_annotations
 from utils.plotting import ALPHA_SCATTER, BOX_COLOR, ESCIT, NEUTRAL2, PSILO
 
+from figure_making.common import (
+    JITTER_SD, MARKER_SIZE, baseline_severity_panels, fmt_p_floor, study_annotations)
 from figure_making.registry import register
 
 
@@ -50,17 +50,6 @@ QIDS_SCATTER_PANELS = [
 CONDITION_STYLES = [(1, 'Psilocybin', 'd', PSILO),
                     (-1, 'Escitalopram', 'o', ESCIT)]
 
-# Baseline severity of the psilocybin patients of both studies: the psilodep2
-# escitalopram arm is dropped so that both groups received psilocybin.
-BASELINE_GROUPS = [
-    {'study': 'psilodep2', 'label': 'psilodep2\n(psilocybin arm)', 'condition': 1},
-    {'study': 'psilodep1', 'label': 'psilodep1\n(all psilocybin)', 'condition': None},
-]
-BASELINE_MEASURES = [('QIDS', 'QIDS_Before'), ('BDI', 'BDI_Before')]
-
-JITTER_SD = 0.06
-MARKER_SIZE = 28
-SIG_ALPHA = 0.05
 
 
 def _compare_arms(df, column):
@@ -138,77 +127,6 @@ def _paired_test(study, measure, before, after):
             't': t, 'p': pval, 'cohen_dz': diff.mean() / diff.std(ddof=1)}
 
 
-def _fmt_p(pval, decimals=3):
-    '''Formats a p-value for a panel title, without rounding small values to zero.'''
-    floor = 10 ** -decimals
-    return f'p<{floor:.{decimals}f}' if pval < floor else f'p={pval:.{decimals}f}'
-
-
-def _load_study_annotations(study):
-    '''
-    Loads the annotations of the patients a study contributes to the models.
-
-    The filter is datasets.get_default_prefilter(), the same one BrainGraphDataset
-    applies, so that every panel here describes exactly the patients that are trained
-    and tested on: all non-excluded psilodep2 patients, and the non-excluded psilodep1
-    patients that have a pre-treatment scan.
-    '''
-    return load_annotations(study, filter=get_default_prefilter(study))
-
-
-def _baseline_samples(group, column):
-    '''Returns the baseline scores of one study group, dropping patients without a score.'''
-    df = _load_study_annotations(group['study'])
-    if group['condition'] is not None:
-        df = df[df['Condition_numeric'] == group['condition']]
-    return df[column].dropna().to_numpy(dtype=float)
-
-
-def _compare_studies(measure, column, groups, samples):
-    '''
-    Welch's t-test and Cohen's d between the baseline scores of two independent groups.
-
-    Welch rather than Student, because the two studies differ in sample size and the
-    equality of their variances is not established.
-    '''
-    a, b = samples
-    t, pval = stats.ttest_ind(a, b, equal_var=False)
-    pooled_sd = np.sqrt(((len(a) - 1) * a.var(ddof=1) + (len(b) - 1) * b.var(ddof=1))
-                        / (len(a) + len(b) - 2))
-    return {'measure': measure, 'column': column,
-            'group1': groups[0]['study'], 'n1': len(a),
-            'mean1': a.mean(), 'std1': a.std(ddof=1),
-            'group2': groups[1]['study'], 'n2': len(b),
-            'mean2': b.mean(), 'std2': b.std(ddof=1),
-            't': t, 'p': pval, 'cohen_d': (a.mean() - b.mean()) / pooled_sd}
-
-
-def _group_panel(ax, samples, labels, ylabel, rng):
-    '''Boxplots of the baseline scores of each group, with the individual patients on top.'''
-    scores = pd.DataFrame({'score': np.concatenate(samples),
-                           'group': np.repeat(labels, [len(s) for s in samples])})
-    sns.boxplot(data=scores, x='group', y='score', order=labels,
-                color=BOX_COLOR, width=0.5, showfliers=False, ax=ax, zorder=1)
-
-    # Every patient shown here received psilocybin, hence a single marker style.
-    _, _, marker, color = CONDITION_STYLES[0]
-    for position, values in enumerate(samples):
-        x_jitter = position + rng.normal(0, JITTER_SD, size=len(values))
-        ax.scatter(x_jitter, values, marker=marker, color=color, edgecolor=color,
-                   s=MARKER_SIZE, alpha=ALPHA_SCATTER, zorder=2)
-
-    ax.set_xlabel('')
-    ax.set_ylabel(ylabel)
-
-
-def _add_significance_marker(ax, pval, positions=(0., 1.)):
-    '''Marks a significant group difference with an asterisk centred above the boxes.'''
-    if pval >= SIG_ALPHA:
-        return
-    ax.text(np.mean(positions), 0.97, '*', transform=ax.get_xaxis_transform(),
-            color='red', fontsize=16, fontweight='bold', ha='center', va='top')
-
-
 def _regression_line(ax, x, y, color):
     '''Draws the least-squares fit of y on x across the observed range of x.'''
     slope, intercept = np.polyfit(x, y, 1)
@@ -253,7 +171,7 @@ def _add_study_separator(fig, left_ax, right_ax):
 @register('dataset_stats', group='supp', subdir='SUPPLEMENTARY/dataset_stats')
 def dataset_stats(ctx, out):
     rng = np.random.default_rng(ctx.cfg.seed)
-    annotations = {spec['study']: _load_study_annotations(spec['study'])
+    annotations = {spec['study']: study_annotations(spec['study'])
                    for spec in STUDIES}
 
     # Sample composition ----------------------------------------------------------------
@@ -297,28 +215,7 @@ def dataset_stats(ctx, out):
     out.log_df('Pre- versus post-treatment scores (paired t-tests)', paired_tests)
 
     # Baseline severity of the psilocybin patients of both studies ------------------------
-    fig, axes = plt.subplots(1, len(BASELINE_MEASURES), figsize=(3 * len(BASELINE_MEASURES), 3.5))
-
-    rows = []
-    for ax, (measure, column) in zip(axes, BASELINE_MEASURES):
-        samples = [_baseline_samples(group, column) for group in BASELINE_GROUPS]
-        labels = [f"{group['label']}\nn={len(sample)}"
-                  for group, sample in zip(BASELINE_GROUPS, samples)]
-        _group_panel(ax, samples, labels, f'{measure} Score', rng)
-
-        test = _compare_studies(measure, column, BASELINE_GROUPS, samples)
-        _add_significance_marker(ax, test['p'])
-        ax.set_title(f"{measure}: t={test['t']:.2f}, {_fmt_p(test['p'])}, "
-                     f"d={test['cohen_d']:.2f}")
-        rows.append(test)
-
-    plt.tight_layout()
-    save_path = out.fig('qids_bdi_baseline_by_study')
-    if save_path:
-        plt.savefig(save_path)
-    plt.close(fig)
-
-    baseline_tests = pd.DataFrame(rows)
+    baseline_tests = baseline_severity_panels(out, 'qids_bdi_baseline_by_study', rng)
     out.table('baseline_by_study_tests', baseline_tests)
     out.log_df('Baseline severity, psilodep2 psilocybin arm versus psilodep1 '
                "(Welch's t-tests, uncorrected)", baseline_tests)
@@ -345,7 +242,7 @@ def dataset_stats(ctx, out):
                 mask = conditions == value
                 r, pval = stats.pearsonr(before[mask], after[mask])
                 _regression_line(ax, before[mask], after[mask], color)
-                title_lines.append(f'{label} r={r:.2f}, {_fmt_p(pval)}')
+                title_lines.append(f'{label} r={r:.2f}, {fmt_p_floor(pval)}')
                 rows.append({'study': spec['study'], 'condition': label,
                              'x': before_col, 'y': after_col,
                              'n': int(mask.sum()), 'r': r, 'p': pval})
@@ -355,14 +252,14 @@ def dataset_stats(ctx, out):
             rows.append({'study': spec['study'], 'condition': 'all',
                          'x': before_col, 'y': after_col,
                          'n': len(before), 'r': r_pooled, 'p': p_pooled})
-            title_lines.append(f'pooled r={r_pooled:.2f}, {_fmt_p(p_pooled)}')
+            title_lines.append(f'pooled r={r_pooled:.2f}, {fmt_p_floor(p_pooled)}')
 
             arm_test_rows.extend(_arm_difference_tests(spec, before, after, conditions))
             ax.set_title('\n'.join([f"{spec['study']}: {title_lines[0]}"] + title_lines[1:]))
         else:
             r, pval = stats.pearsonr(before, after)
             _regression_line(ax, before, after, 'darkred')
-            ax.set_title(f"{spec['study']}: r={r:.2f}, {_fmt_p(pval)}")
+            ax.set_title(f"{spec['study']}: r={r:.2f}, {fmt_p_floor(pval)}")
             rows.append({'study': spec['study'], 'condition': 'all',
                          'x': before_col, 'y': after_col,
                          'n': len(before), 'r': r, 'p': pval})

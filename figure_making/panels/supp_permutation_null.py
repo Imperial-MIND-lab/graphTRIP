@@ -41,7 +41,7 @@ from scipy.special import beta as beta_fn
 from utils.helpers import aggregate_prediction_results, summarise_seed_metrics
 from utils.plotting import NEUTRAL, NEUTRAL2, PSILO, ESCIT
 
-from figure_making.paths import output_dir, MissingInput
+from figure_making.paths import output_dir, perm_dirs, MissingInput
 from figure_making.registry import register
 
 
@@ -135,12 +135,6 @@ def ensemble_predictions(run_dir, prediction_file='prediction_results.csv'):
     '''
     return aggregate_prediction_results(
         results_file=os.path.join(run_dir, prediction_file))
-
-
-def perm_dirs(base):
-    '''The perm_* subdirectories of a null tree, in permutation order.'''
-    dirs = glob.glob(os.path.join(base, 'perm_*'))
-    return sorted(dirs, key=lambda d: int(os.path.basename(d).split('_')[-1]))
 
 
 def seed_predictions(run_dir):

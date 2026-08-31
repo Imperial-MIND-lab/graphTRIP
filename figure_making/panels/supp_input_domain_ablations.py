@@ -24,7 +24,7 @@ import pandas as pd
 from scipy import stats
 
 from figure_making.common import (
-    scatter_from_results, collect_seed_metric_table, collect_seed_metrics,
+    ABLATION_NAMES, scatter_from_results, collect_seed_metric_table, collect_seed_metrics,
     compare_across_metrics, feature_ablation_panel, aggregate_prediction_results,
     attach_annotations, prediction_metrics, within_arm_metrics, fmt_p)
 from figure_making.paths import output_dir
@@ -33,13 +33,6 @@ from figure_making.registry import register
 
 GRAPHTRIP_FULL = ('graphtrip', 'weights')
 MEDUSA_FULL = ('medusa_graphtrip', 'weights')
-
-# Names of the ablated models in the figure, keyed by the results directory they live in.
-ABLATION_NAMES = {
-    'no_clinical_features': 'FC + REACT',
-    'no_node_features': 'FC + clinical',
-    'no_react_no_clinical': 'FC only',
-}
 
 # Metrics summarised in the tables. Rank test skips mse (redundant with rmse).
 SUMMARY_METRICS = ['r', 'r2', 'mae', 'mse', 'rmse']
