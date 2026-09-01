@@ -26,9 +26,13 @@ import glob
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import torch
 from scipy import stats
+from torch_geometric.loader import DataLoader
 
-from utils.configs import load_ingredient_configs
+from experiments.ingredients.data_ingredient import (
+    HARMONISED, NO_HARMONISATION, build_transfer_inputs)
+from utils.configs import load_configs_from_json, load_ingredient_configs
 from utils.helpers import aggregate_prediction_results
 from utils.plotting import NEUTRAL, NEUTRAL2, PSILO, regression_scatter
 from utils.statsalg import compare_reconstruction_performance
@@ -36,7 +40,7 @@ from utils.statsalg import compare_reconstruction_performance
 from figure_making.common import (
     ABLATION_NAMES, attach_annotations, baseline_severity_panels, partial_correlation,
     plot_correlation_boxplot, study_annotations)
-from figure_making.loaders import load_dataset
+from figure_making.loaders import get_device, load_dataset, load_mlps, load_vgaes
 from figure_making.paths import output_dir, perm_dirs, require
 from figure_making.registry import register
 
@@ -105,6 +109,12 @@ COMPARISON_COLUMNS = ['ensemble', 'feature', 'n_draws', 'n_primary', 'mean_prima
 
 SCATTER_XLABEL = 'True QIDS, 1 week post 10+25-mg psilocybin for TRD'
 SCATTER_YLABEL = 'Predicted QIDS, 3 weeks post 2x25-mg psilocybin for MDD'
+
+# Permutation importance: the MLP input blocks whose contribution is measured, and how many
+# times each is shuffled across patients within a training seed.
+LATENT_BLOCK = 'Brain latents (z)'
+IMPORTANCE_ATTRS = ['QIDS_Before', 'BDI_Before']
+N_IMPORTANCE_PERMUTATIONS = 100
 
 BAR_COLOR_FULL = NEUTRAL
 BAR_COLOR_PARTIAL = PSILO
@@ -470,6 +480,147 @@ def prediction_spread_table(out):
     return table
 
 
+# Permutation importance of the MLP inputs ------------------------------------------------
+
+def node_context(batch):
+    '''Replicates data_ingredient.get_context outside a sacred run.'''
+    if not hasattr(batch, 'context_attr') or batch.context_attr.shape[1] == 0:
+        return torch.empty((batch.num_nodes, 0), dtype=torch.float32, device=batch.x.device)
+    return batch.context_attr[batch.batch]
+
+
+def load_seed_ensemble(seed_dir, data, batch, device):
+    '''
+    The fold models of one training seed, with the MLP input matrix each of them receives.
+
+    The VGAE never reads graph_attr, so each readout is computed once and reused for both
+    input mappings; only the head's forward pass is repeated per permutation.
+
+    Returns:
+    -------
+        tuple: (heads, {condition label: list of [n_subjects, latent_dim + n_attrs] arrays,
+                one per fold model}, latent_dim, graph_attrs)
+    '''
+    config = load_configs_from_json(os.path.join(seed_dir, 'config.json'))
+    weights_dir = config['weights_dir']
+    filenames = config['weight_filenames']
+    graph_attrs = config['dataset']['graph_attrs']
+    source_config = load_configs_from_json(os.path.join(weights_dir, 'config.json'))
+
+    transfer = build_transfer_inputs(
+        data=data, weights_dir=weights_dir, num_models=len(filenames['mlp']),
+        graph_attrs=graph_attrs, harmonise=config['harmonise_graph_attrs'],
+        source_standardised_attrs=config['source_standardised_attrs'],
+        source_dataset_config=source_config['dataset'])
+
+    readouts = []
+    for vgae in load_vgaes(config['vgae_model'], weights_dir, filenames['vgae']):
+        vgae.to(device).eval()
+        with torch.no_grad():
+            out = vgae(batch)
+            readouts.append(vgae.readout(out.mu, node_context(batch),
+                                         batch.batch).cpu().numpy())
+    latent_dim = readouts[0].shape[1]
+
+    heads = [head.to(device).eval() for head in
+             load_mlps(config['mlp_model'], latent_dim, weights_dir, filenames['mlp'])]
+
+    # A model with nothing to harmonise only carries the unharmonised mapping.
+    matrices = {}
+    for condition, _ in CONDITIONS:
+        key = NO_HARMONISATION if condition == CONDITIONS[0][0] else HARMONISED
+        clinical = transfer['inputs'].get(key, transfer['inputs'][NO_HARMONISATION])
+        matrices[condition] = [np.concatenate([readout, attrs], axis=1)
+                               for readout, attrs in zip(readouts, clinical)]
+
+    return heads, matrices, latent_dim, graph_attrs
+
+
+def ensemble_r(heads, matrices, labels, columns=None, order=None, device=None):
+    '''
+    r of the mean-voted ensemble prediction, optionally with one block of input columns
+    shuffled across patients.
+
+    The same permutation is applied to every fold model. Permuting each independently
+    would let the mean vote average the perturbation away.
+    '''
+    predictions = np.zeros((len(labels), len(heads)))
+    for i, (head, matrix) in enumerate(zip(heads, matrices)):
+        x = matrix
+        if columns is not None:
+            x = matrix.copy()
+            x[:, columns] = matrix[np.ix_(order, columns)]
+        with torch.no_grad():
+            predictions[:, i] = head(
+                torch.tensor(x, dtype=torch.float32, device=device)
+            ).squeeze(-1).cpu().numpy()
+    return stats.pearsonr(predictions.mean(axis=1), labels)[0]
+
+
+def seed_importance(heads, matrices, labels, blocks, rng, device):
+    '''Intact r of one seed's ensemble, and the mean drop in r per input block.'''
+    baseline = ensemble_r(heads, matrices, labels, device=device)
+
+    rows = []
+    for name, columns in blocks:
+        permuted = np.array([
+            ensemble_r(heads, matrices, labels, columns,
+                       rng.permutation(len(labels)), device)
+            for _ in range(N_IMPORTANCE_PERMUTATIONS)])
+        rows.append({'feature': name, 'baseline_r': baseline,
+                     'drop_r': baseline - permuted.mean()})
+    return rows
+
+
+def summarise_importance(per_seed):
+    '''
+    One row per input mapping and block: the drop in r across training seeds, its SEM, a
+    one-sample t-test against zero, and the drop as a percentage of the intact r.
+    '''
+    rows = []
+    for (condition, feature), group in per_seed.groupby(['condition', 'feature'],
+                                                        sort=False):
+        drops = group['drop_r'].to_numpy(dtype=float)
+        baseline = group['baseline_r'].mean()
+        rows.append({'condition': condition, 'feature': feature, 'n_seeds': len(drops),
+                     'baseline_r': baseline, 'drop_r': drops.mean(),
+                     'drop_r_sem': stats.sem(drops),
+                     'p': stats.ttest_1samp(drops, 0).pvalue,
+                     'percent_of_baseline': 100 * drops.mean() / baseline})
+    return pd.DataFrame(rows)
+
+
+def importance_analysis(out, results_base_dir, data, num_seeds, seed, device=None):
+    '''
+    Permutation importance of graphTRIP's inputs under both input mappings, computed
+    within each training seed and aggregated across them.
+    '''
+    device = device or get_device()
+    batch = next(iter(DataLoader(data, batch_size=len(data), shuffle=False))).to(device)
+    labels = batch.y.squeeze(-1).cpu().numpy()
+
+    rng = np.random.default_rng(seed)
+    rows = []
+    for seed_index in range(num_seeds):
+        heads, matrices, latent_dim, graph_attrs = load_seed_ensemble(
+            os.path.join(results_base_dir, f'seed_{seed_index}'), data, batch, device)
+
+        blocks = [(LATENT_BLOCK, np.arange(latent_dim))]
+        blocks += [(attr, np.array([latent_dim + graph_attrs.index(attr)]))
+                   for attr in IMPORTANCE_ATTRS]
+
+        for condition, _ in CONDITIONS:
+            rows += [{'condition': condition, 'seed': seed_index, **row}
+                     for row in seed_importance(heads, matrices[condition], labels,
+                                                blocks, rng, device)]
+
+    table = summarise_importance(pd.DataFrame(rows))
+    out.table('e_permutation_importance', table)
+    out.log_df(f'Permutation importance of the MLP inputs '
+               f'({N_IMPORTANCE_PERMUTATIONS} shuffles per seed)', table)
+    return table
+
+
 # Sensitivity of the reported correlations ------------------------------------------------
 
 def jackknife_range(results, ycol):
@@ -592,4 +743,6 @@ def fig4_validation(ctx, out):
                                   partial_col=column, partial_label=spec['legend'])
 
     prediction_spread_table(out)
+    importance_analysis(out, results_base_dir, psilodep1_data, ctx.num_seeds,
+                        ctx.cfg.seed, ctx.device)
     sensitivity_table(out)
