@@ -8,8 +8,9 @@ Panels:
 - c. zero-shot prediction of graphTRIP
 - d. reconstruction performance of the graphTRIP VGAE, not fine-tuned, tested against
      the primary-dataset reconstructions of Fig. 2d
-- e. r and partial r given QIDS_Before, for the full model, the imaging-only ablation and
-     the clinical-only benchmark
+- e. r and partial r, for the full model, the imaging-only ablation and the clinical-only
+     benchmark. One bar panel removes baseline QIDS from both sides, a second removes
+     baseline QIDS and BDI, the two severity scores graphTRIP receives
 
 Panels c and e are drawn without clinical harmonisation for the main figure, and again
 with it as separate files.
@@ -76,6 +77,17 @@ NULL_PARTS = ('graphtrip', 'permutation_null')
 # a zero-parameter predictor, so it has no partial correlation given itself.
 SENSITIVITY_MODELS = [GRAPHTRIP, CLINICAL_ONLY]
 BASELINE_PREDICTOR = 'QIDS_Before'
+
+# The baseline severity scores graphTRIP reads, attached to every model's predictions.
+BASELINE_COVARIATES = ('QIDS_Before', 'BDI_Before')
+
+# Covariate sets removed from both sides of the correlation, one bar panel each.
+PARTIAL_SPECS = [
+    {'suffix': '', 'covariates': ['QIDS_Before'], 'legend': 'partial r | QIDS_Before'},
+    {'suffix': '_qids_bdi', 'covariates': list(BASELINE_COVARIATES),
+     'legend': 'partial r | QIDS_Before, BDI_Before'},
+]
+PARTIAL_COLUMNS = [f"partial_r{spec['suffix']}" for spec in PARTIAL_SPECS]
 
 SCATTER_XLABEL = 'True QIDS, 1 week post 10+25-mg psilocybin for TRD'
 SCATTER_YLABEL = 'Predicted QIDS, 3 weeks post 2x25-mg psilocybin for MDD'
@@ -177,39 +189,36 @@ def reconstruction_comparison(ctx, out, psilodep1_data):
 
 def load_zeroshot_results(base_dir, suffix):
     '''
-    Zero-shot predictions of one model under one input mapping, with QIDS_Before attached.
+    Zero-shot predictions of one model under one input mapping, with the baseline scores.
 
     Models trained without clinical inputs read no severity score, so harmonisation is the
     identity for them and only the unharmonised file was written; the harmonised condition
-    falls back to it. Their prediction CSVs also carry no QIDS_Before, which the partial
-    correlation needs, so it is joined on from the psilodep1 annotations.
+    falls back to it. Their prediction CSVs also carry no baseline scores, which the partial
+    correlations need, so they are joined on from the psilodep1 annotations.
     '''
     path = os.path.join(base_dir, f'{PREDICTIONS_FILE}{suffix}.csv')
     if not os.path.exists(path):
         path = require(os.path.join(base_dir, f'{PREDICTIONS_FILE}.csv'))
-    results = pd.read_csv(path)
-    if 'QIDS_Before' not in results.columns:
-        results = attach_annotations(results, study='psilodep1', columns=('QIDS_Before',))
-    return results
+    return attach_annotations(pd.read_csv(path), study='psilodep1',
+                              columns=BASELINE_COVARIATES)
 
 
 def correlation_row(results, ycol='prediction'):
     '''
-    The three correlations one bar summarises.
+    The correlations one bar summarises.
 
-    r is the raw agreement with the outcome; partial_r is what survives after baseline
-    severity is removed from both sides; r_with_QIDS_Before says how much of the
-    prediction is that score. partial_r is undefined when the predictor is QIDS_Before
-    itself.
+    r is the raw agreement with the outcome; each partial_r is what survives after one
+    covariate set is removed from both sides; r_with_<score> says how much of the
+    prediction is that baseline score. A partial correlation is undefined when the
+    predictor is one of its own covariates.
     '''
     row = {'n': len(results),
            'r': results[ycol].corr(results['label']),
-           'r_with_QIDS_Before': results[ycol].corr(results['QIDS_Before'])}
-    if ycol == 'QIDS_Before':
-        row['partial_r'] = np.nan
-    else:
-        row['partial_r'] = partial_correlation(
-            results, ycol, 'label', ['QIDS_Before'])[0]
+           **{f'r_with_{c}': results[ycol].corr(results[c])
+              for c in BASELINE_COVARIATES}}
+    for column, spec in zip(PARTIAL_COLUMNS, PARTIAL_SPECS):
+        row[column] = (np.nan if ycol in spec['covariates'] else
+                       partial_correlation(results, ycol, 'label', spec['covariates'])[0])
     return row
 
 
@@ -224,10 +233,8 @@ def seed_rows(base_dir, suffix):
             path = os.path.join(seed_dir, f'{PREDICTIONS_FILE}.csv')
         if not os.path.exists(path):
             continue
-        results = pd.read_csv(path)
-        if 'QIDS_Before' not in results.columns:
-            results = attach_annotations(results, study='psilodep1',
-                                         columns=('QIDS_Before',))
+        results = attach_annotations(pd.read_csv(path), study='psilodep1',
+                                     columns=BASELINE_COVARIATES)
         rows.append(correlation_row(results))
     return pd.DataFrame(rows)
 
@@ -248,7 +255,8 @@ def null_draws(reference, suffix, num_seeds):
     if not os.path.exists(base):
         return None
 
-    truth = reference.set_index('subject_id')[['label', 'QIDS_Before']].sort_index()
+    truth = reference.set_index('subject_id')[
+        ['label', *BASELINE_COVARIATES]].sort_index()
     draws = []
     for perm_dir in perm_dirs(base):
         paths = sorted(glob.glob(os.path.join(perm_dir, 'psilodep1', 'seed_*',
@@ -263,7 +271,9 @@ def null_draws(reference, suffix, num_seeds):
     return pd.DataFrame(draws) if draws else None
 
 
-def null_pvalues(draws, row, statistics=('r', 'partial_r', 'r_with_QIDS_Before')):
+def null_pvalues(draws, row,
+                 statistics=('r', *PARTIAL_COLUMNS,
+                             *[f'r_with_{c}' for c in BASELINE_COVARIATES])):
     '''Two-sided rank p of each observed correlation against the null draws.'''
     if draws is None:
         return {f'{statistic}_p': np.nan for statistic in statistics}
@@ -274,8 +284,8 @@ def null_pvalues(draws, row, statistics=('r', 'partial_r', 'r_with_QIDS_Before')
 
 def correlation_table(out, num_seeds):
     '''
-    One row per model and input mapping: the three correlations, and the p-values of the
-    model the null was run for.
+    One row per model and input mapping: every correlation, and the p-values of the model
+    the null was run for.
 
     Returns:
     -------
@@ -298,20 +308,24 @@ def correlation_table(out, num_seeds):
             row = correlation_row(results)
             per_seed = seed_rows(output_dir(*parts), suffix)
 
-            ensemble.append({'model': label, 'r': row['r'], 'partial_r': row['partial_r']})
+            ensemble.append({'model': label, 'r': row['r'],
+                             **{c: row[c] for c in PARTIAL_COLUMNS}})
             seeds.append({'model': label, 'r': per_seed['r'].mean(),
                           'r_err': per_seed['r'].std(ddof=1),
-                          'partial_r': per_seed['partial_r'].mean(),
-                          'partial_r_err': per_seed['partial_r'].std(ddof=1)})
+                          **{k: v for c in PARTIAL_COLUMNS
+                             for k, v in ((c, per_seed[c].mean()),
+                                          (f'{c}_err', per_seed[c].std(ddof=1)))}})
 
             rows.append({
                 'model': label, 'condition': condition, 'n': row['n'],
                 'n_seeds': len(per_seed),
-                **{k: row[k] for k in ('r', 'partial_r', 'r_with_QIDS_Before')},
+                **{k: row[k] for k in ('r', *PARTIAL_COLUMNS,
+                                       *[f'r_with_{c}' for c in BASELINE_COVARIATES])},
                 **null_pvalues(draws if label == NULL_MODEL else None, row),
                 'seed_mean_r': per_seed['r'].mean(), 'seed_sd_r': per_seed['r'].std(ddof=1),
-                'seed_mean_partial_r': per_seed['partial_r'].mean(),
-                'seed_sd_partial_r': per_seed['partial_r'].std(ddof=1)})
+                **{k: v for c in PARTIAL_COLUMNS
+                   for k, v in ((f'seed_mean_{c}', per_seed[c].mean()),
+                                (f'seed_sd_{c}', per_seed[c].std(ddof=1)))}})
 
         order = order_by_r(pd.DataFrame(ensemble))['model'].tolist()
         panels[(condition, 'ensemble')] = reorder(pd.DataFrame(ensemble), order)
@@ -366,14 +380,13 @@ def zeroshot_scatter(results, out, name, pvalue=None):
     plt.close(fig)
 
 
-def correlation_bar_panel(out, frame, name):
+def correlation_bar_panel(out, frame, name, partial_col='partial_r',
+                          partial_label='partial r | QIDS_Before'):
     '''
     One horizontal bar per model: r as the full bar, partial r nested inside it.
 
     The nested bar is drawn narrower and in front rather than stacked, because partial r
-    is not a component of r. A model whose predictions are negatively coupled to
-    QIDS_Before can have a partial correlation larger than its raw r, and the nested bar
-    is then the longer of the two.
+    is not a component of r. 
     '''
     fig, ax = plt.subplots(figsize=(6.2, 2.6))
     positions = np.arange(len(frame))[::-1]
@@ -381,8 +394,8 @@ def correlation_bar_panel(out, frame, name):
     ax.barh(positions, frame['r'], height=BAR_HEIGHT, color=BAR_COLOR_FULL,
             edgecolor=NEUTRAL2, linewidth=0.6, zorder=2,
             label='r (prediction, QIDS_1week)')
-    ax.barh(positions, frame['partial_r'], height=BAR_HEIGHT * NESTED_FRACTION,
-            color=BAR_COLOR_PARTIAL, zorder=3, label='partial r | QIDS_Before')
+    ax.barh(positions, frame[partial_col], height=BAR_HEIGHT * NESTED_FRACTION,
+            color=BAR_COLOR_PARTIAL, zorder=3, label=partial_label)
 
     ax.axvline(0, color=NEUTRAL2, linewidth=0.8, zorder=1)
     ax.set_yticks(positions)
@@ -404,13 +417,13 @@ def correlation_bar_panel(out, frame, name):
 
 def jackknife_range(results, ycol):
     '''
-    Recomputes r and partial r on each leave-one-patient-out subset.
+    Recomputes r and every partial r on each leave-one-patient-out subset.
 
     Returns:
     -------
         dict: min, max and sign count of each statistic over the n subsets.
     '''
-    values = {'r': [], 'partial_r': []}
+    values = {statistic: [] for statistic in ('r', *PARTIAL_COLUMNS)}
     for drop in range(len(results)):
         subset = results.drop(results.index[drop])
         row = correlation_row(subset, ycol=ycol)
@@ -431,14 +444,17 @@ def jackknife_range(results, ycol):
 
 
 def rank_statistics(results, ycol):
-    '''Spearman rho of the predictor with the outcome, raw and given QIDS_Before.'''
+    '''Spearman rho of the predictor with the outcome, raw and given each covariate set.'''
     rho, pval = stats.spearmanr(results[ycol], results['label'])
-    row = {'spearman_rho': rho, 'spearman_p': pval, 'partial_spearman_rho': np.nan}
-    if ycol != 'QIDS_Before':
+    row = {'spearman_rho': rho, 'spearman_p': pval}
+    for spec in PARTIAL_SPECS:
+        column = f"partial_spearman_rho{spec['suffix']}"
+        if ycol in spec['covariates']:
+            row[column] = np.nan
+            continue
         ranked = pd.DataFrame({c: results[c].rank()
-                               for c in (ycol, 'label', 'QIDS_Before')})
-        row['partial_spearman_rho'] = partial_correlation(
-            ranked, ycol, 'label', ['QIDS_Before'])[0]
+                               for c in (ycol, 'label', *spec['covariates'])})
+        row[column] = partial_correlation(ranked, ycol, 'label', spec['covariates'])[0]
     return row
 
 
@@ -512,8 +528,10 @@ def fig4_validation(ctx, out):
             aggregate_prediction_results(results_file=os.path.join(
                 results_base_dir, f'{PREDICTIONS_FILE}{suffix}.csv')),
             out, f'zeroshot_true_vs_pred{tag}', graphtrip.loc[condition, 'r_p'])
-        correlation_bar_panel(
-            out, subset(panels[(condition, 'ensemble')], PANEL_MODELS),
-            f'zeroshot_correlation_bars{tag}')
+        frame = subset(panels[(condition, 'ensemble')], PANEL_MODELS)
+        for column, spec in zip(PARTIAL_COLUMNS, PARTIAL_SPECS):
+            correlation_bar_panel(out, frame,
+                                  f"zeroshot_correlation_bars{spec['suffix']}{tag}",
+                                  partial_col=column, partial_label=spec['legend'])
 
     sensitivity_table(out)
