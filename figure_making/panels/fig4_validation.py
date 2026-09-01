@@ -35,7 +35,7 @@ from utils.statsalg import compare_reconstruction_performance
 
 from figure_making.common import (
     ABLATION_NAMES, attach_annotations, baseline_severity_panels, partial_correlation,
-    plot_correlation_boxplot)
+    plot_correlation_boxplot, study_annotations)
 from figure_making.loaders import load_dataset
 from figure_making.paths import output_dir, perm_dirs, require
 from figure_making.registry import register
@@ -83,11 +83,25 @@ BASELINE_COVARIATES = ('QIDS_Before', 'BDI_Before')
 
 # Covariate sets removed from both sides of the correlation, one bar panel each.
 PARTIAL_SPECS = [
-    {'suffix': '', 'covariates': ['QIDS_Before'], 'legend': 'partial r | QIDS_Before'},
+    {'suffix': '_qids', 'covariates': ['QIDS_Before'],
+     'legend': 'partial r | QIDS_Before'},
     {'suffix': '_qids_bdi', 'covariates': list(BASELINE_COVARIATES),
      'legend': 'partial r | QIDS_Before, BDI_Before'},
 ]
 PARTIAL_COLUMNS = [f"partial_r{spec['suffix']}" for spec in PARTIAL_SPECS]
+
+# Statistics the correlation table reports, one row each.
+STATISTICS = ('r', *PARTIAL_COLUMNS, *[f'r_with_{c}' for c in BASELINE_COVARIATES])
+
+# Outcome the models were trained on, and the arm they were trained on.
+TRAINING_TARGET = 'QIDS_Final_Integration'
+PSILOCYBIN_CONDITION = 1
+
+# Columns shared by the two reconstruction ensembles.
+COMPARISON_COLUMNS = ['ensemble', 'feature', 'n_draws', 'n_primary', 'mean_primary',
+                      'n_validation', 'mean_validation', 'mean_difference', 'cohens_d',
+                      'cohens_d_ci_low', 'cohens_d_ci_high', 'p_uncorrected', 'p_fdr',
+                      'frac_significant_fdr']
 
 SCATTER_XLABEL = 'True QIDS, 1 week post 10+25-mg psilocybin for TRD'
 SCATTER_YLABEL = 'Predicted QIDS, 3 weeks post 2x25-mg psilocybin for MDD'
@@ -124,63 +138,76 @@ def matched_fold_assignment(num_subs, num_folds, num_seeds, rng):
 def summarise_matched_draws(per_draw):
     '''
     Condenses the per-draw comparisons of the ensemble-matched control into one row per
-    feature. Each draw is a different arbitrary assignment of val subjects to folds.
+    feature, taking the median over draws. Each draw is a different arbitrary assignment
+    of val subjects to folds.
     '''
     df = pd.concat(per_draw, ignore_index=True)
     summary = df.groupby('feature', sort=False).agg(
         n_draws=('feature', 'size'),
+        n_primary=('n_primary', 'first'),
         mean_primary=('mean_primary', 'first'),
-        median_mean_validation=('mean_validation', 'median'),
-        median_mean_difference=('mean_difference', 'median'),
-        median_cohens_d=('cohens_d', 'median'),
-        median_cohens_d_ci_low=('cohens_d_ci_low', 'median'),
-        median_cohens_d_ci_high=('cohens_d_ci_high', 'median'),
-        median_p_uncorrected=('p_uncorrected', 'median'),
-        median_p_fdr=('p_fdr', 'median'),
-        frac_draws_significant_fdr=('significant_fdr', 'mean'))
+        n_validation=('n_validation', 'first'),
+        mean_validation=('mean_validation', 'median'),
+        mean_difference=('mean_difference', 'median'),
+        cohens_d=('cohens_d', 'median'),
+        cohens_d_ci_low=('cohens_d_ci_low', 'median'),
+        cohens_d_ci_high=('cohens_d_ci_high', 'median'),
+        p_uncorrected=('p_uncorrected', 'median'),
+        p_fdr=('p_fdr', 'median'),
+        frac_significant_fdr=('significant_fdr', 'mean'))
     return summary.reset_index()
+
+
+def stack_reconstruction_tests(all_folds, matched):
+    '''
+    The two ensembles in one frame, one row per feature and ensemble.
+
+    all_folds rows are single tests, so n_draws is 1 and frac_significant_fdr is 0 or 1;
+    ensemble_matched rows are medians over the draws.
+    '''
+    all_folds = all_folds.assign(
+        ensemble='all_folds', n_draws=1,
+        frac_significant_fdr=all_folds['significant_fdr'].astype(float))
+    matched = matched.assign(ensemble='ensemble_matched')
+    return pd.concat([all_folds[COMPARISON_COLUMNS], matched[COMPARISON_COLUMNS]],
+                     ignore_index=True)
 
 
 def reconstruction_comparison(ctx, out, psilodep1_data):
     '''
     Tests whether VGAE reconstruction quality differs between the primary dataset
     (Fig. 2d) and the independent validation dataset (Fig. 4d).
+
+    Only the correlations are tested, under two ensembles: all_folds is what panel d
+    plots, ensemble_matched equalises the number of VGAEs averaged per subject.
     '''
     _, primary_x = ctx.core_reconstructions
     _, psilodep1_x = ctx.reconstructions(ctx.vgaes_dict, psilodep1_data, None)
 
     num_folds = len(ctx.vgaes_dict['seed_0'])
     out.log('=== Primary vs validation reconstruction ===')
-    out.log(f'Panel ensembles: psilodep2 averages {ctx.num_seeds} VGAEs per subject '
-            f'(the held-out fold of each seed), psilodep1 averages '
+    out.log(f'all_folds: psilodep2 averages {ctx.num_seeds} VGAEs per subject (the '
+            f'held-out fold of each seed), psilodep1 averages '
             f'{ctx.num_seeds * num_folds} (every fold of every seed).')
+    out.log(f'ensemble_matched: each psilodep1 subject is reconstructed by one randomly '
+            f'drawn fold per seed instead of all {num_folds}, so that subjects of both '
+            f'datasets average {ctx.num_seeds} VGAEs; {N_MATCHED_DRAWS} draws.')
 
-    test_results = compare_reconstruction_performance(primary_x['metrics'],
-                                                      psilodep1_x['metrics'])
-    out.table('primary_vs_validation_corr', test_results['corr'])
-    out.table('primary_vs_validation_mae', test_results['mae'])
-    out.log_df('Primary vs validation reconstruction (correlation)', test_results['corr'])
-    out.log_df('Primary vs validation reconstruction (MAE)', test_results['mae'])
+    all_folds = compare_reconstruction_performance(primary_x['metrics'],
+                                                   psilodep1_x['metrics'])['corr']
 
-    # Ensemble-matched control: one VGAE per seed for the validation dataset too
     rng = np.random.default_rng(ctx.cfg.seed)
-    per_draw = {'corr': [], 'mae': []}
+    per_draw = []
     for draw in range(N_MATCHED_DRAWS):
         assignment = matched_fold_assignment(len(psilodep1_data), num_folds,
                                              ctx.num_seeds, rng)
         _, matched_x = ctx.reconstructions(ctx.vgaes_dict, psilodep1_data, assignment)
-        for metric, df in compare_reconstruction_performance(primary_x['metrics'],
-                                                             matched_x['metrics']).items():
-            per_draw[metric].append(df.assign(draw=draw))
+        per_draw.append(compare_reconstruction_performance(
+            primary_x['metrics'], matched_x['metrics'])['corr'].assign(draw=draw))
 
-    out.log(f'Ensemble-matched control: each psilodep1 subject reconstructed by one '
-            f'randomly drawn fold per seed instead of all {num_folds}, so that subjects '
-            f'of both datasets average {ctx.num_seeds} VGAEs; {N_MATCHED_DRAWS} draws.')
-    for metric, label in [('corr', 'correlation'), ('mae', 'MAE')]:
-        summary = summarise_matched_draws(per_draw[metric])
-        out.table(f'primary_vs_validation_{metric}_ensemble_matched', summary)
-        out.log_df(f'Ensemble-matched primary vs validation reconstruction ({label})',
-                   summary)
+    table = stack_reconstruction_tests(all_folds, summarise_matched_draws(per_draw))
+    out.table('d_reconstruction_tests', table)
+    out.log_df('Primary vs validation reconstruction (correlation)', table)
 
     return psilodep1_x
 
@@ -271,9 +298,7 @@ def null_draws(reference, suffix, num_seeds):
     return pd.DataFrame(draws) if draws else None
 
 
-def null_pvalues(draws, row,
-                 statistics=('r', *PARTIAL_COLUMNS,
-                             *[f'r_with_{c}' for c in BASELINE_COVARIATES])):
+def null_pvalues(draws, row, statistics=STATISTICS):
     '''Two-sided rank p of each observed correlation against the null draws.'''
     if draws is None:
         return {f'{statistic}_p': np.nan for statistic in statistics}
@@ -284,13 +309,13 @@ def null_pvalues(draws, row,
 
 def correlation_table(out, num_seeds):
     '''
-    One row per model and input mapping: every correlation, and the p-values of the model
-    the null was run for.
+    One row per model, input mapping and statistic: the ensemble value, its p-value
+    against the null models, and the spread over the training seeds.
 
     Returns:
     -------
-        tuple: (table, {(condition label, 'ensemble' | 'seeds'): frame}) where each frame
-               is ordered by ensemble r with the benchmark pinned last.
+        tuple: (table, {condition label: frame}) where each frame holds the ensemble
+               values of one condition, ordered by r with the benchmark pinned last.
     '''
     rows, panels = [], {}
 
@@ -302,34 +327,28 @@ def correlation_table(out, num_seeds):
             out.log(f'Null models not found under {output_dir(*NULL_PARTS)}; '
                     f'those p-values are left NaN.')
 
-        ensemble, seeds = [], []
+        ensemble = []
         for parts, label in MODELS:
             results = load_zeroshot_results(require(output_dir(*parts)), suffix)
             row = correlation_row(results)
             per_seed = seed_rows(output_dir(*parts), suffix)
+            pvalues = null_pvalues(draws if label == NULL_MODEL else None, row)
 
-            ensemble.append({'model': label, 'r': row['r'],
-                             **{c: row[c] for c in PARTIAL_COLUMNS}})
-            seeds.append({'model': label, 'r': per_seed['r'].mean(),
-                          'r_err': per_seed['r'].std(ddof=1),
-                          **{k: v for c in PARTIAL_COLUMNS
-                             for k, v in ((c, per_seed[c].mean()),
-                                          (f'{c}_err', per_seed[c].std(ddof=1)))}})
+            ensemble.append({'model': label, **{k: row[k] for k in STATISTICS}})
 
-            rows.append({
-                'model': label, 'condition': condition, 'n': row['n'],
-                'n_seeds': len(per_seed),
-                **{k: row[k] for k in ('r', *PARTIAL_COLUMNS,
-                                       *[f'r_with_{c}' for c in BASELINE_COVARIATES])},
-                **null_pvalues(draws if label == NULL_MODEL else None, row),
-                'seed_mean_r': per_seed['r'].mean(), 'seed_sd_r': per_seed['r'].std(ddof=1),
-                **{k: v for c in PARTIAL_COLUMNS
-                   for k, v in ((f'seed_mean_{c}', per_seed[c].mean()),
-                                (f'seed_sd_{c}', per_seed[c].std(ddof=1)))}})
+            for statistic in STATISTICS:
+                values = per_seed[statistic]
+                rows.append({'condition': condition, 'model': label,
+                             'statistic': statistic, 'n': row['n'],
+                             'ensemble': row[statistic],
+                             'p_null': pvalues[f'{statistic}_p'],
+                             'n_seeds': len(per_seed),
+                             'seed_mean': values.mean(),
+                             'seed_sd': values.std(ddof=1),
+                             'seed_min': values.min(), 'seed_max': values.max()})
 
-        order = order_by_r(pd.DataFrame(ensemble))['model'].tolist()
-        panels[(condition, 'ensemble')] = reorder(pd.DataFrame(ensemble), order)
-        panels[(condition, 'seeds')] = reorder(pd.DataFrame(seeds), order)
+        ensemble = pd.DataFrame(ensemble)
+        panels[condition] = reorder(ensemble, order_by_r(ensemble)['model'].tolist())
 
     return pd.DataFrame(rows), panels
 
@@ -380,8 +399,7 @@ def zeroshot_scatter(results, out, name, pvalue=None):
     plt.close(fig)
 
 
-def correlation_bar_panel(out, frame, name, partial_col='partial_r',
-                          partial_label='partial r | QIDS_Before'):
+def correlation_bar_panel(out, frame, name, partial_col, partial_label):
     '''
     One horizontal bar per model: r as the full bar, partial r nested inside it.
 
@@ -411,6 +429,45 @@ def correlation_bar_panel(out, frame, name, partial_col='partial_r',
     if save_path:
         fig.savefig(save_path, bbox_inches='tight')
     plt.close(fig)
+
+
+def spread_row(values, label, reference_sd):
+    '''Spread of one score or prediction, and its SD relative to reference_sd.'''
+    values = pd.Series(values).dropna().to_numpy(dtype=float)
+    sd = values.std(ddof=1)
+    return {'series': label, 'n': len(values), 'mean': values.mean(), 'sd': sd,
+            'min': values.min(), 'max': values.max(),
+            'range': values.max() - values.min(), 'sd_ratio': sd / reference_sd}
+
+
+def prediction_spread_table(out):
+    '''
+    Spread of the training outcome, the validation outcome and the zero-shot predictions.
+
+    sd_ratio is relative to the observed psilodep1 outcome, so it says how much of the
+    outcome's spread the predictions reproduce.
+    '''
+    base_dir = require(output_dir('validation', 'evaluate_graphtrip'))
+    predictions = {condition: load_zeroshot_results(base_dir, suffix)
+                   for condition, suffix in CONDITIONS}
+    observed = predictions[CONDITIONS[0][0]]['label']
+    reference_sd = observed.std(ddof=1)
+
+    training = study_annotations('psilodep2')
+    training = training[training['Condition_numeric'] == PSILOCYBIN_CONDITION]
+
+    rows = [spread_row(training[TRAINING_TARGET],
+                       f'psilodep2 {TRAINING_TARGET} (psilocybin arm)', reference_sd),
+            spread_row(observed, 'psilodep1 QIDS_1week (observed)', reference_sd)]
+    rows += [spread_row(frame['prediction'],
+                        f'graphTRIP zero-shot prediction ({condition})', reference_sd)
+             for condition, frame in predictions.items()]
+
+    table = pd.DataFrame(rows)
+    out.table('c_prediction_spread', table)
+    out.log_df('Spread of the training outcome, the validation outcome and the '
+               'zero-shot predictions', table)
+    return table
 
 
 # Sensitivity of the reported correlations ------------------------------------------------
@@ -484,7 +541,7 @@ def sensitivity_table(out):
                  **rank_statistics(results, 'QIDS_Before')})
 
     table = pd.DataFrame(rows)
-    out.table('zeroshot_sensitivity', table)
+    out.table('e_sensitivity', table)
     out.log_df('Leave-one-patient-out ranges and rank correlations', table)
     return table
 
@@ -496,8 +553,8 @@ def fig4_validation(ctx, out):
 
     # b. Baseline severity of the two cohorts --------------------------------------------
     baseline_tests = baseline_severity_panels(
-        out, 'qids_bdi_baseline_by_study', np.random.default_rng(ctx.cfg.seed))
-    out.table('baseline_by_study_tests', baseline_tests)
+        out, 'b_baseline_severity', np.random.default_rng(ctx.cfg.seed))
+    out.table('b_baseline_severity_tests', baseline_tests)
     out.log_df('Baseline severity, psilodep2 psilocybin arm versus psilodep1 '
                "(Welch's t-tests, uncorrected)", baseline_tests)
 
@@ -514,24 +571,25 @@ def fig4_validation(ctx, out):
     psilodep1_x = reconstruction_comparison(ctx, out, psilodep1_data)
 
     plot_correlation_boxplot(out, psilodep1_x, psilodep1_conditions,
-                             'original_vs_reconstructed_corrs')
+                             'd_reconstruction_corrs')
 
     # c, e. Zero-shot prediction and the input-domain contrast ---------------------------
     table, panels = correlation_table(out, ctx.num_seeds)
-    out.table('zeroshot_correlations', table)
-    out.log_df('Zero-shot correlations by model and input mapping', table)
+    out.table('e_correlations', table)
+    out.log_df('Zero-shot correlations by model, input mapping and statistic', table)
 
-    graphtrip = table[table['model'] == GRAPHTRIP].set_index('condition')
+    r_pvalues = table[(table['model'] == GRAPHTRIP)
+                      & (table['statistic'] == 'r')].set_index('condition')['p_null']
     for condition, suffix in CONDITIONS:
         tag = '' if condition == main_condition else '_harmonised'
         zeroshot_scatter(
             aggregate_prediction_results(results_file=os.path.join(
                 results_base_dir, f'{PREDICTIONS_FILE}{suffix}.csv')),
-            out, f'zeroshot_true_vs_pred{tag}', graphtrip.loc[condition, 'r_p'])
-        frame = subset(panels[(condition, 'ensemble')], PANEL_MODELS)
+            out, f'c_true_vs_pred{tag}', r_pvalues[condition])
+        frame = subset(panels[condition], PANEL_MODELS)
         for column, spec in zip(PARTIAL_COLUMNS, PARTIAL_SPECS):
-            correlation_bar_panel(out, frame,
-                                  f"zeroshot_correlation_bars{spec['suffix']}{tag}",
+            correlation_bar_panel(out, frame, f"e_bars{spec['suffix']}{tag}",
                                   partial_col=column, partial_label=spec['legend'])
 
+    prediction_spread_table(out)
     sensitivity_table(out)
