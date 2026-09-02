@@ -5,8 +5,16 @@ them.
 One target, GRAIL_biomarkers, holds every panel: the alignment-versus-correlation
 scatter, the linear-model benchmark, the biomarker categories and their outcome
 correlations, and the two permutation-null panels that ask whether any of it survives
-models trained on shuffled outcomes. The null statistics are computed by
-scripts/grail_model_null.py
+models trained on shuffled outcomes.
+
+The permutation-null models are retrained on outcomes shuffled across the whole cohort
+(scripts/permutation_null.py), and GRAIL is run on their weights. They carry every source
+of structure the real models carry -- the same graphs, the same architecture, the same
+splits, the same candidate features -- except the outcome. The null runs have no spin test,
+so only mean alignments exist for them, and every comparison here is built on the mean
+alignment and nothing downstream of it. Observed and null are constructed identically: all
+seeds, all folds, all patients, with no rho>0 fold filter and no performance weighting on
+either side.
 
 Author: Hanna M. Tolle
 Date: 2026-08-10
@@ -15,10 +23,14 @@ License: BSD 3-Clause
 
 import os
 import glob
+import itertools
+from functools import lru_cache
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import pearsonr, gaussian_kde, wilcoxon
+from statsmodels.stats.multitest import fdrcorrection
 
 from utils.files import add_project_root
 from utils.plotting import (
@@ -26,12 +38,9 @@ from utils.plotting import (
     plot_biomarker_heatmap, true_vs_pred_scatter)
 
 from figure_making.common import load_biomarker_categories, biomarker_palette, fmt_p
-from figure_making.paths import output_dir, posthoc_dir, require, MissingInput
+from figure_making.paths import (
+    output_dir, posthoc_dir, perm_dirs, require, MissingInput)
 from figure_making.registry import register
-from scripts.grail_model_null import (
-    TREES, load_candidates, load_all_trees, group_means, load_reported, load_sign_claims,
-    profile_agreement, per_biomarker)
-from scripts.grail_validation import N_FOLD, load_cohort, load_alignments
 
 
 CONDITION_ORDER = ['Global', 'P', 'E']
@@ -45,9 +54,35 @@ NULL_NCOLS = 5          # biomarker panels per row
 PROFILE_NCOLS = 2       # tree panels per row, giving a 2 x 2 grid for the four trees
 PROFILE_BINS = np.linspace(-1, 1, 41)
 
+# The four GRAIL trees the biomarker categories are built from. Each is one model and one
+# prediction target: (observed GRAIL run, permutation-null tree, grail_mode within it).
+# Medusa writes all three of its heads into one table, tagged by grail_mode; graphTRIP has
+# a single head and no such column.
+TREES = {
+    'Shared':       (('graphtrip', 'grail'),
+                     ('graphtrip', 'permutation_null'), None),
+    'Psilocybin':   (('medusa_graphtrip', 'grail_psilocybin'),
+                     ('medusa_graphtrip', 'permutation_null'), 'psilocybin'),
+    'Escitalopram': (('medusa_graphtrip', 'grail_escitalopram'),
+                     ('medusa_graphtrip', 'permutation_null'), 'escitalopram'),
+    'ITE':          (('medusa_graphtrip', 'grail'),
+                     ('medusa_graphtrip', 'permutation_null'), 'ite'),
+}
+
+# The tree whose claim defines each category, and is therefore the one the biomarker is
+# tested against.
+PRIMARY_TREE = {
+    'Shared_response': 'Shared',        'Shared_resistance': 'Shared',
+    'E_response_P_resistance': 'ITE',   'P_response_E_resistance': 'ITE',
+    'E_response': 'Escitalopram',       'E_resistance': 'Escitalopram',
+    'P_response': 'Psilocybin',         'P_resistance': 'Psilocybin',
+}
+
+# The sign each tree's alignment must have per category. Not under outputs/, so it is the
+# one path here that is not built by figure_making.paths.
+SYNERGY_FILE = 'experiments/configs/biomarker_synergies.csv'
+
 # The out-of-fold correlation check: graphTRIP's GRAIL run and the folds behind it.
-GRAIL_RUN = 'outputs/graphtrip/grail'
-GRAIL_WEIGHTS = 'outputs/graphtrip/weights'
 MIN_TRAIN, MIN_TEST = 5, 3
 
 # Folds whose model failed to predict are dropped, matching the rho > 0 inclusion
@@ -56,12 +91,238 @@ MIN_RHO = 0.0
 RHO_VMIN, RHO_VMAX = 0.0, 1.0
 
 
+# Loading GRAIL results ------------------------------------------------------------------
+
+def _load_cohort(biomarker_dir):
+    '''
+    The candidate biomarker values and the outcome, one row per patient.
+
+    Returns (values, feat): the frame in subject order, and the candidate names in the
+    order the GRAIL tables use.
+    '''
+    values = pd.read_csv(os.path.join(biomarker_dir, 'feature_values.csv'))
+    values = values.sort_values('sub').drop(columns=['sub'])
+    return values, [c for c in values.columns if c != 'y']
+
+
+# graphTRIP's GRAIL run is read by both the out-of-fold check and the null control, and is
+# some three thousand small CSVs; the memo means a figure run reads it once. Candidate
+# names are passed as a tuple so that the call is hashable.
+@lru_cache(maxsize=None)
+def _observed_alignments(grail_dir, feat):
+    '''
+    Observed mean alignments of one GRAIL run, as [seed, fold, subject, biomarker].
+
+    Returns (alignments, seeds), where seeds names the seed directories in the order of
+    the first axis. Subjects and folds are counted from the run itself rather than assumed.
+    '''
+    seed_dirs = sorted(glob.glob(os.path.join(require(grail_dir), 'seed_*')))
+    if not seed_dirs:
+        raise MissingInput(os.path.join(grail_dir, 'seed_*'))
+
+    n_sub = len(glob.glob(os.path.join(seed_dirs[0], 'sub_*')))
+    n_fold = len(pd.read_csv(os.path.join(seed_dirs[0], 'fold_performances.csv')))
+    alignments = np.stack([np.stack([np.stack([
+        pd.read_csv(os.path.join(seed_dir, f'sub_{i}',
+                                 f'k{k}_mean_alignments.csv'))[list(feat)].values[0]
+        for i in range(n_sub)]) for k in range(n_fold)]) for seed_dir in seed_dirs])
+    return alignments, [os.path.basename(d) for d in seed_dirs]
+
+
+def _null_alignments(null_dir, feat, modes, n_seeds):
+    '''
+    Null mean alignments per grail_mode, as {mode: [permutation, subject, biomarker]}.
+
+    Medusa writes all three of its heads into one table, so each permutation's files are
+    read once and split by mode rather than re-read per tree. Seeds are averaged inside the
+    loader because every statistic below collapses that axis anyway, which keeps the null
+    arrays an order of magnitude smaller.
+
+    Permutations with fewer than n_seeds training seeds are dropped: a draw built from
+    fewer seeds carries more seed noise and is not the same statistic as the observed one.
+    '''
+    draws = {mode: [] for mode in modes}
+    dropped = []
+
+    for perm_dir in perm_dirs(require(null_dir)):
+        files = sorted(glob.glob(os.path.join(perm_dir, 'grail', 'seed_*',
+                                              'mean_alignments.csv')))
+        if len(files) != n_seeds:
+            dropped.append(os.path.basename(perm_dir))
+            continue
+        tables = [pd.read_csv(path) for path in files]
+        for mode in modes:
+            per_seed = [t if mode is None else t[t['grail_mode'] == mode] for t in tables]
+            draws[mode].append(np.mean([t.groupby('subject')[feat].mean().values
+                                        for t in per_seed], axis=0))
+
+    if not all(draws.values()):
+        raise FileNotFoundError(f'No complete {n_seeds}-seed permutations in {null_dir}')
+    return {mode: np.stack(v) for mode, v in draws.items()}, dropped
+
+
+def _load_trees(feat):
+    '''
+    Observed and null alignments for every tree.
+
+    Returns (observed, null, dropped): observed[tree] is [seed, fold, subject, biomarker],
+    null[tree] is [permutation, subject, biomarker], and dropped[tree] names any
+    permutations left out for having an incomplete set of training seeds.
+    '''
+    observed, null, dropped = {}, {}, {}
+    by_null_dir = {}
+
+    for tree, (grail_parts, null_parts, mode) in TREES.items():
+        observed[tree], _ = _observed_alignments(output_dir(*grail_parts), tuple(feat))
+        by_null_dir.setdefault(output_dir(*null_parts), []).append((tree, mode))
+
+    for null_dir, entries in by_null_dir.items():
+        # The null runs are the same training seeds as the observed ones, so the observed
+        # seed count is what a complete permutation has to match.
+        n_seeds = observed[entries[0][0]].shape[0]
+        draws, skipped = _null_alignments(null_dir, feat, [m for _, m in entries], n_seeds)
+        for tree, mode in entries:
+            null[tree], dropped[tree] = draws[mode], skipped
+
+    return observed, null, dropped
+
+
+def _group_means(observed, null):
+    '''
+    Collapses both sides to one value per (tree, biomarker).
+
+    The group-mean alignment averages over every model and every patient, identically on
+    both sides, so the dependence between the fold models sits on both and cancels.
+    '''
+    return ({t: observed[t].mean(axis=(0, 1)).mean(0) for t in observed},
+            {t: null[t].mean(1) for t in null})
+
+
+def _sign_claims():
+    '''
+    The sign each tree's alignment must have, per category, from the synergy table.
+
+    A category matches several rows of the table (they differ in the entries it leaves
+    free), so an entry is a claim only where it is constant across those rows. Entries that
+    vary, and entries that are 0, are not claims: 0 means "must not be significant", which a
+    null distribution cannot confirm.
+    '''
+    synergies = pd.read_csv(require(add_project_root(SYNERGY_FILE)))
+    claims = {}
+    for category, rows in synergies.groupby('Biomarker_Category'):
+        claims[category] = {tree: int(rows[tree].iloc[0])
+                            for tree in TREES if rows[tree].nunique() == 1
+                            and rows[tree].iloc[0] != 0}
+    return claims
+
+
+# Permutation-null statistics -------------------------------------------------------------
+
+def _rank_p(observed, null, two_sided=True):
+    '''
+    Where an observed value falls in its null draws.
+
+    Centred on the null mean rather than on zero, because the null is not assumed to be
+    centred. Floors at 1/(n+1), which is the binding constraint on everything below.
+    '''
+    centre = null.mean()
+    if two_sided:
+        exceed = (np.abs(null - centre) >= abs(observed - centre)).sum()
+    else:
+        exceed = ((null - centre) >= (observed - centre)).sum()
+    return (1 + exceed)/(1 + len(null))
+
+
+def _null_z(observed, null):
+    '''Observed value in units of its null spread.'''
+    return float((observed - null.mean())/null.std(ddof=1))
+
+
+def _leave_one_out_z(null):
+    '''
+    Each null draw standardised against the other draws, [permutation, biomarker].
+
+    A draw must not contribute to the mean and SD it is judged against, or it is pulled
+    towards zero and the null spread comes out too narrow.
+    '''
+    n = len(null)
+    total, total_sq = null.sum(0), (null**2).sum(0)
+    mean = (total - null)/(n - 1)
+    var = (total_sq - null**2 - (n - 1)*mean**2)/(n - 2)
+    return (null - mean)/np.sqrt(np.maximum(var, 1e-20))
+
+
+def _profile_agreement(observed, null):
+    '''
+    Do two halves of the real ensemble agree with each other, and does a null ensemble
+    agree with the real one?
+
+    Both sides are the same object: a patients x biomarkers matrix of mean alignments,
+    flattened and correlated. The observed side is split by training seed (every distinct
+    half/half split of the seeds); the null side is one correlation per permutation, each
+    against the full observed ensemble.
+    '''
+    n_seed = observed.shape[0]
+    obs_profile = observed.mean(axis=(0, 1)).ravel()
+
+    within = []
+    for half in itertools.combinations(range(n_seed), n_seed//2):
+        if 0 not in half:                       # each split counted once
+            continue
+        other = [s for s in range(n_seed) if s not in half]
+        within.append(np.corrcoef(observed[list(half)].mean(axis=(0, 1)).ravel(),
+                                  observed[other].mean(axis=(0, 1)).ravel())[0, 1])
+
+    between = [np.corrcoef(obs_profile, null[p].ravel())[0, 1] for p in range(len(null))]
+    return np.array(within), np.array(between)
+
+
+def _per_biomarker(observed_group, null_group, feat, reported, claims):
+    '''
+    Each reported biomarker against the null of the tree that defines its category.
+
+    Two-sided, because the category's sign was itself read off the observed alignments:
+    testing one-sided in the direction the data chose would halve the p-value for free.
+    Three columns of evidence per biomarker:
+
+      rank_p       primary tree only, FDR-corrected within the reported set
+      fwer_p       primary tree, but corrected over all candidates by the maximum |z| any
+                   null draw reaches anywhere -- immune to the fact that the reported set
+                   was itself chosen on these data
+      conjunction  the largest rank p over every tree the synergy table constrains, i.e.
+                   requiring the biomarker to beat the null in all of them at once
+    '''
+    max_z = {tree: np.abs(_leave_one_out_z(null_group[tree])).max(1) for tree in TREES}
+
+    rows = []
+    for biomarker, category in reported.items():
+        i, tree = feat.index(biomarker), PRIMARY_TREE[category]
+        z = _null_z(observed_group[tree][i], null_group[tree][:, i])
+        components = {t: _rank_p(observed_group[t][i], null_group[t][:, i])
+                      for t in claims[category]}
+        rows.append({
+            'biomarker': biomarker, 'category': category, 'primary_tree': tree,
+            'observed': float(observed_group[tree][i]),
+            'null_mean': float(null_group[tree][:, i].mean()),
+            'null_sd': float(null_group[tree][:, i].std(ddof=1)),
+            'z': z,
+            'rank_p': _rank_p(observed_group[tree][i], null_group[tree][:, i]),
+            'fwer_p': (1 + (max_z[tree] >= abs(z)).sum())/(1 + len(max_z[tree])),
+            'conjunction_trees': '+'.join(components),
+            'conjunction_p': max(components.values()),
+            **{f'p_{t}': components.get(t, np.nan) for t in TREES}})
+
+    table = pd.DataFrame(rows).sort_values('rank_p').reset_index(drop=True)
+    table['fdr_q'] = fdrcorrection(table['rank_p'], alpha=0.05)[1]
+    return table
+
+
 @register('GRAIL_biomarkers', group='supp', subdir='SUPPLEMENTARY/GRAIL_biomarkers')
 def grail_biomarkers(ctx, out):
 
     # The identified biomarkers and their marker symbols are shared by the alignment
     # scatter and the correlation panel, so that one legend serves both.
-    _, majority_cat, sorted_biomarkers = load_biomarker_categories(thresh=0.5)
+    categories, majority_cat, sorted_biomarkers = load_biomarker_categories(thresh=0.5)
     marker_map = {bm: MARKER_STYLES[i % len(MARKER_STYLES)]
                   for i, bm in enumerate(sorted_biomarkers)}
 
@@ -105,10 +366,10 @@ def grail_biomarkers(ctx, out):
                            save_path=out.fig('all_biomarker_cats_heatmap'))
 
     # d. Identified biomarkers reflect univariate and drug-interaction relationships ------
-    biomarker_values = pd.read_csv(os.path.join(biomarker_dir, 'feature_values.csv'))
-    biomarker_values = biomarker_values.sort_values('sub')
+    cohort, feat = _load_cohort(biomarker_dir)
+
+    biomarker_values = cohort.copy()
     biomarker_values['Condition'] = ctx.conditions
-    biomarker_values = biomarker_values.drop(columns=['sub'])
 
     cat_corrs = _biomarker_correlations(biomarker_values, sorted_biomarkers, majority_cat)
     out.table('identified_biomarker_correlations', cat_corrs)
@@ -116,13 +377,16 @@ def grail_biomarkers(ctx, out):
     _plot_biomarker_correlations(ctx, out, cat_corrs, marker_map)
 
     # e. Held-out correlations against training GRAIL means --------------------------------
-    _corr_vs_grail_panel(ctx, out, identified)
+    _corr_vs_grail_panel(ctx, out, identified, cohort, feat)
 
     # f. The permutation-null control -----------------------------------------------------
     # Skipped rather than fatal: the null arrays are the one input of this target that is
     # produced by a separate set of training runs.
     try:
-        _grail_null_panels(out)
+        # Category order, not the panel's plotting order: it decides how biomarkers with
+        # the same rank p are ordered in the null table and its panels.
+        _grail_null_panels(out, feat,
+                           {b: majority_cat[b] for b in categories.columns})
     except (MissingInput, FileNotFoundError, ValueError) as error:
         out.log(f'No GRAIL permutation-null panels: {error}')
 
@@ -275,7 +539,7 @@ def _plot_biomarker_correlations(ctx, out, cat_corrs, marker_map):
 def _fold_rho(grail_dir):
     '''{(seed, fold): test-fold rho} of the models behind a GRAIL run.'''
     rho = {}
-    for seed_dir in sorted(glob.glob(os.path.join(add_project_root(grail_dir), 'seed_*'))):
+    for seed_dir in sorted(glob.glob(os.path.join(grail_dir, 'seed_*'))):
         performances = pd.read_csv(os.path.join(seed_dir, 'fold_performances.csv'))
         for _, row in performances.iterrows():
             rho[(os.path.basename(seed_dir), int(row['fold']))] = float(row['rho'])
@@ -296,22 +560,23 @@ def _corr_vec(a, b):
     return float(np.corrcoef(a, b)[0, 1])
 
 
-def _out_of_fold_correlations(identified):
+def _out_of_fold_correlations(ctx, identified, cohort, feat):
     '''
     Per (seed, fold) model: how well the biomarkers' held-out outcome correlations line
     up with their training-patient GRAIL means, for the identified biomarkers and for the
     remaining candidates.
     '''
-    feat, X, y, _ = load_cohort()
+    X, y = cohort[feat].values, cohort['y'].values.astype(float)
     groups = np.array(['identified' if f in identified else 'other' for f in feat])
-    align, seeds = load_alignments(GRAIL_RUN, feat)
-    held = {s: np.loadtxt(os.path.join(add_project_root(GRAIL_WEIGHTS), s,
-                                       'test_fold_indices.csv'), dtype=int) for s in seeds}
-    rho = _fold_rho(GRAIL_RUN)
+
+    grail_dir = output_dir('graphtrip', 'grail')
+    align, seeds = _observed_alignments(grail_dir, tuple(feat))
+    held = ctx.test_indices_dict
+    rho = _fold_rho(grail_dir)
 
     rows, dropped = [], 0
-    for s in seeds:
-        for k in range(N_FOLD):
+    for s_idx, s in enumerate(seeds):
+        for k in range(align.shape[1]):
             if MIN_RHO is not None and not rho.get((s, k), -np.inf) > MIN_RHO:
                 dropped += 1
                 continue
@@ -321,7 +586,7 @@ def _out_of_fold_correlations(identified):
                 continue
 
             xy_test = _corr_cols(X[test], y[test])       # held-out patients
-            g_train = align[s][k][train].mean(0)         # training patients
+            g_train = align[s_idx][k][train].mean(0)     # training patients
             rows.append({'seed': s, 'fold': k, 'n_train': len(train), 'n_test': len(test),
                          'rho': rho.get((s, k), np.nan),
                          **{f'{g}_r': _corr_vec(xy_test[groups == g], g_train[groups == g])
@@ -380,10 +645,10 @@ def _corr_vs_grail_boxplot(df, pval, out, rng,
     _save(fig, out, name)
 
 
-def _corr_vs_grail_panel(ctx, out, identified):
+def _corr_vs_grail_panel(ctx, out, identified, cohort, feat):
     '''Draws the out-of-fold correlation check and reports what it found.'''
     try:
-        df, n_identified, dropped = _out_of_fold_correlations(identified)
+        df, n_identified, dropped = _out_of_fold_correlations(ctx, identified, cohort, feat)
     except (MissingInput, FileNotFoundError, ValueError) as error:
         out.log(f'No out-of-fold correlation panel: {error}')
         out.log()
@@ -427,28 +692,27 @@ def _grid(n, ncols, width, height):
     return fig, axes[:n], ncols
 
 
-def _grail_null_panels(out):
+def _grail_null_panels(out, feat, reported):
     '''
     Draws both permutation-null panels and writes the statistics behind them.
 
     The full-precision z, rank p and FDR q of every panel of grail_null_histograms go to
     grail_null_per_biomarker.csv, alongside the tree each biomarker was tested against
-    and the two stricter corrections scripts/grail_model_null.py computes.
+    and the two stricter corrections.
     '''
-    feat = load_candidates()
-    reported, claims = load_reported(), load_sign_claims()
-    observed, null, _ = load_all_trees(feat)
-    observed_group, null_group = group_means(observed, null)
+    claims = _sign_claims()
+    observed, null, dropped = _load_trees(feat)
+    observed_group, null_group = _group_means(observed, null)
 
     rows = []
     for tree in TREES:
-        within, between = profile_agreement(observed[tree], null[tree])
+        within, between = _profile_agreement(observed[tree], null[tree])
         rows += [{'tree': tree, 'comparison': 'observed_split_half', 'r': r} for r in within]
         rows += [{'tree': tree, 'comparison': 'observed_vs_null', 'r': r} for r in between]
     profile = pd.DataFrame(rows)
     _profile_histograms(profile, out)
 
-    table = per_biomarker(observed_group, null_group, feat, reported, claims)
+    table = _per_biomarker(observed_group, null_group, feat, reported, claims)
     _null_histograms(table, null_group, feat, out)
     _null_summary(table, null_group, feat, out)
 
@@ -457,10 +721,15 @@ def _grail_null_panels(out):
 
     first = next(iter(TREES))
     n_draws = len(null_group[first])
+    n_seeds, n_folds = observed[first].shape[:2]
     out.log(f'GRAIL permutation null: {n_draws} draws per tree, each the mean of one '
-            f"permutation's {null[first].shape[1]} training seeds; observed from "
-            f'{observed[first].shape[0]} seeds x {observed[first].shape[1]} folds. '
+            f"permutation's {n_seeds} training seeds; observed from "
+            f'{n_seeds} seeds x {n_folds} folds. '
             f'Rank p floor {1/(1 + n_draws):.4f}.')
+    for tree, names in dropped.items():
+        if names:
+            out.log(f'  WARNING: {tree} dropped {len(names)} permutation(s) with an '
+                    f'incomplete seed set: {", ".join(names)}.')
     for tree in TREES:
         within = profile.loc[(profile['tree'] == tree)
                              & (profile['comparison'] == 'observed_split_half'), 'r']
