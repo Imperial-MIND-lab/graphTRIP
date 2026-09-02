@@ -25,4 +25,5 @@ from figure_making.panels import supp_medusa               # noqa: F401
 from figure_making.panels import supp_input_domain_ablations  # noqa: F401
 from figure_making.panels import supp_grail_validation     # noqa: F401
 from figure_making.panels import supp_permutation_null     # noqa: F401
+from figure_making.panels import supp_error_distribution   # noqa: F401
 from figure_making.panels import supp_misc                 # noqa: F401
