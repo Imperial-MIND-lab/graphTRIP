@@ -36,7 +36,7 @@ from statsmodels.stats.multitest import fdrcorrection
 
 from utils.files import add_project_root
 from utils.plotting import (
-    ALPHA_SCATTER, CMAP_DEFAULT, ESCIT, PSILO, NEUTRAL, NEUTRAL2,
+    ALPHA_SCATTER, ESCIT, PSILO, NEUTRAL, NEUTRAL2,
     true_vs_pred_scatter)
 
 from figure_making.common import load_biomarker_categories, biomarker_palette, fmt_p
@@ -100,7 +100,10 @@ MIN_TRAIN, MIN_TEST = 5, 3
 # Folds whose model failed to predict are dropped, matching the rho > 0 inclusion
 # criterion analyse_grail_results applies to the published pipeline.
 MIN_RHO = 0.0
-RHO_VMIN, RHO_VMAX = 0.0, 1.0
+
+# Identified by Medusa-graphTRIP only, not by graphTRIP, whose models the out-of-fold
+# check is run on; they count as other candidates there.
+MEDUSA_ONLY = ('x5-HT1A_mean_FPN', 'x5-HT2A_mean_FPN')
 
 
 # Loading GRAIL results ------------------------------------------------------------------
@@ -657,58 +660,60 @@ def _out_of_fold_correlations(ctx, identified, cohort, feat):
     return pd.DataFrame(rows), int((groups == 'identified').sum()), dropped
 
 
-def _paired_wilcoxon(df, a='identified_r', b='other_r'):
+def _seed_means(df, a='identified_r', b='other_r'):
+    '''Mean over each training seed's fold models, one row per seed.'''
+    return df[[a, b, 'seed']].dropna().groupby('seed')[[a, b]].mean()
+
+
+def _paired_wilcoxon(per_seed, a='identified_r', b='other_r'):
     '''One-sided Wilcoxon on the per-seed means, paired by training seed.'''
-    per_seed = df[[a, b, 'seed']].dropna().groupby('seed')[[a, b]].mean()
     if len(per_seed) < 5 or np.allclose(per_seed[a], per_seed[b]):
         return np.nan
     return wilcoxon(per_seed[a], per_seed[b], alternative='greater').pvalue
 
 
-def _corr_vs_grail_boxplot(df, pval, out, rng,
-                           name='corr_vs_grail_reversed_boxplots'):
+def _corr_vs_grail_seeds(per_seed, pval, out,
+                         name='corr_vs_grail_reversed_boxplots'):
     '''
-    Identified against the other candidates, one point per fold model, coloured by how
-    well that model predicted its held-out patients.
+    Identified against the other candidates, one point per training seed (the mean over
+    its fold models). The two points of a seed are joined, and each group's mean is
+    marked by a horizontal line.
     '''
-    fig, ax = plt.subplots(figsize=(4.4, 5.4), constrained_layout=True)
-    values = [df['identified_r'].dropna().values, df['other_r'].dropna().values]
-    low = min(v.min() for v in values)
-    high = max(v.max() for v in values)
+    fig, ax = plt.subplots(figsize=(3.4, 5.4), constrained_layout=True)
+    groups = [('identified_r', DARK_RED), ('other_r', NEUTRAL2)]
+    x = np.arange(1, len(groups) + 1)
+    values = per_seed[[g for g, _ in groups]].values
+    low, high = values.min(), values.max()
     pad = 0.1*(high - low)
 
-    box = ax.boxplot(values, labels=['identified', 'other'], widths=0.55,
-                     patch_artist=True, showfliers=False,
-                     medianprops=dict(color='black', lw=1.5))
-    for patch, colour, alpha in zip(box['boxes'], (DARK_RED, NEUTRAL), (0.25, 0.7)):
-        patch.set_facecolor(colour)
-        patch.set_alpha(alpha)
-
-    for i, group in enumerate(('identified', 'other')):
-        sub = df.dropna(subset=[f'{group}_r'])
-        points = ax.scatter(i + 1 + rng.uniform(-0.15, 0.15, len(sub)),
-                            sub[f'{group}_r'].values, c=sub['rho'].values,
-                            cmap=CMAP_DEFAULT, vmin=RHO_VMIN, vmax=RHO_VMAX, s=18,
-                            edgecolor='0.3', linewidth=0.25, alpha=0.9, zorder=3)
+    ax.plot(x, values.T, color=NEUTRAL, lw=0.6, zorder=1)
+    for xi, (group, colour) in zip(x, groups):
+        ax.scatter(np.full(len(per_seed), xi), per_seed[group], color=colour, s=28,
+                   edgecolor='white', linewidth=0.4, zorder=3)
+        ax.hlines(per_seed[group].mean(), xi - 0.22, xi + 0.22, color=colour, lw=2,
+                  zorder=2)
 
     if not np.isnan(pval) and pval < 0.05:
         ax.text(1.5, high + 1.0*pad, '*', color=DARK_RED, fontsize=22,
                 ha='center', va='center', fontweight='bold')
 
     ax.axhline(0, color='lightgray', ls='--', lw=1, zorder=0)
+    ax.set_xticks(x)
+    ax.set_xticklabels(['identified', 'other'])
+    ax.set_xlim(0.5, len(groups) + 0.5)
     ax.set_ylim(low - pad, high + 1.9*pad)
     ax.spines[['top', 'right']].set_visible(False)
     ax.set_ylabel('corr across biomarkers\n(held-out correlations vs training GRAIL means)')
     ax.set_title(f'Out-of-fold direction, graphTRIP pooled\n'
-                 f"paired Wilcoxon over {df['seed'].nunique()} training seeds: "
+                 f'paired Wilcoxon over {len(per_seed)} training seeds\n'
                  f'p = {fmt_p(pval)}', fontsize=9, linespacing=1.35)
-    fig.colorbar(points, ax=ax, label="model's test-fold rho", fraction=0.06, pad=0.03)
 
     _save(fig, out, name)
 
 
 def _corr_vs_grail_panel(ctx, out, identified, cohort, feat):
     '''Draws the out-of-fold correlation check and reports what it found.'''
+    identified = [bm for bm in identified if bm not in MEDUSA_ONLY]
     try:
         df, n_identified, dropped = _out_of_fold_correlations(ctx, identified, cohort, feat)
     except (MissingInput, FileNotFoundError, ValueError) as error:
@@ -716,20 +721,24 @@ def _corr_vs_grail_panel(ctx, out, identified, cohort, feat):
         out.log()
         return
 
-    pval = _paired_wilcoxon(df)
-    _corr_vs_grail_boxplot(df, pval, out, ctx.rng)
+    per_seed = _seed_means(df)
+    pval = _paired_wilcoxon(per_seed)
+    _corr_vs_grail_seeds(per_seed, pval, out)
     out.table('corr_vs_grail_reversed_scores', df)
+    out.table('corr_vs_grail_reversed_seed_means', per_seed.reset_index())
 
     out.log(f'Held-out biomarker-outcome correlations vs training GRAIL means, over '
             f'{len(df)} fold models ({dropped} dropped for test-fold rho <= {MIN_RHO} or '
-            f'too few patients); {n_identified} identified biomarkers against the '
-            f'remaining candidates.')
+            f'too few patients), averaged within each of {len(per_seed)} training seeds; '
+            f'{n_identified} identified biomarkers against the remaining candidates '
+            f'({", ".join(MEDUSA_ONLY)} count as other: identified by Medusa-graphTRIP '
+            f'only).')
     for group in ('identified', 'other'):
-        values = df[f'{group}_r'].dropna()
-        out.log(f'  {group:11s} median r = {values.median():+.4f}, '
-                f'mean = {values.mean():+.4f} +/- {values.std():.4f}')
+        values = per_seed[f'{group}_r']
+        out.log(f'  {group:11s} per-seed mean r = {values.mean():+.4f} +/- '
+                f'{values.std():.4f} (median {values.median():+.4f})')
     out.log(f'  paired Wilcoxon (one-sided, identified > other) over '
-            f"{df['seed'].nunique()} training seeds: p = {fmt_p(pval)}")
+            f'{len(per_seed)} training seeds: p = {fmt_p(pval)}')
     out.log()
 
 
