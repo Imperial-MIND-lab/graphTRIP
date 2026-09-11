@@ -8,9 +8,9 @@ Panels:
 - c. zero-shot prediction of graphTRIP
 - d. reconstruction performance of the graphTRIP VGAE, not fine-tuned, tested against
      the primary-dataset reconstructions of Fig. 2d
-- e. r and partial r, for the full model, the imaging-only ablation and the clinical-only
-     benchmark. One bar panel removes baseline QIDS from both sides, a second removes
-     baseline QIDS and BDI, the two severity scores graphTRIP receives
+- e. r and partial r given baseline QIDS, for the full model, the imaging-only ablation
+     and the clinical-only benchmark, plus the permutation importance of the MLP inputs
+     of graphTRIP and of the clinical-only benchmark
 
 Panels c and e are drawn without clinical harmonisation for the main figure, and again
 with it as separate files.
@@ -89,8 +89,6 @@ BASELINE_COVARIATES = ('QIDS_Before', 'BDI_Before')
 PARTIAL_SPECS = [
     {'suffix': '_qids', 'covariates': ['QIDS_Before'],
      'legend': 'partial r | QIDS_Before'},
-    {'suffix': '_qids_bdi', 'covariates': list(BASELINE_COVARIATES),
-     'legend': 'partial r | QIDS_Before, BDI_Before'},
 ]
 PARTIAL_COLUMNS = [f"partial_r{spec['suffix']}" for spec in PARTIAL_SPECS]
 
@@ -110,8 +108,13 @@ COMPARISON_COLUMNS = ['ensemble', 'feature', 'n_draws', 'n_primary', 'mean_prima
 SCATTER_XLABEL = 'True QIDS, 1 week post 10+25-mg psilocybin for TRD'
 SCATTER_YLABEL = 'Predicted QIDS, 3 weeks post 2x25-mg psilocybin for MDD'
 
-# Permutation importance: the MLP input blocks whose contribution is measured, and how many
-# times each is shuffled across patients within a training seed.
+# Permutation importance: the models whose inputs are measured, the input blocks measured
+# for each, and how many times each block is shuffled across patients within a training
+# seed. The clinical-only head reads no brain latents, so only its scores are shuffled.
+IMPORTANCE_MODELS = [
+    (('validation', 'evaluate_graphtrip'), GRAPHTRIP),
+    (('validation', 'feature_ablation', 'control_mlp_raw'), CLINICAL_ONLY),
+]
 LATENT_BLOCK = 'Brain latents (z)'
 IMPORTANCE_ATTRS = ['QIDS_Before', 'BDI_Before']
 N_IMPORTANCE_PERMUTATIONS = 100
@@ -494,7 +497,8 @@ def load_seed_ensemble(seed_dir, data, batch, device):
     The fold models of one training seed, with the MLP input matrix each of them receives.
 
     The VGAE never reads graph_attr, so each readout is computed once and reused for both
-    input mappings; only the head's forward pass is repeated per permutation.
+    input mappings; only the head's forward pass is repeated per permutation. A clinical-only
+    head has no VGAE, so its readouts are empty and its input is the clinical matrix alone.
 
     Returns:
     -------
@@ -514,13 +518,18 @@ def load_seed_ensemble(seed_dir, data, batch, device):
         source_dataset_config=source_config['dataset'])
 
     readouts = []
-    for vgae in load_vgaes(config['vgae_model'], weights_dir, filenames['vgae']):
-        vgae.to(device).eval()
-        with torch.no_grad():
-            out = vgae(batch)
-            readouts.append(vgae.readout(out.mu, node_context(batch),
-                                         batch.batch).cpu().numpy())
-    latent_dim = readouts[0].shape[1]
+    if 'vgae' in filenames:
+        for vgae in load_vgaes(config['vgae_model'], weights_dir, filenames['vgae']):
+            vgae.to(device).eval()
+            with torch.no_grad():
+                out = vgae(batch)
+                readouts.append(vgae.readout(out.mu, node_context(batch),
+                                             batch.batch).cpu().numpy())
+        latent_dim = readouts[0].shape[1]
+    else:
+        latent_dim = 0
+        readouts = [np.zeros((len(data), 0), dtype=np.float32)
+                    for _ in filenames['mlp']]
 
     heads = [head.to(device).eval() for head in
              load_mlps(config['mlp_model'], latent_dim, weights_dir, filenames['mlp'])]
@@ -557,6 +566,17 @@ def ensemble_r(heads, matrices, labels, columns=None, order=None, device=None):
     return stats.pearsonr(predictions.mean(axis=1), labels)[0]
 
 
+def input_blocks(latent_dim, graph_attrs):
+    '''
+    The MLP input columns whose contribution is measured, one block each.
+
+    A clinical-only head has no latent block, so only its severity scores are shuffled.
+    '''
+    blocks = [(LATENT_BLOCK, np.arange(latent_dim))] if latent_dim else []
+    return blocks + [(attr, np.array([latent_dim + graph_attrs.index(attr)]))
+                     for attr in IMPORTANCE_ATTRS]
+
+
 def seed_importance(heads, matrices, labels, blocks, rng, device):
     '''Intact r of one seed's ensemble, and the mean drop in r per input block.'''
     baseline = ensemble_r(heads, matrices, labels, device=device)
@@ -574,15 +594,16 @@ def seed_importance(heads, matrices, labels, blocks, rng, device):
 
 def summarise_importance(per_seed):
     '''
-    One row per input mapping and block: the drop in r across training seeds, its SEM, a
-    one-sample t-test against zero, and the drop as a percentage of the intact r.
+    One row per model, input mapping and block: the drop in r across training seeds, its
+    SEM, a one-sample t-test against zero, and the drop as a percentage of the intact r.
     '''
     rows = []
-    for (condition, feature), group in per_seed.groupby(['condition', 'feature'],
-                                                        sort=False):
+    for (model, condition, feature), group in per_seed.groupby(
+            ['model', 'condition', 'feature'], sort=False):
         drops = group['drop_r'].to_numpy(dtype=float)
         baseline = group['baseline_r'].mean()
-        rows.append({'condition': condition, 'feature': feature, 'n_seeds': len(drops),
+        rows.append({'model': model, 'condition': condition, 'feature': feature,
+                     'n_seeds': len(drops),
                      'baseline_r': baseline, 'drop_r': drops.mean(),
                      'drop_r_sem': stats.sem(drops),
                      'p': stats.ttest_1samp(drops, 0).pvalue,
@@ -590,10 +611,11 @@ def summarise_importance(per_seed):
     return pd.DataFrame(rows)
 
 
-def importance_analysis(out, results_base_dir, data, num_seeds, seed, device=None):
+def importance_analysis(out, data, num_seeds, seed, device=None):
     '''
-    Permutation importance of graphTRIP's inputs under both input mappings, computed
-    within each training seed and aggregated across them.
+    Permutation importance of the inputs of graphTRIP and of the clinical-only benchmark,
+    under both input mappings, computed within each training seed and aggregated across
+    them.
     '''
     device = device or get_device()
     batch = next(iter(DataLoader(data, batch_size=len(data), shuffle=False))).to(device)
@@ -601,18 +623,18 @@ def importance_analysis(out, results_base_dir, data, num_seeds, seed, device=Non
 
     rng = np.random.default_rng(seed)
     rows = []
-    for seed_index in range(num_seeds):
-        heads, matrices, latent_dim, graph_attrs = load_seed_ensemble(
-            os.path.join(results_base_dir, f'seed_{seed_index}'), data, batch, device)
+    for parts, model in IMPORTANCE_MODELS:
+        base_dir = require(output_dir(*parts))
+        for seed_index in range(num_seeds):
+            heads, matrices, latent_dim, graph_attrs = load_seed_ensemble(
+                os.path.join(base_dir, f'seed_{seed_index}'), data, batch, device)
+            blocks = input_blocks(latent_dim, graph_attrs)
 
-        blocks = [(LATENT_BLOCK, np.arange(latent_dim))]
-        blocks += [(attr, np.array([latent_dim + graph_attrs.index(attr)]))
-                   for attr in IMPORTANCE_ATTRS]
-
-        for condition, _ in CONDITIONS:
-            rows += [{'condition': condition, 'seed': seed_index, **row}
-                     for row in seed_importance(heads, matrices[condition], labels,
-                                                blocks, rng, device)]
+            for condition, _ in CONDITIONS:
+                rows += [{'model': model, 'condition': condition, 'seed': seed_index,
+                          **row}
+                         for row in seed_importance(heads, matrices[condition], labels,
+                                                    blocks, rng, device)]
 
     table = summarise_importance(pd.DataFrame(rows))
     out.table('e_permutation_importance', table)
@@ -743,6 +765,5 @@ def fig4_validation(ctx, out):
                                   partial_col=column, partial_label=spec['legend'])
 
     prediction_spread_table(out)
-    importance_analysis(out, results_base_dir, psilodep1_data, ctx.num_seeds,
-                        ctx.cfg.seed, ctx.device)
+    importance_analysis(out, psilodep1_data, ctx.num_seeds, ctx.cfg.seed, ctx.device)
     sensitivity_table(out)

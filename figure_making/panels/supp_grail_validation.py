@@ -29,13 +29,15 @@ from functools import lru_cache
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
+from matplotlib.patches import Patch
 from scipy.stats import pearsonr, gaussian_kde, wilcoxon
 from statsmodels.stats.multitest import fdrcorrection
 
 from utils.files import add_project_root
 from utils.plotting import (
     ALPHA_SCATTER, CMAP_DEFAULT, ESCIT, PSILO, NEUTRAL, NEUTRAL2,
-    plot_biomarker_heatmap, true_vs_pred_scatter)
+    true_vs_pred_scatter)
 
 from figure_making.common import load_biomarker_categories, biomarker_palette, fmt_p
 from figure_making.paths import (
@@ -49,6 +51,16 @@ MARKER_STYLES = ['o', 's', '^', 'v', 'D', '>', '<', 'p', '*', 'h']
 # The identified biomarkers and every observed value are marked in dark red, so that they
 # read against the grey candidates and grey nulls. Same red as supp_permutation_null.
 DARK_RED = '#AA0000'
+
+# The category heatmap is a single-column supplementary panel: 6.5 in wide, 7 pt axis
+# labels, 5 pt ticks, 6 pt legend. Arial is named first so that the svg (text is kept as
+# text) picks it up wherever it is installed; the rest of the list is what this machine
+# falls back to, all metric-compatible with Arial.
+HEATMAP_WIDTH = 6.5
+HEATMAP_FONTS = ['Arial', 'Liberation Sans', 'Nimbus Sans', 'DejaVu Sans']
+LABEL_FONTSIZE, TICK_FONTSIZE, LEGEND_FONTSIZE = 7, 5, 6
+HEATMAP_LEGEND_NCOLS = 3
+HEATMAP_CELL_ASPECT = 0.7   # cell height as a fraction of cell width
 
 NULL_NCOLS = 5          # biomarker panels per row
 PROFILE_NCOLS = 2       # tree panels per row, giving a 2 x 2 grid for the four trees
@@ -362,8 +374,7 @@ def grail_biomarkers(ctx, out):
     # c. All biomarker categories ---------------------------------------------------------
     palette = biomarker_palette()
     all_categories, _, all_sorted = load_biomarker_categories(thresh=1.0)
-    plot_biomarker_heatmap(all_categories[all_sorted], palette,
-                           save_path=out.fig('all_biomarker_cats_heatmap'))
+    _all_biomarker_cats_heatmap(all_categories[all_sorted], palette, out)
 
     # d. Identified biomarkers reflect univariate and drug-interaction relationships ------
     cohort, feat = _load_cohort(biomarker_dir)
@@ -440,6 +451,57 @@ def _alignment_vs_correlation(plot_df, identified, marker_map, out,
 
     _save(fig, out, name)
     return fits
+
+
+def _all_biomarker_cats_heatmap(categories, palette, out,
+                                name='all_biomarker_cats_heatmap'):
+    '''
+    Every candidate biomarker's category, one row per subject.
+
+    Sized for a single manuscript column: the figure is HEATMAP_WIDTH wide, and its
+    height follows from the number of subjects at a fixed cell aspect. The legend sits
+    above the heatmap in three columns rather than beside it, so that no width is spent
+    on it.
+    '''
+    order = list(palette)
+    cmap = ListedColormap([palette[cat] for cat in order])
+    values = categories.replace({cat: i for i, cat in enumerate(order)}).values
+
+    n_row, n_col = values.shape
+    # Space the axes cannot use: y ticks and ylabel on the left, x ticks (rotated, so as
+    # long as the longest biomarker name) and xlabel below, legend rows above.
+    side = 0.6
+    below = 0.15 + max(len(c) for c in categories.columns)*0.62*TICK_FONTSIZE/72
+    above = 0.2 + np.ceil(len(order)/HEATMAP_LEGEND_NCOLS)*1.6*LEGEND_FONTSIZE/72
+    cell = (HEATMAP_WIDTH - side)/n_col
+    height = n_row*cell*HEATMAP_CELL_ASPECT + below + above
+
+    with plt.rc_context({'font.family': HEATMAP_FONTS, 'font.size': TICK_FONTSIZE}):
+        fig, ax = plt.subplots(figsize=(HEATMAP_WIDTH, height), constrained_layout=True)
+        ax.pcolormesh(values, cmap=cmap, vmin=-0.5, vmax=len(order) - 0.5,
+                      edgecolors='lightgray', linewidth=0.2)
+        ax.invert_yaxis()
+
+        ax.set_xticks(np.arange(n_col) + 0.5)
+        ax.set_xticklabels(categories.columns, rotation=90)
+        ax.set_yticks(np.arange(n_row) + 0.5)
+        ax.set_yticklabels(categories.index)
+        ax.tick_params(labelsize=TICK_FONTSIZE, length=1.5, width=0.4, pad=1.5)
+        for spine in ax.spines.values():
+            spine.set_linewidth(0.4)
+
+        ax.set_xlabel('Candidate biomarkers', fontsize=LABEL_FONTSIZE)
+        ax.set_ylabel('Subjects', fontsize=LABEL_FONTSIZE)
+
+        handles = [Patch(facecolor=palette[cat], edgecolor='black', linewidth=0.3,
+                         label=cat) for cat in order]
+        fig.legend(handles=handles, title='Response category', frameon=False,
+                   loc='outside upper center', ncol=HEATMAP_LEGEND_NCOLS,
+                   fontsize=LEGEND_FONTSIZE, title_fontsize=LEGEND_FONTSIZE,
+                   handlelength=1.2, handleheight=1.0, columnspacing=1.2,
+                   labelspacing=0.5, borderpad=0.2)
+
+        _save(fig, out, name)
 
 
 def _biomarker_correlations(biomarker_values, sorted_biomarkers, majority_cat):
