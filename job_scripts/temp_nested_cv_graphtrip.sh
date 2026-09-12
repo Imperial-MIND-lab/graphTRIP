@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#PBS -l select=1:ncpus=4:mem=8gb
+#PBS -l select=1:ncpus=4:mem=2gb
 #PBS -l walltime=02:00:00
 #PBS -N nested_cv
 #PBS -J 0-4

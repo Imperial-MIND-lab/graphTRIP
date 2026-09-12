@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#PBS -l select=1:ncpus=4:mem=8gb
+#PBS -l select=1:ncpus=4:mem=4gb
 #PBS -l walltime=08:00:00
 #PBS -N nested_grail
 #PBS -J 0-209
