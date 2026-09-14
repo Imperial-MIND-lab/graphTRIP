@@ -16,6 +16,15 @@ alignment and nothing downstream of it. Observed and null are constructed identi
 seeds, all folds, all patients, with no rho>0 fold filter and no performance weighting on
 either side.
 
+Supp. Fig. 14 layout:
+- a. biomarker_legend + identified_biomarker_correlations
+- b. identified_biomarker_correlations
+- c. grail_null_profile_agreement (only graphTRIP and ITEs)
+- d. corr_vs_grail_reversed_boxplots
+- e. signed_r_all_candidates_null_box
+
+Other panels are auxiliary.
+
 Author: Hanna M. Tolle
 Date: 2026-08-10
 License: BSD 3-Clause
@@ -62,8 +71,11 @@ LABEL_FONTSIZE, TICK_FONTSIZE, LEGEND_FONTSIZE = 7, 5, 6
 HEATMAP_LEGEND_NCOLS = 3
 HEATMAP_CELL_ASPECT = 0.7   # cell height as a fraction of cell width
 
+# The out-of-fold agreement and sign-consistency panels, in inches and points
+SMALL_PANEL_WIDTH, SMALL_PANEL_HEIGHT = 0.75, 2.0
+SMALL_TICK_FONTSIZE, SMALL_LABEL_FONTSIZE = 5, 6
+
 NULL_NCOLS = 5          # biomarker panels per row
-PROFILE_NCOLS = 2       # tree panels per row, giving a 2 x 2 grid for the four trees
 PROFILE_BINS = np.linspace(-1, 1, 41)
 
 # The four GRAIL trees the biomarker categories are built from. Each is one model and one
@@ -80,6 +92,10 @@ TREES = {
     'ITE':          (('medusa_graphtrip', 'grail'),
                      ('medusa_graphtrip', 'permutation_null'), 'ite'),
 }
+
+# The trees shown in the profile-agreement panel, top to bottom, with their panel titles
+PROFILE_TREES = {'Shared': 'graphTRIP', 'ITE': 'Medusa-graphTRIP'}
+PROFILE_SIZE = (1.3, 2.0)
 
 # The tree whose claim defines each category, and is therefore the one the biomarker is
 # tested against.
@@ -393,7 +409,14 @@ def grail_biomarkers(ctx, out):
     # e. Held-out correlations against training GRAIL means --------------------------------
     _corr_vs_grail_panel(ctx, out, identified, cohort, feat)
 
-    # f. The permutation-null control -----------------------------------------------------
+    # f. Signed held-out correlations over all candidates, against the permutation null ---
+    try:
+        _signed_r_panel(ctx, out, cohort, feat)
+    except (MissingInput, FileNotFoundError, ValueError) as error:
+        out.log(f'No signed-r permutation-null panel: {error}')
+        out.log()
+
+    # g. The permutation-null control -----------------------------------------------------
     # Skipped rather than fatal: the null arrays are the one input of this target that is
     # produced by a separate set of training runs.
     try:
@@ -679,34 +702,34 @@ def _corr_vs_grail_seeds(per_seed, pval, out,
     its fold models). The two points of a seed are joined, and each group's mean is
     marked by a horizontal line.
     '''
-    fig, ax = plt.subplots(figsize=(3.4, 5.4), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(SMALL_PANEL_WIDTH, SMALL_PANEL_HEIGHT),
+                           constrained_layout=True)
     groups = [('identified_r', DARK_RED), ('other_r', NEUTRAL2)]
     x = np.arange(1, len(groups) + 1)
     values = per_seed[[g for g, _ in groups]].values
     low, high = values.min(), values.max()
     pad = 0.1*(high - low)
 
-    ax.plot(x, values.T, color=NEUTRAL, lw=0.6, zorder=1)
+    ax.plot(x, values.T, color=NEUTRAL, lw=0.4, zorder=1)
     for xi, (group, colour) in zip(x, groups):
-        ax.scatter(np.full(len(per_seed), xi), per_seed[group], color=colour, s=28,
-                   edgecolor='white', linewidth=0.4, zorder=3)
-        ax.hlines(per_seed[group].mean(), xi - 0.22, xi + 0.22, color=colour, lw=2,
+        ax.scatter(np.full(len(per_seed), xi), per_seed[group], color=colour, s=6,
+                   edgecolor='white', linewidth=0.2, zorder=3)
+        ax.hlines(per_seed[group].mean(), xi - 0.22, xi + 0.22, color=colour, lw=1,
                   zorder=2)
 
     if not np.isnan(pval) and pval < 0.05:
-        ax.text(1.5, high + 1.0*pad, '*', color=DARK_RED, fontsize=22,
+        ax.text(1.5, high + 1.0*pad, '*', color=DARK_RED, fontsize=10,
                 ha='center', va='center', fontweight='bold')
 
-    ax.axhline(0, color='lightgray', ls='--', lw=1, zorder=0)
+    ax.axhline(0, color='lightgray', ls='--', lw=0.6, zorder=0)
     ax.set_xticks(x)
-    ax.set_xticklabels(['identified', 'other'])
+    ax.set_xticklabels(['identified', 'other'], rotation=90)
     ax.set_xlim(0.5, len(groups) + 0.5)
     ax.set_ylim(low - pad, high + 1.9*pad)
     ax.spines[['top', 'right']].set_visible(False)
-    ax.set_ylabel('corr across biomarkers\n(held-out correlations vs training GRAIL means)')
-    ax.set_title(f'Out-of-fold direction, graphTRIP pooled\n'
-                 f'paired Wilcoxon over {len(per_seed)} training seeds\n'
-                 f'p = {fmt_p(pval)}', fontsize=9, linespacing=1.35)
+    ax.set_ylabel('Alignment-correlation agreement', fontsize=SMALL_LABEL_FONTSIZE)
+    fig.suptitle(f'p = {fmt_p(pval)}', fontsize=SMALL_LABEL_FONTSIZE)
+    ax.tick_params(labelsize=SMALL_TICK_FONTSIZE, length=2, width=0.5)
 
     _save(fig, out, name)
 
@@ -739,6 +762,163 @@ def _corr_vs_grail_panel(ctx, out, identified, cohort, feat):
                 f'{values.std():.4f} (median {values.median():+.4f})')
     out.log(f'  paired Wilcoxon (one-sided, identified > other) over '
             f'{len(per_seed)} training seeds: p = {fmt_p(pval)}')
+    out.log()
+
+
+# Signed held-out correlations over all candidates, against the permutation null --------
+
+def _signed_r(xy_test, g_train):
+    '''Mean over biomarkers of sign(training alignment) x held-out correlation.'''
+    return float(np.mean(np.sign(g_train)*xy_test))
+
+
+def _signed_r_models(align, held, X, y):
+    '''
+    Signed r of every (seed, fold) model, from its mean alignments over its training
+    patients and the biomarker-outcome correlations over its held-out patients.
+
+    align yields (seed, fold, [subject, biomarker] alignments); held maps seed to the
+    test fold of every patient.
+    '''
+    rows = []
+    for seed, k, fold_align in align:
+        train, test = np.where(held[seed] != k)[0], np.where(held[seed] == k)[0]
+        if len(train) < MIN_TRAIN or len(test) < MIN_TEST:
+            continue
+        rows.append({'seed': seed, 'fold': k,
+                     'signed_r': _signed_r(_corr_cols(X[test], y[test]),
+                                           fold_align[train].mean(0))})
+    return rows
+
+
+def _signed_r_observed(ctx, cohort, feat):
+    '''Signed r of every graphTRIP fold model, over all candidates.'''
+    X, y = cohort[feat].values, cohort['y'].values.astype(float)
+    align, seeds = _observed_alignments(output_dir('graphtrip', 'grail'), tuple(feat))
+    fold_align = ((s, k, align[i, k]) for i, s in enumerate(seeds)
+                  for k in range(align.shape[1]))
+    return pd.DataFrame(_signed_r_models(fold_align, ctx.test_indices_dict, X, y)), seeds
+
+
+def _signed_r_null(cohort, feat, n_seeds):
+    '''
+    Signed r of every permutation-null fold model, scored against the real held-out
+    correlations of its own held-out patients. Permutations with fewer than n_seeds
+    seeds are dropped.
+    '''
+    X, y = cohort[feat].values, cohort['y'].values.astype(float)
+    null_dir = require(output_dir('graphtrip', 'permutation_null'))
+    rows, dropped = [], []
+    for perm_dir in perm_dirs(null_dir):
+        perm = os.path.basename(perm_dir)
+        files = sorted(glob.glob(os.path.join(perm_dir, 'grail', 'seed_*',
+                                              'mean_alignments.csv')))
+        if len(files) != n_seeds:
+            dropped.append(perm)
+            continue
+        held, fold_align = {}, []
+        for path in files:
+            seed = os.path.basename(os.path.dirname(path))
+            held[seed] = np.loadtxt(os.path.join(perm_dir, seed, 'test_fold_indices.csv'),
+                                    dtype=int)
+            for k, fold in pd.read_csv(path).groupby('fold'):
+                fold_align.append((seed, int(k), fold.sort_values('subject')[feat].values))
+        rows += [{'perm': perm, **row} for row in _signed_r_models(fold_align, held, X, y)]
+    if not rows:
+        raise FileNotFoundError(f'No complete {n_seeds}-seed permutations in {null_dir}')
+    return pd.DataFrame(rows), dropped
+
+
+def _signed_r_histogram(observed, draws, p, z, out, name='signed_r_all_candidates_null'):
+    '''Null draws of the mean signed r over fold models, with the observed value.'''
+    lo, hi = min(draws.min(), observed), max(draws.max(), observed)
+    pad = 0.08*(hi - lo)
+    grid = np.linspace(lo - pad, hi + pad, 400)
+    density = gaussian_kde(draws)(grid)
+
+    fig, ax = plt.subplots(figsize=(3.7, 3.2), constrained_layout=True)
+    ax.hist(draws, bins=20, density=True, color=NEUTRAL, edgecolor=NEUTRAL2, linewidth=0.5,
+            label='null draws')
+    ax.fill_between(grid, density, color=NEUTRAL2, alpha=0.25, linewidth=0)
+    ax.plot(grid, density, color=NEUTRAL2, lw=1.4, label='Gaussian KDE')
+    ax.axvline(draws.mean(), color=NEUTRAL2, lw=1.0, ls='--', label='null mean')
+    ax.axvline(observed, color=DARK_RED, lw=1.8, label='observed')
+    ax.set_xlim(lo - pad, hi + pad)
+    ax.set_ylim(bottom=0)
+    ax.set_title(f'observed {observed:+.3f}, null {draws.mean():+.3f} '
+                 f'+/- {draws.std(ddof=1):.3f}\nz = {z:+.2f}, p = {fmt_p(p)} '
+                 f'(one-sided, {len(draws)} permutations)', fontsize=8, linespacing=1.3)
+    ax.set_xlabel('mean sign(training alignment) x held-out r,\nmean over fold models',
+                  fontsize=7)
+    ax.set_ylabel('density', fontsize=8)
+    ax.legend(loc='upper left', fontsize=6, frameon=False, handlelength=1.0)
+    ax.spines[['top', 'right']].set_visible(False)
+    ax.tick_params(labelsize=7)
+    _save(fig, out, name)
+
+
+def _signed_r_box(observed, draws, p, z, out, name='signed_r_all_candidates_null_box'):
+    '''The same test as a vertical box of null draws, with the observed value marked.'''
+    fig, ax = plt.subplots(figsize=(SMALL_PANEL_WIDTH, SMALL_PANEL_HEIGHT),
+                           constrained_layout=True)
+    lw = 0.5
+    box = ax.boxplot([draws], widths=0.5, whis=(0, 100), showfliers=False,
+                     patch_artist=True, medianprops=dict(color=NEUTRAL2, lw=lw),
+                     whiskerprops=dict(lw=lw), capprops=dict(lw=lw),
+                     boxprops=dict(lw=lw))
+    box['boxes'][0].set_facecolor(NEUTRAL)
+    box['boxes'][0].set_alpha(0.7)
+    box['boxes'][0].set_edgecolor(NEUTRAL2)
+    ax.scatter([1], [observed], color=DARK_RED, marker='D', s=8, zorder=3,
+               label='observed')
+    ax.plot([], [], 's', color=NEUTRAL, markeredgecolor=NEUTRAL2, markersize=3,
+            markeredgewidth=lw, label='null')
+
+    ax.axhline(0, color=NEUTRAL2, lw=lw, ls=':', zorder=0)
+    low, high = min(draws.min(), observed), max(draws.max(), observed)
+    pad = 0.06*(high - low)
+    ax.set_ylim(low - pad, high + pad)
+    ax.set_xlim(0.5, 1.5)
+    ax.set_xticks([])
+    ax.set_ylabel('Sign consistency', fontsize=SMALL_LABEL_FONTSIZE)
+    fig.suptitle(f'p = {fmt_p(p)}', fontsize=SMALL_LABEL_FONTSIZE)
+    ax.tick_params(axis='y', labelsize=SMALL_TICK_FONTSIZE, length=2, width=lw)
+    ax.spines[['top', 'right', 'bottom']].set_visible(False)
+    fig.legend(loc='outside lower center', fontsize=SMALL_LABEL_FONTSIZE, frameon=False,
+               handlelength=0.8, handletextpad=0.3, borderpad=0.1, labelspacing=0.2)
+    _save(fig, out, name)
+
+
+def _signed_r_panel(ctx, out, cohort, feat):
+    '''
+    Draws the signed-r permutation test over all candidates and reports what it found.
+
+    Every fold model scores the sign of each candidate's mean alignment over its training
+    patients against that candidate's outcome correlation over its held-out patients.
+    Null models are scored identically, with alignments from models trained on shuffled
+    outcomes.
+    '''
+    observed, seeds = _signed_r_observed(ctx, cohort, feat)
+    null, dropped = _signed_r_null(cohort, feat, len(seeds))
+
+    obs = observed['signed_r'].mean()
+    draws = null.groupby('perm', sort=False)['signed_r'].mean()
+    p, z = _rank_p(obs, draws.values, two_sided=False), _null_z(obs, draws.values)
+    _signed_r_histogram(obs, draws.values, p, z, out)
+    _signed_r_box(obs, draws.values, p, z, out)
+
+    out.table('signed_r_all_candidates_observed', observed)
+    out.table('signed_r_all_candidates_null_draws', draws.rename('signed_r').reset_index())
+
+    n_null_models = int(null.groupby('perm').size().iloc[0])
+    out.log(f'Signed held-out r over all {len(feat)} candidates: mean over {len(observed)} '
+            f'graphTRIP fold models against {len(draws)} permutations ({n_null_models} '
+            f'null fold models each).')
+    if dropped:
+        out.log(f'  WARNING: dropped {len(dropped)} permutation(s) with an incomplete seed '
+                f'set: {", ".join(dropped)}.')
+    out.log(f'  observed {obs:+.4f}; null {draws.mean():+.4f} +/- {draws.std(ddof=1):.4f}; '
+            f'z = {z:+.2f}, p = {fmt_p(p)} (one-sided)')
     out.log()
 
 
@@ -828,28 +1008,33 @@ def _profile_histograms(profile, out, name='grail_null_profile_agreement'):
     null distribution into the axis. No density fit here for the same reason: a curve
     through a single occupied bin would be a fabrication.
     '''
-    fig, axes, ncols = _grid(len(TREES), PROFILE_NCOLS, 3.4, 2.8)
-    series = [('observed_vs_null', NEUTRAL, 'null ensemble vs observed'),
-              ('observed_split_half', DARK_RED, 'observed, split by seed')]
+    fig, axes = plt.subplots(len(PROFILE_TREES), 1, figsize=PROFILE_SIZE, sharex=True,
+                             constrained_layout=True)
+    fig.get_layout_engine().set(hspace=0.06)
+    lw = 0.3
 
-    for i, (ax, tree) in enumerate(zip(axes, TREES)):
-        for comparison, colour, label in series:
+    for ax, (tree, label) in zip(axes, PROFILE_TREES.items()):
+        for comparison, colour in (('observed_vs_null', NEUTRAL),
+                                   ('observed_split_half', DARK_RED)):
             values = profile.loc[(profile['tree'] == tree)
                                  & (profile['comparison'] == comparison), 'r'].values
             counts, _ = np.histogram(values, bins=PROFILE_BINS)
             ax.bar(PROFILE_BINS[:-1], counts/counts.max(), align='edge',
                    width=np.diff(PROFILE_BINS), color=colour, edgecolor=NEUTRAL2,
-                   linewidth=0.4, alpha=0.85, label=f'{label} ({values.mean():+.4f})')
-        ax.axvline(0, color=NEUTRAL2, lw=0.8, ls=':')
+                   linewidth=lw, alpha=0.85)
+            is_null = comparison == 'observed_vs_null'
+            ax.text(-0.95 if is_null else 0.98, 1.12, f'r={values.mean():.4f}',
+                    ha='left' if is_null else 'right', va='bottom',
+                    fontsize=SMALL_LABEL_FONTSIZE, color=NEUTRAL2 if is_null else DARK_RED)
+        ax.axvline(0, color=NEUTRAL2, lw=lw, ls=':')
         ax.set_xlim(-1, 1)
         ax.set_ylim(0, 1.55)
         ax.set_yticks([0, 0.5, 1.0])
-        ax.set_title(tree, fontsize=9, pad=4)
-        ax.set_xlabel('profile correlation (r)', fontsize=8)
-        if i % ncols == 0:
-            ax.set_ylabel('frequency (peak-scaled)', fontsize=8)
-        ax.legend(loc='upper left', fontsize=6.5, frameon=False, handlelength=1.0)
-        ax.tick_params(labelsize=7)
+        ax.set_title(label, fontsize=SMALL_LABEL_FONTSIZE, pad=2)
+        ax.set_ylabel('Frequency', fontsize=SMALL_LABEL_FONTSIZE)
+        ax.tick_params(labelsize=SMALL_TICK_FONTSIZE, length=2, width=0.5)
+        ax.spines[['top', 'right']].set_visible(False)
+    axes[-1].set_xlabel('Profile correlation', fontsize=SMALL_LABEL_FONTSIZE)
 
     _save(fig, out, name)
 
