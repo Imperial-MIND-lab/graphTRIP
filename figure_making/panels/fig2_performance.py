@@ -62,7 +62,8 @@ def fig2_prediction_performance(ctx, out):
                             'raincloud_model_ablations',
                             num_subs=ctx.num_subs,
                             model_of_interest='graphtrip',
-                            table_prefix='model_ablation_')
+                            table_prefix='model_ablation_',
+                            axes_size=(1.0, 1.520))
 
     # e. Feature ablations, as scatters ---------------------------------------------------
     scatter_from_results(no_clinical_results, out, 'no_clinical_features_true_vs_pred',

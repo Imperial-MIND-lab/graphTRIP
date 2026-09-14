@@ -1482,7 +1482,7 @@ def plot_piechart(
 
 def plot_raincloud(distributions, palette=None, alpha=ALPHA_SCATTER, box_alpha=0.5, 
                    save_path=None, figsize=(8, 5), vline=None, xlim=None, sort_by_mean=False,
-                   ax=None, shade_below=None):
+                   ax=None, shade_below=None, marker_size=20):
     """
     Creates a raincloud plot (half violin + points + boxplot) for multiple distributions.
     
@@ -1512,6 +1512,8 @@ def plot_raincloud(distributions, palette=None, alpha=ALPHA_SCATTER, box_alpha=0
         and the saving; figsize, save_path and plt.show() are ignored.
     shade_below : float, optional
         Shades everything left of this value, to mark a region of non-significance.
+    marker_size : float, optional
+        Size of the jittered points, in points^2 (default: 20)
     """
     # Create figure
     owns_figure = ax is None
@@ -1555,7 +1557,7 @@ def plot_raincloud(distributions, palette=None, alpha=ALPHA_SCATTER, box_alpha=0
         
         # Add jittered points
         y_jitter = np.random.normal(y_pos, 0.05, size=len(data))
-        ax.scatter(data, y_jitter, color=color, alpha=alpha, s=20, zorder=2)
+        ax.scatter(data, y_jitter, color=color, alpha=alpha, s=marker_size, zorder=2)
         
         # Add boxplot
         box_parts = ax.boxplot(data, positions=[y_pos], vert=False, widths=0.2,

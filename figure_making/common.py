@@ -11,6 +11,7 @@ License: BSD 3-Clause
 
 import os
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -528,10 +529,30 @@ def metrics_to_distributions(metrics_df, sort_by_mean=False, metric='r'):
     return distributions
 
 
-def raincloud_of_model_r(distributions, out, name, num_subs, offset=4, figsize=(8, 4)):
+# Compact manuscript panels: Arial first, then metric-compatible fallbacks (as in
+# supp_grail_validation), 5 pt ticks and smaller raincloud points.
+COMPACT_FONTS = ['Arial', 'Liberation Sans', 'Nimbus Sans', 'DejaVu Sans']
+COMPACT_TICK_FONTSIZE = 5
+COMPACT_MARKER_SIZE = 8
+
+
+def _fixed_size_axes(width, height, margin=3.0):
+    '''Figure with a single axes whose data area is exactly width x height inches.'''
+    fig = plt.figure(figsize=(width + 2 * margin, height + 2 * margin))
+    ax = fig.add_axes([margin / fig.get_figwidth(), margin / fig.get_figheight(),
+                       width / fig.get_figwidth(), height / fig.get_figheight()])
+    return fig, ax
+
+
+def raincloud_of_model_r(distributions, out, name, num_subs, offset=4, figsize=(8, 4),
+                         axes_size=None):
     '''
     Plots the distribution of correlation coefficients across seeds for each model,
     with the significance threshold marked.
+
+    If axes_size = (width, height) is given, the axes box is exactly that size in inches
+    and figsize is ignored; the saved figure is cropped to its content and uses the
+    compact styling (5 pt Arial ticks, denser x ticks, smaller points).
     '''
     r_min = min_significant_r(num_subs)
     out.log(f'Minimum significant r-value: {r_min}')
@@ -540,14 +561,22 @@ def raincloud_of_model_r(distributions, out, name, num_subs, offset=4, figsize=(
     colors = colors[offset:]
     palette = {name_: color for name_, color in zip(distributions.keys(), colors)}
 
-    plot_raincloud(distributions,
-                   palette=palette,
-                   save_path=out.fig(name),
-                   alpha=0.5,
-                   box_alpha=0.3,
-                   vline=r_min,
-                   sort_by_mean=False,
-                   figsize=figsize)
+    kwargs = dict(palette=palette, alpha=0.5, box_alpha=0.3, vline=r_min,
+                  sort_by_mean=False)
+    if axes_size is None:
+        plot_raincloud(distributions, save_path=out.fig(name), figsize=figsize, **kwargs)
+        return
+
+    # Tick labels are created at draw time, so saving stays inside the font context
+    with plt.rc_context({'font.family': COMPACT_FONTS}):
+        fig, ax = _fixed_size_axes(*axes_size)
+        plot_raincloud(distributions, ax=ax, marker_size=COMPACT_MARKER_SIZE, **kwargs)
+        ax.tick_params(labelsize=COMPACT_TICK_FONTSIZE, length=2, width=0.5)
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=6, steps=[1, 2, 5, 10]))
+        save_path = out.fig(name)
+        if save_path:
+            fig.savefig(save_path, bbox_inches='tight')
+    plt.close(fig)
 
 
 def report_model_comparison(distributions, out, model_of_interest, table_prefix=''):
@@ -664,11 +693,12 @@ def compare_across_metrics(seed_table, order, model_of_interest, metrics=None):
 
 def model_comparison_panels(specs, out, name, num_subs, model_of_interest,
                             sort_by_mean=True, offset=4, figsize=(8, 4),
-                            skip_missing=False, table_prefix=''):
+                            skip_missing=False, table_prefix='', axes_size=None):
     '''Runs the full seed-sensitivity block: collect metrics, raincloud, comparison stats.'''
     metrics_df = collect_seed_metrics(specs, skip_missing=skip_missing)
     distributions = metrics_to_distributions(metrics_df, sort_by_mean=sort_by_mean)
-    raincloud_of_model_r(distributions, out, name, num_subs, offset=offset, figsize=figsize)
+    raincloud_of_model_r(distributions, out, name, num_subs, offset=offset, figsize=figsize,
+                         axes_size=axes_size)
     report_model_comparison(distributions, out, model_of_interest, table_prefix=table_prefix)
     return distributions
 
