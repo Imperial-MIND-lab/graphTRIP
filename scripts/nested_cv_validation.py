@@ -135,7 +135,8 @@ def select_biomarkers(fold, rule='half', top_n=10, min_rho=MIN_RHO):
     only inner patients and inner models contribute, and that there is no Medusa tree, so
     a biomarker's category is just the sign it is given.
 
-    rule 'half' keeps biomarkers that are significant in more than half the inner patients;
+    rule 'half' is the published rule of load_biomarker_categories: keep a biomarker that is
+    n.s. in at most int(0.5 * n) inner patients, counting significance in either direction.
     'top_n' takes the n most often significant, which always returns a set.
     '''
     split = fold['split']
@@ -178,11 +179,13 @@ def select_biomarkers(fold, rule='half', top_n=10, min_rho=MIN_RHO):
                           'n_models': n_models})
 
     if rule == 'half':
-        # The published rule: n.s. in at most half the patients
-        chosen = table['frac_majority_sign'] > 0.5
+        # The published rule: n.s. in at most int(0.5 * n) patients, in either direction
+        n_not_significant = len(inner) - significant.sum(axis=0)
+        chosen = n_not_significant <= int(0.5*len(inner))
     elif rule == 'top_n':
-        order = table.sort_values(['frac_majority_sign', 'mean_weighted_alignment'],
-                                  ascending=[False, False]).index[:top_n]
+        order = (table.assign(abs_alignment=table['mean_weighted_alignment'].abs())
+                 .sort_values(['frac_significant', 'abs_alignment'],
+                              ascending=[False, False]).index[:top_n])
         chosen = table.index.isin(order)
     else:
         raise ValueError(f'Unknown selection rule: {rule}')
