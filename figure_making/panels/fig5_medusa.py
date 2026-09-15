@@ -22,7 +22,8 @@ def fig5_medusa(ctx, out):
 
     # Pseudo-ITE labels versus predicted ITEs -------------------------------------------
     scatter_from_results(os.path.join(weights_dir, 'prediction_results.csv'),
-                         out, 'medusa_graphtrip_true_vs_pred', yerr='prediction_sem')
+                         out, 'medusa_graphtrip_true_vs_pred', yerr='prediction_sem',
+                         arm_regression=True)
 
     # Distribution of individual treatment effects ---------------------------------------
     ite_results = aggregate_prediction_results(

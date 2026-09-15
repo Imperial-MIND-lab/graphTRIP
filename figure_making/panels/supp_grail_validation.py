@@ -479,6 +479,33 @@ def _alignment_vs_correlation(plot_df, identified, marker_map, out,
     return fits
 
 
+DRUG_NAMES = {'E': 'Escitalopram', 'P': 'Psilocybin', 'Shared': 'Shared'}
+EFFECT_NAMES = {'response': 'responsiveness', 'resistance': 'resistance'}
+
+
+def _biomarker_label(name):
+    '''Display name of a candidate biomarker: REACT maps as R5-HT*, first letter capital.'''
+    if name == 'modularity_rsn':
+        return 'Modularity'
+    if name.startswith('x5-HT'):
+        name = 'R' + name[1:]
+    return name[0].upper() + name[1:]
+
+
+def _category_label(category):
+    '''
+    Display name of a response category, e.g. E_response_P_resistance ->
+    "Escitalopram responsiveness & psilocybin resistance".
+    '''
+    parts = category.split('_')
+    if len(parts) % 2 or not all(d in DRUG_NAMES and e in EFFECT_NAMES
+                                 for d, e in zip(parts[::2], parts[1::2])):
+        return category
+    clauses = [f'{DRUG_NAMES[d]} {EFFECT_NAMES[e]}'
+               for d, e in zip(parts[::2], parts[1::2])]
+    return ' & '.join([clauses[0]] + [c[0].lower() + c[1:] for c in clauses[1:]])
+
+
 def _all_biomarker_cats_heatmap(categories, palette, out,
                                 name='all_biomarker_cats_heatmap'):
     '''
@@ -497,7 +524,8 @@ def _all_biomarker_cats_heatmap(categories, palette, out,
     # Space the axes cannot use: y ticks and ylabel on the left, x ticks (rotated, so as
     # long as the longest biomarker name) and xlabel below, legend rows above.
     side = 0.6
-    below = 0.15 + max(len(c) for c in categories.columns)*0.62*TICK_FONTSIZE/72
+    tick_labels = [_biomarker_label(c) for c in categories.columns]
+    below = 0.15 + max(len(c) for c in tick_labels)*0.62*TICK_FONTSIZE/72
     above = 0.2 + np.ceil(len(order)/HEATMAP_LEGEND_NCOLS)*1.6*LEGEND_FONTSIZE/72
     cell = (HEATMAP_WIDTH - side)/n_col
     height = n_row*cell*HEATMAP_CELL_ASPECT + below + above
@@ -509,7 +537,7 @@ def _all_biomarker_cats_heatmap(categories, palette, out,
         ax.invert_yaxis()
 
         ax.set_xticks(np.arange(n_col) + 0.5)
-        ax.set_xticklabels(categories.columns, rotation=90)
+        ax.set_xticklabels(tick_labels, rotation=90)
         ax.set_yticks(np.arange(n_row) + 0.5)
         ax.set_yticklabels(categories.index)
         ax.tick_params(labelsize=TICK_FONTSIZE, length=1.5, width=0.4, pad=1.5)
@@ -520,7 +548,7 @@ def _all_biomarker_cats_heatmap(categories, palette, out,
         ax.set_ylabel('Subjects', fontsize=LABEL_FONTSIZE)
 
         handles = [Patch(facecolor=palette[cat], edgecolor='black', linewidth=0.3,
-                         label=cat) for cat in order]
+                         label=_category_label(cat)) for cat in order]
         fig.legend(handles=handles, title='Response category', frameon=False,
                    loc='outside upper center', ncol=HEATMAP_LEGEND_NCOLS,
                    fontsize=LEGEND_FONTSIZE, title_fontsize=LEGEND_FONTSIZE,

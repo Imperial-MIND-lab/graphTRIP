@@ -77,7 +77,8 @@ def aal_atlas(ctx, out):
 
     # Prediction performance after transfer to AAL --------------------------------------
     scatter_from_results(os.path.join(results_dir, 'initial_prediction_results.csv'),
-                         out, f'true_vs_pred_{ATLAS}', yerr='prediction_sem')
+                         out, f'true_vs_pred_{ATLAS}', yerr='prediction_sem',
+                         arm_regression=True)
 
     # Reconstruction performance on the re-parcellated data ------------------------------
     atlas_config = load_ingredient_configs(os.path.join(results_dir, 'seed_0'),

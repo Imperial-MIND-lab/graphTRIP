@@ -26,7 +26,8 @@ def graphtrip_bdi(ctx, out):
 
     # Prediction performance -------------------------------------------------------------
     scatter_from_results(os.path.join(weights_base_dir, 'prediction_results.csv'),
-                         out, 'true_vs_pred', yerr='prediction_sem')
+                         out, 'true_vs_pred', yerr='prediction_sem',
+                         arm_regression=True)
 
     # Load the BDI dataset and its VGAEs -------------------------------------------------
     test_indices_dict, weights_dirs = load_test_fold_indices(weights_base_dir,
