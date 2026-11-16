@@ -4,8 +4,8 @@ them.
 
 One target, GRAIL_biomarkers, holds every panel: the alignment-versus-correlation
 scatter, the linear-model benchmark, the biomarker categories and their outcome
-correlations, and the two permutation-null panels that ask whether any of it survives
-models trained on shuffled outcomes.
+correlations, the out-of-fold checks, and the permutation-null control that asks whether
+any of it survives models trained on shuffled outcomes.
 
 The permutation-null models are retrained on outcomes shuffled across the whole cohort
 (scripts/permutation_null.py), and GRAIL is run on their weights. They carry every source
@@ -23,8 +23,6 @@ Supp. Fig. 14 layout:
 - d. corr_vs_grail_reversed_boxplots
 - e. signed_r_all_candidates_null_box
 
-Other panels are auxiliary.
-
 Author: Hanna M. Tolle
 Date: 2026-08-10
 License: BSD 3-Clause
@@ -40,10 +38,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 from matplotlib.patches import Patch
-from scipy.stats import pearsonr, gaussian_kde, wilcoxon
-from statsmodels.stats.multitest import fdrcorrection
+from scipy.stats import pearsonr, wilcoxon
 
-from utils.files import add_project_root
 from utils.plotting import (
     ALPHA_SCATTER, ESCIT, PSILO, NEUTRAL, NEUTRAL2,
     true_vs_pred_scatter)
@@ -75,7 +71,6 @@ HEATMAP_CELL_ASPECT = 0.7   # cell height as a fraction of cell width
 SMALL_PANEL_WIDTH, SMALL_PANEL_HEIGHT = 0.75, 2.0
 SMALL_TICK_FONTSIZE, SMALL_LABEL_FONTSIZE = 5, 6
 
-NULL_NCOLS = 5          # biomarker panels per row
 PROFILE_BINS = np.linspace(-1, 1, 41)
 
 # The four GRAIL trees the biomarker categories are built from. Each is one model and one
@@ -96,19 +91,6 @@ TREES = {
 # The trees shown in the profile-agreement panel, top to bottom, with their panel titles
 PROFILE_TREES = {'Shared': 'graphTRIP', 'ITE': 'Medusa-graphTRIP'}
 PROFILE_SIZE = (1.3, 2.0)
-
-# The tree whose claim defines each category, and is therefore the one the biomarker is
-# tested against.
-PRIMARY_TREE = {
-    'Shared_response': 'Shared',        'Shared_resistance': 'Shared',
-    'E_response_P_resistance': 'ITE',   'P_response_E_resistance': 'ITE',
-    'E_response': 'Escitalopram',       'E_resistance': 'Escitalopram',
-    'P_response': 'Psilocybin',         'P_resistance': 'Psilocybin',
-}
-
-# The sign each tree's alignment must have per category. Not under outputs/, so it is the
-# one path here that is not built by figure_making.paths.
-SYNERGY_FILE = 'experiments/configs/biomarker_synergies.csv'
 
 # The out-of-fold correlation check: graphTRIP's GRAIL run and the folds behind it.
 MIN_TRAIN, MIN_TEST = 5, 3
@@ -218,35 +200,6 @@ def _load_trees(feat):
     return observed, null, dropped
 
 
-def _group_means(observed, null):
-    '''
-    Collapses both sides to one value per (tree, biomarker).
-
-    The group-mean alignment averages over every model and every patient, identically on
-    both sides, so the dependence between the fold models sits on both and cancels.
-    '''
-    return ({t: observed[t].mean(axis=(0, 1)).mean(0) for t in observed},
-            {t: null[t].mean(1) for t in null})
-
-
-def _sign_claims():
-    '''
-    The sign each tree's alignment must have, per category, from the synergy table.
-
-    A category matches several rows of the table (they differ in the entries it leaves
-    free), so an entry is a claim only where it is constant across those rows. Entries that
-    vary, and entries that are 0, are not claims: 0 means "must not be significant", which a
-    null distribution cannot confirm.
-    '''
-    synergies = pd.read_csv(require(add_project_root(SYNERGY_FILE)))
-    claims = {}
-    for category, rows in synergies.groupby('Biomarker_Category'):
-        claims[category] = {tree: int(rows[tree].iloc[0])
-                            for tree in TREES if rows[tree].nunique() == 1
-                            and rows[tree].iloc[0] != 0}
-    return claims
-
-
 # Permutation-null statistics -------------------------------------------------------------
 
 def _rank_p(observed, null, two_sided=True):
@@ -267,20 +220,6 @@ def _rank_p(observed, null, two_sided=True):
 def _null_z(observed, null):
     '''Observed value in units of its null spread.'''
     return float((observed - null.mean())/null.std(ddof=1))
-
-
-def _leave_one_out_z(null):
-    '''
-    Each null draw standardised against the other draws, [permutation, biomarker].
-
-    A draw must not contribute to the mean and SD it is judged against, or it is pulled
-    towards zero and the null spread comes out too narrow.
-    '''
-    n = len(null)
-    total, total_sq = null.sum(0), (null**2).sum(0)
-    mean = (total - null)/(n - 1)
-    var = (total_sq - null**2 - (n - 1)*mean**2)/(n - 2)
-    return (null - mean)/np.sqrt(np.maximum(var, 1e-20))
 
 
 def _profile_agreement(observed, null):
@@ -308,52 +247,12 @@ def _profile_agreement(observed, null):
     return np.array(within), np.array(between)
 
 
-def _per_biomarker(observed_group, null_group, feat, reported, claims):
-    '''
-    Each reported biomarker against the null of the tree that defines its category.
-
-    Two-sided, because the category's sign was itself read off the observed alignments:
-    testing one-sided in the direction the data chose would halve the p-value for free.
-    Three columns of evidence per biomarker:
-
-      rank_p       primary tree only, FDR-corrected within the reported set
-      fwer_p       primary tree, but corrected over all candidates by the maximum |z| any
-                   null draw reaches anywhere -- immune to the fact that the reported set
-                   was itself chosen on these data
-      conjunction  the largest rank p over every tree the synergy table constrains, i.e.
-                   requiring the biomarker to beat the null in all of them at once
-    '''
-    max_z = {tree: np.abs(_leave_one_out_z(null_group[tree])).max(1) for tree in TREES}
-
-    rows = []
-    for biomarker, category in reported.items():
-        i, tree = feat.index(biomarker), PRIMARY_TREE[category]
-        z = _null_z(observed_group[tree][i], null_group[tree][:, i])
-        components = {t: _rank_p(observed_group[t][i], null_group[t][:, i])
-                      for t in claims[category]}
-        rows.append({
-            'biomarker': biomarker, 'category': category, 'primary_tree': tree,
-            'observed': float(observed_group[tree][i]),
-            'null_mean': float(null_group[tree][:, i].mean()),
-            'null_sd': float(null_group[tree][:, i].std(ddof=1)),
-            'z': z,
-            'rank_p': _rank_p(observed_group[tree][i], null_group[tree][:, i]),
-            'fwer_p': (1 + (max_z[tree] >= abs(z)).sum())/(1 + len(max_z[tree])),
-            'conjunction_trees': '+'.join(components),
-            'conjunction_p': max(components.values()),
-            **{f'p_{t}': components.get(t, np.nan) for t in TREES}})
-
-    table = pd.DataFrame(rows).sort_values('rank_p').reset_index(drop=True)
-    table['fdr_q'] = fdrcorrection(table['rank_p'], alpha=0.05)[1]
-    return table
-
-
 @register('GRAIL_biomarkers', group='supp', subdir='SUPPLEMENTARY/GRAIL_biomarkers')
 def grail_biomarkers(ctx, out):
 
     # The identified biomarkers and their marker symbols are shared by the alignment
     # scatter and the correlation panel, so that one legend serves both.
-    categories, majority_cat, sorted_biomarkers = load_biomarker_categories(thresh=0.5)
+    _, majority_cat, sorted_biomarkers = load_biomarker_categories(thresh=0.5)
     marker_map = {bm: MARKER_STYLES[i % len(MARKER_STYLES)]
                   for i, bm in enumerate(sorted_biomarkers)}
 
@@ -420,10 +319,7 @@ def grail_biomarkers(ctx, out):
     # Skipped rather than fatal: the null arrays are the one input of this target that is
     # produced by a separate set of training runs.
     try:
-        # Category order, not the panel's plotting order: it decides how biomarkers with
-        # the same rank p are ordered in the null table and its panels.
-        _grail_null_panels(out, feat,
-                           {b: majority_cat[b] for b in categories.columns})
+        _grail_null_panels(out, feat)
     except (MissingInput, FileNotFoundError, ValueError) as error:
         out.log(f'No GRAIL permutation-null panels: {error}')
 
@@ -857,36 +753,8 @@ def _signed_r_null(cohort, feat, n_seeds):
     return pd.DataFrame(rows), dropped
 
 
-def _signed_r_histogram(observed, draws, p, z, out, name='signed_r_all_candidates_null'):
-    '''Null draws of the mean signed r over fold models, with the observed value.'''
-    lo, hi = min(draws.min(), observed), max(draws.max(), observed)
-    pad = 0.08*(hi - lo)
-    grid = np.linspace(lo - pad, hi + pad, 400)
-    density = gaussian_kde(draws)(grid)
-
-    fig, ax = plt.subplots(figsize=(3.7, 3.2), constrained_layout=True)
-    ax.hist(draws, bins=20, density=True, color=NEUTRAL, edgecolor=NEUTRAL2, linewidth=0.5,
-            label='null draws')
-    ax.fill_between(grid, density, color=NEUTRAL2, alpha=0.25, linewidth=0)
-    ax.plot(grid, density, color=NEUTRAL2, lw=1.4, label='Gaussian KDE')
-    ax.axvline(draws.mean(), color=NEUTRAL2, lw=1.0, ls='--', label='null mean')
-    ax.axvline(observed, color=DARK_RED, lw=1.8, label='observed')
-    ax.set_xlim(lo - pad, hi + pad)
-    ax.set_ylim(bottom=0)
-    ax.set_title(f'observed {observed:+.3f}, null {draws.mean():+.3f} '
-                 f'+/- {draws.std(ddof=1):.3f}\nz = {z:+.2f}, p = {fmt_p(p)} '
-                 f'(one-sided, {len(draws)} permutations)', fontsize=8, linespacing=1.3)
-    ax.set_xlabel('mean sign(training alignment) x held-out r,\nmean over fold models',
-                  fontsize=7)
-    ax.set_ylabel('density', fontsize=8)
-    ax.legend(loc='upper left', fontsize=6, frameon=False, handlelength=1.0)
-    ax.spines[['top', 'right']].set_visible(False)
-    ax.tick_params(labelsize=7)
-    _save(fig, out, name)
-
-
-def _signed_r_box(observed, draws, p, z, out, name='signed_r_all_candidates_null_box'):
-    '''The same test as a vertical box of null draws, with the observed value marked.'''
+def _signed_r_box(observed, draws, p, out, name='signed_r_all_candidates_null_box'):
+    '''Null draws of the mean signed r over fold models, with the observed value marked.'''
     fig, ax = plt.subplots(figsize=(SMALL_PANEL_WIDTH, SMALL_PANEL_HEIGHT),
                            constrained_layout=True)
     lw = 0.5
@@ -932,8 +800,7 @@ def _signed_r_panel(ctx, out, cohort, feat):
     obs = observed['signed_r'].mean()
     draws = null.groupby('perm', sort=False)['signed_r'].mean()
     p, z = _rank_p(obs, draws.values, two_sided=False), _null_z(obs, draws.values)
-    _signed_r_histogram(obs, draws.values, p, z, out)
-    _signed_r_box(obs, draws.values, p, z, out)
+    _signed_r_box(obs, draws.values, p, out)
 
     out.table('signed_r_all_candidates_observed', observed)
     out.table('signed_r_all_candidates_null_draws', draws.rename('signed_r').reset_index())
@@ -959,29 +826,9 @@ def _save(fig, out, name):
     plt.close(fig)
 
 
-def _grid(n, ncols, width, height):
-    '''A grid of axes with the unused cells removed.'''
-    ncols = min(ncols, n)
-    nrows = int(np.ceil(n/ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(width*ncols, height*nrows),
-                             constrained_layout=True, squeeze=False)
-    axes = axes.ravel()
-    for ax in axes[n:]:
-        ax.remove()
-    return fig, axes[:n], ncols
-
-
-def _grail_null_panels(out, feat, reported):
-    '''
-    Draws both permutation-null panels and writes the statistics behind them.
-
-    The full-precision z, rank p and FDR q of every panel of grail_null_histograms go to
-    grail_null_per_biomarker.csv, alongside the tree each biomarker was tested against
-    and the two stricter corrections.
-    '''
-    claims = _sign_claims()
+def _grail_null_panels(out, feat):
+    '''Draws the profile-agreement panel and writes the statistics behind it.'''
     observed, null, dropped = _load_trees(feat)
-    observed_group, null_group = _group_means(observed, null)
 
     rows = []
     for tree in TREES:
@@ -991,15 +838,10 @@ def _grail_null_panels(out, feat, reported):
     profile = pd.DataFrame(rows)
     _profile_histograms(profile, out)
 
-    table = _per_biomarker(observed_group, null_group, feat, reported, claims)
-    _null_histograms(table, null_group, feat, out)
-    _null_summary(table, null_group, feat, out)
-
-    out.table('grail_null_per_biomarker', table)
     out.table('grail_null_profile_agreement', profile)
 
     first = next(iter(TREES))
-    n_draws = len(null_group[first])
+    n_draws = len(null[first])
     n_seeds, n_folds = observed[first].shape[:2]
     out.log(f'GRAIL permutation null: {n_draws} draws per tree, each the mean of one '
             f"permutation's {n_seeds} training seeds; observed from "
@@ -1017,13 +859,6 @@ def _grail_null_panels(out, feat, reported):
         out.log(f'  {tree:13s} observed split-half r = {within.mean():.4f} +/- '
                 f'{within.std():.4f}; null vs observed r = {between.mean():+.4f} +/- '
                 f'{between.std():.4f}')
-    out.log(f'  {(table["fdr_q"] < 0.05).sum()}/{len(table)} reported biomarkers beat '
-            f'their null at FDR < 0.05; {(table["fwer_p"] < 0.05).sum()}/{len(table)} '
-            f'also survive the max-statistic correction over all {len(feat)} candidates.')
-    out.log_df('Reported biomarkers against their null',
-               table[['biomarker', 'category', 'primary_tree', 'observed', 'null_mean',
-                      'null_sd', 'z', 'rank_p', 'fdr_q', 'fwer_p', 'conjunction_trees',
-                      'conjunction_p']].round(4))
 
 
 def _profile_histograms(profile, out, name='grail_null_profile_agreement'):
@@ -1063,106 +898,5 @@ def _profile_histograms(profile, out, name='grail_null_profile_agreement'):
         ax.tick_params(labelsize=SMALL_TICK_FONTSIZE, length=2, width=0.5)
         ax.spines[['top', 'right']].set_visible(False)
     axes[-1].set_xlabel('Profile correlation', fontsize=SMALL_LABEL_FONTSIZE)
-
-    _save(fig, out, name)
-
-
-def _null_summary(table, null_group, feat, out, name='grail_null_summary'):
-    '''
-    The whole per-biomarker figure on one axis, for when the ten histograms are too much.
-    '''
-    order = table.iloc[::-1]        # most significant at the top of the axis
-    nulls, observed = [], []
-    for _, row in order.iterrows():
-        null = null_group[row['primary_tree']][:, feat.index(row['biomarker'])]
-        nulls.append((null - null.mean())/null.std(ddof=1))
-        observed.append(row['z'])   # the same standardisation, from the table
-
-    fig, ax = plt.subplots(figsize=(5.4, 3.8), constrained_layout=True)
-    box = ax.boxplot(nulls, vert=False, widths=0.6, whis=(0, 100), showfliers=False,
-                     patch_artist=True, medianprops=dict(color=NEUTRAL2, lw=1.0))
-    for patch in box['boxes']:
-        patch.set_facecolor(NEUTRAL)
-        patch.set_alpha(0.7)
-        patch.set_edgecolor(NEUTRAL2)
-    ax.scatter(observed, range(1, len(observed) + 1), color=DARK_RED, marker='D', s=26,
-               zorder=3, label='observed')
-    ax.plot([], [], 's', color=NEUTRAL, markeredgecolor=NEUTRAL2, markersize=7,
-            label='null draws (box: IQR, whiskers: range)')
-
-    ax.axvline(0, color=NEUTRAL2, lw=0.8, ls=':', zorder=0)
-    ax.set_yticks(range(1, len(order) + 1))
-    ax.set_yticklabels(order['biomarker'], fontsize=7)
-    for tick, q in zip(ax.get_yticklabels(), order['fdr_q']):
-        if q < 0.05:
-            tick.set_color(DARK_RED)
-            tick.set_fontweight('bold')
-    ax.set_xlabel('mean alignment, in units of the biomarker\'s own null spread',
-                  fontsize=8)
-    ax.tick_params(axis='x', labelsize=7)
-    ax.spines[['top', 'right']].set_visible(False)
-
-    # Room for the strongest observed value, which sits well outside its null
-    low = min(observed + [n.min() for n in nulls])
-    high = max(observed + [n.max() for n in nulls])
-    pad = 0.06*(high - low)
-    ax.set_xlim(low - pad, high + pad)
-    fig.legend(loc='outside lower center', ncol=2, fontsize=6.5, frameon=False,
-               handlelength=1.2)
-
-    # The tree each biomarker was tested against, and its q, on the opposite side
-    right = ax.twinx()
-    right.set_ylim(ax.get_ylim())
-    right.set_yticks(range(1, len(order) + 1))
-    right.set_yticklabels([f"{row['primary_tree']}, q = {fmt_p(row['fdr_q'])}"
-                           for _, row in order.iterrows()], fontsize=6.5)
-    right.tick_params(length=0)
-    right.spines[['top', 'right', 'left']].set_visible(False)
-
-    _save(fig, out, name)
-
-
-def _null_histograms(table, null_group, feat, out, name='grail_null_histograms'):
-    '''
-    One null distribution per reported biomarker, with the observed alignment marked.
-
-    The draws come from the biomarker's primary tree, so each panel is the test the
-    per-biomarker table reports. Bars are densities so that the Gaussian kernel density
-    estimate can be drawn over them. Titles are red where the biomarker beats its null at
-    FDR < 0.05 across the reported set.
-    '''
-    fig, axes, ncols = _grid(len(table), NULL_NCOLS, 3.0, 2.8)
-
-    for i, (ax, (_, row)) in enumerate(zip(axes, table.iterrows())):
-        null = null_group[row['primary_tree']][:, feat.index(row['biomarker'])]
-
-        # Keep the observed line off the frame, wherever it falls relative to the draws
-        lo, hi = min(null.min(), row['observed']), max(null.max(), row['observed'])
-        pad = 0.08*(hi - lo)
-        grid = np.linspace(lo - pad, hi + pad, 400)
-        density = gaussian_kde(null)(grid)
-
-        ax.hist(null, bins=20, density=True, color=NEUTRAL, edgecolor=NEUTRAL2,
-                linewidth=0.5, label='null draws')
-        ax.fill_between(grid, density, color=NEUTRAL2, alpha=0.25, linewidth=0)
-        ax.plot(grid, density, color=NEUTRAL2, lw=1.4, label='Gaussian KDE')
-        ax.axvline(row['null_mean'], color=NEUTRAL2, lw=1.0, ls='--', label='null mean')
-        ax.axvline(row['observed'], color=DARK_RED, lw=1.8, label='observed')
-        ax.set_xlim(lo - pad, hi + pad)
-        ax.set_ylim(bottom=0)
-
-        significant = row['fdr_q'] < 0.05
-        ax.set_title(f"{row['biomarker']}  ({row['primary_tree']})\n"
-                     f"z = {row['z']:+.2f}, p = {fmt_p(row['rank_p'])}, "
-                     f"q = {fmt_p(row['fdr_q'])}",
-                     fontsize=8, pad=6,
-                     color=DARK_RED if significant else 'black',
-                     fontweight='bold' if significant else 'normal')
-        ax.set_xlabel('mean alignment', fontsize=8)
-        if i % ncols == 0:
-            ax.set_ylabel('density', fontsize=8)
-        if i == 0:
-            ax.legend(loc='upper left', fontsize=6, frameon=False, handlelength=1.0)
-        ax.tick_params(labelsize=7)
 
     _save(fig, out, name)

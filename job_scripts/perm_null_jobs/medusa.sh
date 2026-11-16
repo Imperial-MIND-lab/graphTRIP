@@ -8,6 +8,8 @@
 #
 # Array indices: PBS_ARRAY_INDEX = PERM * 10 + SEED, with PERM 0-99 and SEED 0-9.
 # The 10 seeds of one permutation share its labels and are ensembled into one null draw.
+# Each element trains one null model, then runs GRAIL on its weights for all three
+# CFRHead outputs in one pass (no spin test).
 # Submit through launch.sh, which overrides -J for a permutation subrange and passes
 # EXTRA_ARGS. Every step is idempotent, so re-submitting an array is safe.
 

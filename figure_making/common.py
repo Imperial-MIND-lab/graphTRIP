@@ -30,7 +30,7 @@ from utils.plotting import (
     true_vs_pred_scatter, plot_raincloud, plot_metric_boxplot,
     permutation_importance_bar_chart,
     plot_fc_reconstruction_single, plot_brain_surface_grid, plot_colormap_stack,
-    plot_stacked_percentages, plot_piechart, plot_confusion_matrix, plot_roc_curve)
+    plot_roc_curve)
 
 from figure_making.paths import require, biomarker_categories_file
 
@@ -333,15 +333,6 @@ def report_prediction_metrics(specs, out, name='prediction_metrics', study='psil
 INTERACTION_COL = 'Condition:QIDS_Before'
 
 PARTIAL_CORR_ANALYSES = [
-    {'name': 'Condition only',
-     'covariates': ['Condition'],
-     'suffix': 'condition'},
-    {'name': 'QIDS_Before only',
-     'covariates': ['QIDS_Before'],
-     'suffix': 'qids_before'},
-    {'name': 'Condition + QIDS_Before',
-     'covariates': ['Condition', 'QIDS_Before'],
-     'suffix': 'condition_qids_before'},
     {'name': 'Condition + QIDS_Before + interaction',
      'covariates': ['Condition', 'QIDS_Before', INTERACTION_COL],
      'suffix': 'condition_qids_before_interaction'},
@@ -373,8 +364,7 @@ def partial_correlation_panels(results, out, prefix, xcol='label', ycol='predict
     '''
     Runs the partial-correlation analyses of prediction versus label and plots each.
 
-    Controls for treatment condition, baseline QIDS, both, and both plus their
-    interaction.
+    Controls for treatment condition, baseline QIDS and their interaction.
     '''
     summary_rows = []
 
@@ -392,6 +382,11 @@ def partial_correlation_panels(results, out, prefix, xcol='label', ycol='predict
         out.log(f"   p = {fmt_p(p)}")
         out.log()
 
+        summary_rows.append({'analysis': analysis['name'],
+                             'covariates': ', '.join(covs),
+                             'r': r,
+                             'p': p})
+
         x_resid = f"{xcol}_controlled_{analysis['suffix']}"
         y_resid = f"{ycol}_controlled_{analysis['suffix']}"
 
@@ -405,11 +400,6 @@ def partial_correlation_panels(results, out, prefix, xcol='label', ycol='predict
                              stats={'r': r, 'p': p, 'mae': abs_err.mean(),
                                     'mae_std': abs_err.std(ddof=0)},
                              save_path=out.fig(f"{prefix}_{analysis['suffix']}"))
-
-        summary_rows.append({'analysis': analysis['name'],
-                             'covariates': ', '.join(covs),
-                             'r': r,
-                             'p': p})
 
     return pd.DataFrame(summary_rows)
 
@@ -933,48 +923,16 @@ def rsn_attribution_panels(results_dir, out, name, offset=3, figsize=(5, 5)):
     return stats_df
 
 
-# Dominance analysis (cells 69-70, 71-72) ------------------------------------------------
-
-def dominance_panels(results_dir, out, prefix, offset=5, figsize=(8, 2)):
-    '''
-    Plots the relative importance of receptor maps and the unimodal-transmodal axis in
-    explaining regional attributions, as stacked percentages and as a pie chart.
-    '''
-    results_dir = require(results_dir)
-    da_df = pd.read_csv(os.path.join(results_dir, 'da_receptors_utaxis_stats.csv'), index_col=0)
-
-    palette = sns.color_palette("YlGnBu", len(da_df) + offset)[:-offset]
-    plot_stacked_percentages(df=da_df,
-                             percentage_col='Percentage Relative Importance',
-                             save_path=out.fig(f'{prefix}_dominance_analysis'),
-                             palette=palette,
-                             figsize=figsize)
-
-    plot_piechart(df=da_df,
-                  percentage_col='Percentage Relative Importance',
-                  save_path=out.fig(f'{prefix}_dominance_analysis_piechart'),
-                  palette=sns.color_palette("YlGnBu_r", len(da_df)),
-                  figsize=figsize,
-                  alpha=0.9)
-
-    metrics = pd.read_csv(os.path.join(results_dir, 'da_receptors_utaxis_r2_pval_tstat.csv'))
-    out.log(f"{prefix} dominance analysis: "
-            f"R2 = {metrics['r2'].values[0]}, p-value = {metrics['p_value'].values[0]}")
-    return da_df
-
-
 # Propensity estimation (cells 129, 130) -------------------------------------------------
 
 def propensity_panels(results_dir, out, suffix=''):
     '''
-    Plots how well the drug condition can be predicted from the baseline data: confusion
-    matrix, ROC curve, and the distribution of propensities per condition.
+    Plots how well the drug condition can be predicted from the baseline data: ROC curve,
+    and the distribution of propensities per condition.
     '''
     results_file = os.path.join(require(results_dir), 'prediction_results.csv')
     results = aggregate_prediction_results(results_file)
 
-    plot_confusion_matrix(results['prediction'], results['label'], threshold=0.5,
-                          save_path=out.fig(f'confusion_matrix{suffix}'))
     plot_roc_curve(results['prediction'], results['label'],
                    save_path=out.fig(f'auc_curve{suffix}'))
 

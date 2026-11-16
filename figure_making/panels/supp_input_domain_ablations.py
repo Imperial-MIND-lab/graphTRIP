@@ -24,8 +24,7 @@ import pandas as pd
 from scipy import stats
 
 from figure_making.common import (
-    ABLATION_NAMES, scatter_from_results, collect_seed_metric_table, collect_seed_metrics,
-    compare_across_metrics, feature_ablation_panel, aggregate_prediction_results,
+    ABLATION_NAMES, collect_seed_metric_table, collect_seed_metrics, compare_across_metrics, feature_ablation_panel, aggregate_prediction_results,
     attach_annotations, prediction_metrics, within_arm_metrics, fmt_p)
 from figure_making.paths import output_dir
 from figure_making.registry import register
@@ -37,36 +36,31 @@ MEDUSA_FULL = ('medusa_graphtrip', 'weights')
 # Metrics summarised in the tables. Rank test skips mse (redundant with rmse).
 SUMMARY_METRICS = ['r', 'r2', 'mae', 'mse', 'rmse']
 
-# (display name, results directory parts, input domains received, scatter name).
+# (display name, results directory parts, input domains received).
 GRAPHTRIP_LADDER = [
-    ('graphTRIP', GRAPHTRIP_FULL, ('Clinical', 'FC', 'REACT'), None),
+    ('graphTRIP', GRAPHTRIP_FULL, ('Clinical', 'FC', 'REACT')),
     (ABLATION_NAMES['no_node_features'],
-     ('ablation', 'feature_ablation', 'no_node_features'), ('Clinical', 'FC'),
-     'scatter_fc_clinical'),
+     ('ablation', 'feature_ablation', 'no_node_features'), ('Clinical', 'FC')),
     (ABLATION_NAMES['no_clinical_features'],
-     ('ablation', 'feature_ablation', 'no_clinical_features'), ('FC', 'REACT'),
-     'scatter_fc_react'),
+     ('ablation', 'feature_ablation', 'no_clinical_features'), ('FC', 'REACT')),
     (ABLATION_NAMES['no_react_no_clinical'],
-     ('ablation', 'feature_ablation', 'no_react_no_clinical'), ('FC',),
-     'scatter_fc_only'),
+     ('ablation', 'feature_ablation', 'no_react_no_clinical'), ('FC',)),
 ]
 
 MEDUSA_LADDER = [
-    ('Medusa-graphTRIP', MEDUSA_FULL, ('Clinical', 'FC', 'REACT'), None),
+    ('Medusa-graphTRIP', MEDUSA_FULL, ('Clinical', 'FC', 'REACT')),
     (ABLATION_NAMES['no_node_features'],
-     ('medusa_ablation', 'no_node_features'), ('Clinical', 'FC'), 'scatter_fc_clinical'),
+     ('medusa_ablation', 'no_node_features'), ('Clinical', 'FC')),
     (ABLATION_NAMES['no_clinical_features'],
-     ('medusa_ablation', 'no_clinical_features'), ('FC', 'REACT'), 'scatter_fc_react'),
+     ('medusa_ablation', 'no_clinical_features'), ('FC', 'REACT')),
     (ABLATION_NAMES['no_react_no_clinical'],
-     ('medusa_ablation', 'no_react_no_clinical'), ('FC',), 'scatter_fc_only'),
+     ('medusa_ablation', 'no_react_no_clinical'), ('FC',)),
 ]
 
-# Clinical-only benchmarks (not included in the raincloud plots)
+# Clinical-only benchmarks (in the performance tables, not in the raincloud plots)
 GRAPHTRIP_BENCHMARKS = [
-    ('Clinical only (MLP)', ('ablation', 'feature_ablation', 'control_mlp_raw'),
-     'scatter_clinical_mlp'),
-    ('Clinical only (OLS)', ('ablation', 'feature_ablation', 'linreg_on_clinical_data'),
-     'scatter_clinical_ols'),
+    ('Clinical only (MLP)', ('ablation', 'feature_ablation', 'control_mlp_raw')),
+    ('Clinical only (OLS)', ('ablation', 'feature_ablation', 'linreg_on_clinical_data')),
 ]
 
 # (contrast name, ablated graphTRIP model, ablated Medusa model).
@@ -140,15 +134,15 @@ def _arm_difference_rows(model, results):
 
 def family_tables(ladder, benchmarks, out, subdir):
     '''
-    Writes one family's three tables, its raincloud and its scatters.
+    Writes one family's three tables and its raincloud.
 
     Returns:
     -------
         tuple: (seed_df, summary_df, comparisons_df)
     '''
-    models = [(label, output_dir(*parts)) for label, parts, _, _ in ladder]
-    models += [(label, output_dir(*parts)) for label, parts, _ in benchmarks]
-    ladder_order = [label for label, _, _, _ in ladder]
+    models = [(label, output_dir(*parts)) for label, parts, _ in ladder]
+    models += [(label, output_dir(*parts)) for label, parts in benchmarks]
+    ladder_order = [label for label, _, _ in ladder]
 
     # Raw per-seed metrics: everything below is derived from this table alone.
     seed_df = collect_seed_metric_table(models)
@@ -176,21 +170,10 @@ def family_tables(ladder, benchmarks, out, subdir):
     distributions = {label: seed_df[seed_df['model'] == label]['r'].tolist()
                      for label in ladder_order}
     feature_ablation_panel(
-        distributions, {label: domains for label, _, domains, _ in ladder},
+        distributions, {label: domains for label, _, domains in ladder},
         out, f'{subdir}/raincloud_feature_ablations')
 
-    for label, parts, _, scatter in ladder:
-        if scatter is not None:
-            _scatter(parts, out, f'{subdir}/{scatter}', f'{ladder_order[0]}: {label}')
-    for label, parts, scatter in benchmarks:
-        _scatter(parts, out, f'{subdir}/{scatter}', label)
-
     return seed_df, summary_df, comparisons_df
-
-
-def _scatter(parts, out, name, title):
-    scatter_from_results(os.path.join(output_dir(*parts), 'prediction_results.csv'),
-                         out, name, yerr='prediction_sem', title=title)
 
 
 # Medusa versus graphTRIP ----------------------------------------------------------------

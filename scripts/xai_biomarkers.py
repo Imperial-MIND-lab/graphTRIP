@@ -26,7 +26,7 @@ from experiments.run_experiment import run
 
 
 def main(weights_base_dir, output_dir, verbose, debug, seed, job_id=None, mlp_weights_dir=None,
-         grail_mode='normal', eval_study=None, eval_target=None, harmonise=None):
+         grail_mode='normal'):
     # Add project root to paths
     weights_base_dir = add_project_root(weights_base_dir)
     output_dir = add_project_root(output_dir)
@@ -69,16 +69,6 @@ def main(weights_base_dir, output_dir, verbose, debug, seed, job_id=None, mlp_we
     config_updates['all_rsn_conns'] = False
     config_updates['n_permutations'] = 1000 if not debug else 3
 
-    # Model-specific configs
-    # CATE models don't have MLP config and need SklearnLinearModelWrapper
-    if config['exname'] == 'train_scate':
-        config_updates['mlp_model'] = {
-            'model_type': 'SklearnLinearModelWrapper'}
-        config_updates['weight_filenames'] = {
-            'vgae': [f'k{k}_vgae_weights.pth' for k in range(config['dataset']['num_folds'])],
-            'mlp': [f'k{k}_linear_model.pth' for k in range(config['dataset']['num_folds'])],
-            'test_fold_indices': ['test_fold_indices.csv']}
-
     # Set GRAIL mode -----------------------------------------------------------
     config_updates['dataset'] = copy.deepcopy(config['dataset'])
     if grail_mode == 'medusa':
@@ -100,19 +90,6 @@ def main(weights_base_dir, output_dir, verbose, debug, seed, job_id=None, mlp_we
     else:
         raise ValueError(f'Invalid grail mode: {grail_mode}')
 
-    # Cross-cohort evaluation --------------------------------------------------
-    if eval_study is not None:
-        if eval_target is None:
-            raise ValueError('--eval_target is required when --eval_study is given.')
-        config_updates['dataset']['study'] = eval_study
-        config_updates['dataset']['target'] = eval_target
-        config_updates['transfer_eval'] = True
-
-        # Harmonise clinical scores so the MLP doesn't need to extrapolate
-        config_updates['harmonise_graph_attrs'] = list(harmonise or [])
-        config_updates['source_standardised_attrs'] = \
-            config['dataset'].get('graph_attrs_to_standardise', [])
-
     # Run the experiment ------------------------------------------------------
     run(exname, observer, config_updates)
 
@@ -120,7 +97,7 @@ def main(weights_base_dir, output_dir, verbose, debug, seed, job_id=None, mlp_we
 if __name__ == "__main__":
     """
     How to run:
-    python interpretation.py -w outputs/graphtrip/weights/ -o outputs/graphtrip/grail/ -s 0 -v -dbg
+    python -m scripts.xai_biomarkers -w outputs/graphtrip/weights/ -o outputs/graphtrip/grail/ -j 0 -s 0 -v -dbg
     """
     # Parse command line arguments
     parser = argparse.ArgumentParser()
@@ -136,16 +113,8 @@ if __name__ == "__main__":
     parser.add_argument('--mlp_weights_dir', type=str, default=None, 
                         help='Path to the directory with MLP weights. If None, use the same as the VGAE weights.')
     parser.add_argument('--grail_mode', type=str, default='normal', choices=['normal', 'medusa', 'escitalopram', 'psilocybin'], help='Grail mode')
-    parser.add_argument('--eval_study', type=str, default=None,
-                        help='Evaluate on this cohort instead of the one the model was '
-                             'trained on, e.g. psilodep1. Requires --eval_target.')
-    parser.add_argument('--eval_target', type=str, default=None,
-                        help='Outcome column of the evaluation cohort, e.g. QIDS_1week.')
-    parser.add_argument('--harmonise', type=str, nargs='*', default=None,
-                        help='Clinical attributes to rescale onto the training scale, '
-                             'e.g. --harmonise QIDS_Before BDI_Before.')
     args = parser.parse_args()
 
     # Run the main function
     main(args.weights_base_dir, args.output_dir, args.verbose, args.debug, args.seed, args.job_id,
-         args.mlp_weights_dir, args.grail_mode, args.eval_study, args.eval_target, args.harmonise)
+         args.mlp_weights_dir, args.grail_mode)

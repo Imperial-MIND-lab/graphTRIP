@@ -4,7 +4,6 @@ Fig. 6: Interpreting predictions (regional attributions and GRAIL biomarkers).
 Panels:
 - b. regional attributions on the brain surface
 - c. regional attributions per resting-state network
-- d. dominance analysis of regional attribution patterns
 - f. GRAIL biomarker alignments across prediction modes
 
 Author: Hanna M. Tolle
@@ -18,7 +17,7 @@ import pandas as pd
 from utils.plotting import CMAP_DEFAULT, COOLWARM, plot_brain_surface, plot_diverging_bars_multi
 
 from figure_making.common import (
-    load_biomarker_categories, rsn_attribution_panels, dominance_panels)
+    load_biomarker_categories, rsn_attribution_panels)
 from figure_making.paths import posthoc_dir, require
 from figure_making.registry import register
 
@@ -59,10 +58,6 @@ def fig6_interpretation(ctx, out):
         posthoc_dir('medusa_graphtrip', 'regional_attributions'),
         out, 'medusa_mean_rsn_attributions_raincloud')
     out.log_df('Medusa graphTRIP: pairwise RSN comparisons', medusa_rsn)
-
-    # d. Dominance analysis --------------------------------------------------------------
-    dominance_panels(posthoc_dir('graphtrip', 'regional_attributions'), out, 'graphtrip')
-    dominance_panels(posthoc_dir('medusa_graphtrip', 'regional_attributions'), out, 'medusa')
 
     # f. GRAIL biomarker alignments across prediction modes ------------------------------
     _, _, sorted_biomarkers = load_biomarker_categories(thresh=0.5)

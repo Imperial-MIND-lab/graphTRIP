@@ -39,8 +39,6 @@ class Attrs:
             self.graph += ['QIDS_Before', 'BDI_Before', 'Condition', 'Gender', 'Stop_SSRI']
         elif study=='psilodep1':
             self.graph += ['Gender', 'Age', 'HAMD_Before', 'QIDS_Before', 'LOTR_Before', 'BDI_Before', 'Condition', 'Stop_SSRI']
-        elif study == 'ds005917':
-            self.graph += ['Sex', 'Age', 'MADRS_b0', 'HAM17_b0', 'HAMD6_b0', 'infusion_order']
         elif study == 'mock_study':
             self.graph += ['Baseline', 'Condition']
         else:
@@ -486,9 +484,6 @@ def get_default_prefilter(study: str) -> Dict[str, Any]:
         return {'Exclusion': 0}
     elif study == 'psilodep1':
         return {'Exclusion': 0, 'missing_raw_before': 0}
-    elif study == 'ds005917':
-        # Loads all 36 patients (33 MDD + 3 BP). Add 'Group': 'MDD' to exclude BP
-        return {'Exclusion': 0, 'missing_raw_before': 0}
     elif study == 'mock_study':
         return {}
     else:
@@ -501,8 +496,6 @@ def get_default_target(study: str) -> str:
         return 'QIDS_Final_Integration'
     elif study == 'psilodep1':
         return 'QIDS_1week'
-    elif study == 'ds005917':
-        return 'MADRS_d2'
     else:
         raise ValueError(f'Target not specified for study {study}. \n'
                          'Edit datasets.get_default_target() to add your target.')

@@ -35,7 +35,6 @@ import matplotlib
 matplotlib.use('Agg')
 from scipy import stats
 from sklearn.model_selection import StratifiedKFold
-from utils.helpers import permute_labels
 from utils.plotting import true_vs_pred_scatter
 
 
@@ -243,10 +242,6 @@ def main():
     parser.add_argument('--config', type=str, required=True,
                         help='Path to config JSON file')
     parser.add_argument('--seed', type=int, required=True)
-    parser.add_argument('--perm_seed', type=int, default=None,
-                        help='Seed of the label permutation, for the permutation null. '
-                             'Matches the perm_seed of scripts/permutation_null.py, so the '
-                             'nulls of SELSER and graphTRIP are paired.')
     parser.add_argument('--output_dir', type=str, required=True)
     parser.add_argument('--save_filters', action='store_true', default=False,
                         help='Save W, filters, and filter_weights per fold')
@@ -277,11 +272,6 @@ def main():
           f'(P={( conditions==1).sum()}, E={(conditions==-1).sum()})')
     if graph_attrs:
         print(f'Graph attrs: {graph_attrs}')
-
-    # Permute the target across the cohort, for the permutation null
-    if args.perm_seed is not None:
-        labels = permute_labels(subject_ids, labels, args.perm_seed)
-        print(f'Permuted the target with perm_seed={args.perm_seed}.')
 
     # 7-fold cross-validation stratified by treatment
     strat = (conditions == 1).astype(int)
@@ -333,7 +323,7 @@ def main():
     # Compute and save metrics
     metrics = compute_metrics(results_df['label'].values,
                               results_df['prediction'].values)
-    metrics.update({'seed': args.seed, 'perm_seed': args.perm_seed,
+    metrics.update({'seed': args.seed,
                     'lambda_reg': lambda_reg, 'target': target, 'num_folds': num_folds})
     with open(os.path.join(args.output_dir, 'metrics.json'), 'w') as f:
         json.dump(metrics, f, indent=2)

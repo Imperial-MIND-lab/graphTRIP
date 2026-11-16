@@ -2,15 +2,18 @@
 This scripts performs all post-hoc interpretability analyses.
 
 Dependencies:
-- experiments/outputs/graphtrip/weights/seed_*/
-- experiments/outputs/graphtrip/grail/seed_*/
-- experiments/outputs/graphtrip/regional_attributions/seed_*/
-- same for medusa model
+- outputs/graphtrip/weights/seed_*/
+- outputs/graphtrip/grail/seed_*/
+- outputs/graphtrip/regional_attributions/seed_*/
+- outputs/medusa_graphtrip/grail{,_escitalopram,_psilocybin}/seed_*/
+- outputs/medusa_graphtrip/regional_attributions/seed_*/
+- experiments/configs/biomarker_synergies.csv
 
 Outputs:
-- experiments/outputs/grail/posthoc_analysis/
-- experiments/outputs/regional_attributions/posthoc_analysis/
-- experiments/outputs/test_biomarkers/
+- outputs/{graphtrip,medusa_graphtrip}/grail*/posthoc_analysis/
+- outputs/{graphtrip,medusa_graphtrip}/regional_attributions/posthoc_analysis/
+- outputs/graphtrip/test_biomarkers/
+- outputs/biomarker_categories/
 
 Author: Hanna M. Tolle
 Date: 2025-12-19
@@ -33,11 +36,9 @@ from statsmodels.stats.multitest import fdrcorrection
 from utils.files import add_project_root, rm_project_root
 from utils.configs import load_configs_from_json, load_ingredient_configs
 from utils.statsalg import compute_performance_weighted_means, ridge_cv_predict, get_fold_performance
-from utils.annotations import load_receptor_maps, load_rotated_rois, load_ut_axis
 from preprocessing.metrics import get_rsn_mapping
 from utils.statsalg import calculate_consistency_scores
 from experiments.run_experiment import run
-from experiments.attention_weights import dominance_analysis_pipeline
 
 
 # Helper functions -----------------------------------------------------------------------
@@ -490,26 +491,8 @@ def analyse_grail_results(grail_dir=None, regional_attributions_dir=None, weight
                 index=True,
                 index_label="subject_id")
 
-            # Perform dominance analysis on weighted-mean attention weights ------------------
-            atlas = 'schaefer100'
-            receptor_maps = load_receptor_maps(atlas=atlas)
-            rotated_roi_indices = load_rotated_rois(atlas, 1000)
-            ut_axis = load_ut_axis(atlas)
-            X_combined = receptor_maps.copy()
-            X_combined['ut_axis'] = ut_axis
-            analysis_name = 'receptors_utaxis'
-            da_stats, coef_df, results = dominance_analysis_pipeline(
-                regressors=X_combined,
-                attention_df=weighted_mean_attributions,
-                output_dir=ex_dir,
-                analysis_name=analysis_name,
-                rotated_roi_indices=rotated_roi_indices)
-            da_stats.to_csv(os.path.join(ex_dir, f'da_{analysis_name}_stats.csv'))
-            coef_df.to_csv(os.path.join(ex_dir, f'da_{analysis_name}_coeffs.csv'), index=False)
-            results.to_csv(os.path.join(ex_dir, f'da_{analysis_name}_r2_pval_tstat.csv'), index=False)
-
             # Compute average weighted-mean attention weights per RSN --------------------------
-            rsn_mapping, rsn_names = get_rsn_mapping(atlas)
+            rsn_mapping, rsn_names = get_rsn_mapping('schaefer100')
             rsn_mapping = np.array(rsn_mapping)
             mean_rsn_grad_weights = {rsn: [] for rsn in rsn_names}
             for rsn_idx, rsn_name in enumerate(rsn_names):

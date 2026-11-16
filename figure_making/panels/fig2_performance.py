@@ -6,8 +6,7 @@ Panels:
 - b. model ablations: graphTRIP against the dimensionality-reduction and linear-head
      benchmarks
 - c-d. VGAE reconstruction performance
-- e. feature ablations, as scatters: graphTRIP without clinical inputs, and the
-     clinical-only MLP benchmark
+- e. graphTRIP without clinical inputs
 - f. permutation importance
 
 Author: Hanna M. Tolle
@@ -23,10 +22,6 @@ from figure_making.common import (
 from figure_making.paths import output_dir, require
 from figure_making.registry import register
 
-
-# The clinical-only MLP replaces the OLS model as the main-text benchmark: it is matched
-# in flexibility to graphTRIP, and it is trained on raw scores, as graphTRIP is.
-BENCHMARK_DIR = ('ablation', 'feature_ablation', 'control_mlp_raw')
 
 # The brain-only model of panel e
 NO_CLINICAL_DIR = ('ablation', 'feature_ablation', 'no_clinical_features')
@@ -50,7 +45,6 @@ def fig2_prediction_performance(ctx, out):
 
     graphtrip_results = os.path.join(weights_base_dir, 'prediction_results.csv')
     no_clinical_results = os.path.join(output_dir(*NO_CLINICAL_DIR), 'prediction_results.csv')
-    control_mlp_results = os.path.join(output_dir(*BENCHMARK_DIR), 'prediction_results.csv')
 
     # a. graphTRIP predictions -----------------------------------------------------------
     scatter_from_results(graphtrip_results, out, 'graphTRIP_true_vs_pred',
@@ -65,20 +59,16 @@ def fig2_prediction_performance(ctx, out):
                             table_prefix='model_ablation_',
                             axes_size=(1.0, 1.520))
 
-    # e. Feature ablations, as scatters ---------------------------------------------------
+    # e. graphTRIP without clinical inputs -------------------------------------------------
     scatter_from_results(no_clinical_results, out, 'no_clinical_features_true_vs_pred',
                          condition_study='psilodep2', yerr='prediction_sem',
                          arm_regression=True)
 
-    scatter_from_results(control_mlp_results, out, 'control_mlp_true_vs_pred',
-                         yerr='prediction_sem', arm_regression=True)
-
-    # Accuracy of every model the Fig. 2 quoted in the text
+    # Accuracy of every model in Fig. 2
     out.log('=== Prediction accuracy ===')
     report_prediction_metrics(
         [('graphtrip', graphtrip_results),
-         ('no_clinical_features', no_clinical_results),
-         ('control_mlp', control_mlp_results)],
+         ('no_clinical_features', no_clinical_results)],
         out)
 
     # c-d. VGAE reconstruction performance ------------------------------------------------

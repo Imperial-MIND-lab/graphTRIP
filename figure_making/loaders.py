@@ -1,8 +1,6 @@
 """
 Functions for loading models and datasets from experiment folders.
 
-Moved here from notebooks/load_models_data.py, which now re-exports this module.
-
 Author: Hanna Tolle
 Date: 2025-01-12
 License: BSD-3-Clause

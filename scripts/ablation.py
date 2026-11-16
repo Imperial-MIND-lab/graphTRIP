@@ -27,8 +27,7 @@ Outputs:
 - outputs/medusa_ablation/no_clinical_features/              FC + REACT
 - outputs/medusa_ablation/no_react_no_clinical/              FC only
 
-Every model saves its weights, so that any of them can be transferred zero-shot onto
-the validation cohort.
+Every model saves its weights.
 
 Author: Hanna M. Tolle
 Date: 2025-12-04
@@ -44,7 +43,6 @@ import os
 import copy
 import argparse
 from utils.files import add_project_root
-from utils.annotations import load_annotations
 from utils.configs import load_configs_from_json, fetch_job_config
 from experiments.run_experiment import run
 

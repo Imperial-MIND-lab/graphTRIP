@@ -2,10 +2,10 @@
 Supplementary: the permutation null distribution of prediction performance.
 
 Every model is retrained on outcomes permuted across the whole cohort, 100 permutations x
-10 training seeds each (scripts/permutation_null.py, scripts/train_selser.py). Permuting the
-raw outcome before any pipeline step makes this a null for the entire pipeline -- splitting,
-scaling, VGAE fitting and prediction -- rather than for the final correlation alone. All
-models share the same 100 perm_seeds, so their nulls are paired.
+10 training seeds each (scripts/permutation_null.py). Permuting the raw outcome before any
+pipeline step makes this a null for the entire pipeline -- splitting, scaling, VGAE fitting
+and prediction -- rather than for the final correlation alone. All models share the same 100
+perm_seeds, so their nulls are paired.
 
 Two levels are read off the same runs:
 
@@ -16,13 +16,11 @@ Two levels are read off the same runs:
                     seed rather than the subject, which makes it a statement about
                     leakage and not about generalisation.
 
-The panels answer two questions. Whether the null is centred on zero, which is what a
-pipeline free of leakage gives; and whether its width matches the parametric r = 0 null
-that p-values on a correlation assume.
+The panels show whether the null is centred on zero, which is what a pipeline free of
+leakage gives. The report also compares its width with the parametric r = 0 null that
+p-values on a correlation assume.
 
-The graphTRIP models share a grid per panel, so their nulls can be read against each
-other. SELSER is a different model family fitted by a different script, so it gets one
-overview figure carrying all three panels instead of a column in each grid.
+The models share a grid per panel, so their nulls can be read against each other.
 
 For graphTRIP the same null weights are also evaluated zero-shot on Schaefer 200, AAL and
 psilodep1, giving permutation nulls for the transfer claims at no extra training cost.
@@ -39,10 +37,9 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy import stats
-from scipy.special import beta as beta_fn
 
 from utils.helpers import aggregate_prediction_results, summarise_seed_metrics
-from utils.plotting import NEUTRAL, NEUTRAL2, PSILO, ESCIT
+from utils.plotting import NEUTRAL, NEUTRAL2, PSILO
 
 from figure_making.paths import output_dir, perm_dirs, MissingInput
 from figure_making.registry import register
@@ -60,11 +57,6 @@ MODELS = [
     ('Clinical-only MLP',
      ('ablation', 'feature_ablation', 'control_mlp_raw', 'permutation_null'),
      ('ablation', 'feature_ablation', 'control_mlp_raw')),
-]
-
-# Same tuple shape, but each of these gets its own overview figure instead.
-STANDALONE_MODELS = [
-    ('SELSER', ('selser', 'permutation_null'), ('selser', 'selser')),
 ]
 
 # Metrics to report, and whether a larger value is the better one.
@@ -242,11 +234,6 @@ def parametric_null_sd(n_subjects):
     return 1/np.sqrt(n_subjects - 2)
 
 
-def parametric_null_density(r_grid, n_subjects):
-    '''Density of Pearson r under H0 for n independent observations.'''
-    return (1 - r_grid**2)**((n_subjects - 4)/2)/beta_fn(0.5, (n_subjects - 2)/2)
-
-
 def parametric_p(r, n_subjects):
     '''The two-sided p the manuscript quotes for a correlation of r.'''
     t = r*np.sqrt(n_subjects - 2)/np.sqrt(1 - r**2)
@@ -299,33 +286,6 @@ def draw_histogram(ax, c, title=None):
     ax.legend(loc='upper left', fontsize=8, frameon=False)
 
 
-def draw_vs_parametric(ax, c, title=None):
-    '''
-    The empirical null against the parametric r = 0 null.
-
-    The panel that shows why the quoted p-values had to be replaced: a permutation null
-    narrower than the parametric one would have made them conservative, a wider one makes
-    them optimistic.
-    '''
-    null = c['ensemble'][HEADLINE].values
-    observed = c['observed'][HEADLINE]
-    mu, sd = null.mean(), null.std(ddof=1)
-    n_subjects = c['n_subjects']
-
-    ax.plot(R_GRID, parametric_null_density(R_GRID, n_subjects), color=NEUTRAL2,
-            linewidth=1.6, label=f'parametric, SD = {parametric_null_sd(n_subjects):.3f}')
-    ax.plot(R_GRID, stats.norm.pdf(R_GRID, mu, sd), color=ESCIT, linewidth=1.6,
-            label=f'permutation, SD = {sd:.3f}')
-    ax.plot(null, np.zeros_like(null), '|', color=ESCIT, markersize=10,
-            markeredgewidth=1.2)
-    ax.axvline(observed, color=DARK_RED, linestyle='--', linewidth=2,
-               label=f'observed r = {observed:.3f}')
-    ax.set_xlabel('r')
-    ax.set_ylabel('Density')
-    ax.set_title(title if title is not None else c['label'], fontsize=10)
-    ax.legend(loc='upper left', fontsize=8, frameon=False)
-
-
 def draw_seed_strip(ax, c, rng, title=None):
     '''Every null run against every empirical run, one point per trained model.'''
     groups = [(f"null\n({len(c['seed_level'])} runs)", c['seed_level'][HEADLINE].values,
@@ -351,42 +311,12 @@ def null_histogram(collected, out, name='permutation_null_histogram'):
     _save(fig, out, name)
 
 
-def null_vs_parametric(collected, out, name='permutation_null_vs_parametric'):
-    '''One empirical-vs-parametric comparison per model, shared grid.'''
-    fig, axes = _model_axes(len(collected))
-    for ax, c in zip(axes, collected):
-        draw_vs_parametric(ax, c)
-    _save(fig, out, name)
-
-
 def seed_level_strip(collected, out, rng, name='permutation_null_seed_level'):
     '''One seed-level strip per model, shared grid.'''
     fig, axes = _model_axes(len(collected), height=3.0)
     for ax, c in zip(axes, collected):
         draw_seed_strip(ax, c, rng)
     _save(fig, out, name)
-
-
-def model_overview(c, out, rng):
-    '''
-    All three panels of one model in a single figure.
-
-    Used for models that are not comparable enough with the graphTRIP variants to share a
-    grid with them, but still need the same three views.
-    '''
-    s = c['stats'][HEADLINE]
-    null = c['ensemble'][HEADLINE].values
-
-    fig, axes = plt.subplots(1, 3, figsize=(13.5, 3.6), constrained_layout=True)
-    draw_histogram(axes[0], c, title='Permutation null')
-    draw_vs_parametric(axes[1], c, title='Permutation vs parametric null')
-    draw_seed_strip(axes[2], c, rng, title='Seed level')
-    fig.suptitle(f"{c['label']} (n = {c['n_subjects']}): observed r = "
-                 f"{c['observed'][HEADLINE]:.3f}, null {null.mean():+.3f} $\\pm$ "
-                 f"{null.std(ddof=1):.3f}, rank p = {s['rank_p']:.3f} "
-                 f"({s['n_draws']} draws)", fontsize=11)
-
-    _save(fig, out, f"permutation_null_{c['label'].lower().replace(' ', '_')}")
 
 
 # Target -----------------------------------------------------------------------------
@@ -469,24 +399,16 @@ def permutation_null(ctx, out):
     permutation null compares with the parametric r = 0 null.
     '''
     collected = gather_models(MODELS, out)
-    standalone = gather_models(STANDALONE_MODELS, out)
-    if not collected and not standalone:
+    if not collected:
         raise MissingInput(output_dir(*MODELS[0][1]))
 
-    # Panels: a shared grid for the graphTRIP variants, one overview figure per model
-    # that does not belong in that grid.
-    if collected:
-        null_histogram(collected, out)
-        null_vs_parametric(collected, out)
-        seed_level_strip(collected, out, ctx.rng)
-    for c in standalone:
-        model_overview(c, out, ctx.rng)
+    # Panels: one grid per view, one axis per model
+    null_histogram(collected, out)
+    seed_level_strip(collected, out, ctx.rng)
 
-    # Tables: the draws themselves, and the statistics computed from them. Every model
-    # is tabulated, whether or not it shares the grid.
-    everything = collected + standalone
+    # Tables: the draws themselves, and the statistics computed from them
     draws, seeds, summary = [], [], []
-    for c in everything:
+    for c in collected:
         draws.append(c['ensemble'].assign(model=c['label']))
         seeds.append(c['seed_level'].assign(model=c['label']))
         for metric, _ in METRICS:
@@ -504,13 +426,13 @@ def permutation_null(ctx, out):
         out.table('permutation_null_transfer_stats', transfer)
 
     # Report
-    out.log(f'Permutation null for {len(everything)} model(s).')
-    out.log(f'Ensemble level: {everything[0]["ensemble"].shape[0]} draws, each the mean '
-            f'prediction of the {len(everything[0]["empirical_seeds"])} models sharing one '
-            f'permutation. Seed level: {len(everything[0]["seed_level"])} runs.')
+    out.log(f'Permutation null for {len(collected)} model(s).')
+    out.log(f'Ensemble level: {collected[0]["ensemble"].shape[0]} draws, each the mean '
+            f'prediction of the {len(collected[0]["empirical_seeds"])} models sharing one '
+            f'permutation. Seed level: {len(collected[0]["seed_level"])} runs.')
     out.log()
 
-    for c in everything:
+    for c in collected:
         s = c['stats'][HEADLINE]
         seed_s = c['seed_stats'][HEADLINE]
         n_subjects = c['n_subjects']

@@ -90,8 +90,6 @@ def patient_ids_to_sample_ids(patient_ids: List[str], study: str):
         prefilter = {'Exclusion': 0}
     elif study == 'psilodep1':
         prefilter = {'Exclusion': 0, 'missing_raw_before': 0}
-    elif study == 'ds005917':
-        prefilter = {'Exclusion': 0, 'missing_raw_before': 0}
     else:
         raise ValueError(f'Prefilter not specified for study {study}. \n'
                          'Edit utils.annotations.patient_ids_to_sample_ids() to add your prefilter.')
@@ -154,8 +152,6 @@ def get_tr(study: str = 'psilodep2'):
         return 1.25
     elif study == 'psilodep1':
         return 2.0
-    elif study == 'ds005917':
-        return 2.5
     else:
         raise ValueError("Unknown study. \n"
                          "Edit utils.annotations.get_tr() to add the TR for your study.")
@@ -168,8 +164,6 @@ def get_categorical_annotations(study: str = 'psilodep2'):
         return ['Gender']
     elif study == 'mock_study':
         return []
-    elif study == 'ds005917':
-        return ['Group', 'Sex']
     else:
         raise ValueError("Unknown study. \n"
                          "Edit utils.annotations.get_categorical_annotations() to add your study.")

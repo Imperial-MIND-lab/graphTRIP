@@ -1,8 +1,9 @@
 """
 This scripts generates the paper figure panels from the experiment outputs.
 
-Replaces notebooks/figures.ipynb. Each figure target writes its panels, tables and a
-stats.txt report into the directory the paper figure is assembled from.
+Each figure target writes its panels, tables and a stats.txt report into the directory
+the paper figure is assembled from. See the README for which job script produces the
+outputs each target reads.
 
 Dependencies:
 - outputs/graphtrip/
@@ -12,6 +13,8 @@ Dependencies:
 - outputs/validation/
 - outputs/graphtrip_bdi/
 - outputs/biomarker_categories/
+- outputs/flatvae_mlp/
+- outputs/selser/
 
 Outputs:
 - notebooks/figures/Fig.2/ ... Fig.6/

@@ -180,11 +180,10 @@ def run_psilodep1(weights_dir, perm_dir, seed, verbose, debug, observer, config_
     psilodep1_config = fetch_job_config(psilodep1_config, config_id)
     source_config = load_configs_from_json(os.path.join(weights_dir, 'config.json'))
 
-    exname = 'transfer_and_finetune'
     n_permutations = 10 if debug else N_PERMUTATIONS
     config_updates = zeroshot_config(psilodep1_config, source_config, weights_dir, ex_dir,
-                                     seed, verbose, n_permutations, exname)
-    run(exname, observer, config_updates)
+                                     seed, verbose, n_permutations)
+    run('transfer_and_finetune', observer, config_updates)
 
 
 def run_grail(model, config, weights_dir, perm_dir, seed, perm_seed, verbose, debug,
@@ -222,8 +221,7 @@ def run_grail(model, config, weights_dir, perm_dir, seed, perm_seed, verbose, de
     run('grail', observer, config_updates)
 
 
-def main(model, config_file, output_dir, verbose, debug, seed, perm_seed, config_id=0,
-         eval_only=False, evaluations=None):
+def main(model, config_file, output_dir, verbose, debug, seed, perm_seed, config_id=0):
     # Add project root to paths
     config_file = add_project_root(config_file)
     output_dir = add_project_root(output_dir)
@@ -253,21 +251,10 @@ def main(model, config_file, output_dir, verbose, debug, seed, perm_seed, config
     ex_dir = os.path.join(perm_dir, f'seed_{seed}')
 
     # Train the model on permuted outcomes -------------------------------------
-    if eval_only:
-        if not os.path.exists(ex_dir):
-            print(f"Nothing to evaluate: {ex_dir} does not exist.")
-            return
-    else:
-        train_null_model(exname, config, ex_dir, perm_seed, observer)
+    train_null_model(exname, config, ex_dir, perm_seed, observer)
 
     # Evaluate the null weights ------------------------------------------------
     to_run = MODELS[model]['evaluations']
-    if evaluations is not None:
-        unknown = [e for e in evaluations if e not in to_run]
-        if unknown:
-            raise ValueError(f"Unknown evaluation(s) for {model}: {', '.join(unknown)}. "
-                             f"Available: {', '.join(to_run) or 'none'}.")
-        to_run = [e for e in to_run if e in evaluations]
     if not to_run:
         return
     if not weights_exist(ex_dir):
@@ -286,9 +273,7 @@ if __name__ == "__main__":
     """
     How to run:
     python -m scripts.permutation_null -m graphtrip -p 0 -s 0 -v -dbg
-    python -m scripts.permutation_null -m graphtrip -p 0 -s 0 --eval_only
-    python -m scripts.permutation_null -m graphtrip -p 0 -s 0 --eval_only --evaluations grail
-    python -m scripts.permutation_null -m medusa -p 0 -s 0 --eval_only --evaluations grail
+    python -m scripts.permutation_null -m medusa -p 0 -s 0
     """
     # Parse command line arguments
     parser = argparse.ArgumentParser()
@@ -304,12 +289,6 @@ if __name__ == "__main__":
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('-dbg', '--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('-ci', '--config_id', type=int, default=None, help='Config ID')
-    parser.add_argument('--eval_only', action='store_true',
-                        help='Skip training and only run the evaluations of an existing '
-                             'null run; used to backfill earlier permutations')
-    parser.add_argument('--evaluations', type=str, nargs='*', default=None,
-                        help='Restrict to these evaluations of the null weights, e.g. '
-                             '--evaluations grail. Defaults to all of the model\'s.')
     args = parser.parse_args()
 
     # Fall back onto the model defaults
@@ -326,5 +305,4 @@ if __name__ == "__main__":
 
     # Run the main function
     main(args.model, args.config_file, args.output_dir, args.verbose,
-         args.debug, args.seed, args.perm_seed, args.config_id, args.eval_only,
-         args.evaluations)
+         args.debug, args.seed, args.perm_seed, args.config_id)

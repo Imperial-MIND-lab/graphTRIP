@@ -30,7 +30,7 @@ The full pipeline consists of four main stages. Each step depends on outputs fro
 The main interface is the `BrainGraphDataset` class (`datasets.py`), uniquely defined by a combination of `study`, `session`, and `atlas`.
 
 ```python
-from dataset import BrainGraphDataset
+from datasets import BrainGraphDataset
 
 dataset = BrainGraphDataset(
     study='psilodep2',
@@ -80,10 +80,10 @@ python -m experiments.run_experiment train_jointly FileStorageObserver --config_
 Results will be saved to:
 
 ```
-outputs/runs/{config_json}/
+outputs/runs/train_jointly/{config_name}/
 ```
 
-unless overridden via the `--output_dir` argument or by setting the `output_dir` field in your JSON config.
+unless overridden via the `--output_dir` argument or by setting the `output_dir` field in your JSON config. Passing `--jobid` or `--seed` adds `job_{jobid}/` and `seed_{seed}/` subdirectories.
 
 Note: training on fully connected graphs increases training time and often leads to oversmoothing. You want to use a sparsely connected yet sufficiently informative graph structure.
 
@@ -133,6 +133,8 @@ Note: The "processed" directory contains files created by `torch_geometric` upon
 
 #### Replication Steps
 
+All analyses run as PBS array jobs on an HPC cluster. [`job_scripts/README.md`](job_scripts/README.md) describes each job script, what it writes to `outputs/`, and which figure targets read it.
+
 1. Download the 5-HT PET data and compute REACT maps as described in
    `preprocessing/react/react_readme.md`.
 
@@ -142,32 +144,27 @@ Note: The "processed" directory contains files created by `torch_geometric` upon
    data/raw/{study}/{session}/MNI_2mm/
    ```
 
-2. Run preprocessing for each dataset, session, and atlas. For example:
+2. Run the job scripts, from the repository root and in this order:
 
    ```bash
-   python -m preprocessing.preprocess psilodep2 before schaefer100
+   qsub job_scripts/preprocessing.sh
+   qsub job_scripts/train.sh           # after preprocessing
+   qsub job_scripts/post_training.sh   # after train
+   qsub job_scripts/grail.sh           # after train
+   qsub job_scripts/posthoc.sh         # after post_training and grail
    ```
 
-3. Run primary scripts (no dependencies on other outputs):
+   The permutation nulls only need the preprocessed data and are launched separately; see [`job_scripts/README.md`](job_scripts/README.md#permutation-nulls).
+
+3. Generate the figure panels (locally; takes a few minutes on a laptop):
 
    ```bash
-   qsub job_scripts/primary_jobs.sh
+   python -m scripts.make_figures                      # every target, as svg
+   python -m scripts.make_figures fig2 fig4 --fmt png  # selected targets
+   python -m scripts.make_figures --list               # all targets and their output folders
    ```
 
-4. Run secondary scripts (depend on outputs from primary scripts):
-
-   ```bash
-   qsub job_scripts/secondary_jobs.sh
-   qsub job_scripts/short_secondary_jobs.sh
-   ```
-
-5. Post-hoc analysis:
-
-   ```bash
-   qsub job_scripts/posthoc_analysis.sh
-   ```
-
-6. Generate all figures with the jupyter notebook `notebooks/figures.ipynb`.
+   Each target writes its panels, tables and a `stats.txt` report to `notebooks/figures/<folder>/` (change with `-o`). Regional values for the brain-surface renderings are written to `notebooks/figures/brain_plots/`.
 
 ## Citation
 
